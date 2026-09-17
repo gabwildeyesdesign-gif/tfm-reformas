@@ -1,0 +1,488 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+RESUMEN EXTENSO DE SESIÓN — BACKEND N0
+Servidor MCP, pool de Postgres, herramientas de desarrollo y proceso de trabajo
+
+Documento de contexto de proyecto · TFM Máster en Agentes de IA e Hiperautomatización (EBIS)
+
+
+================================================================
+0. CÓMO USAR ESTE DOCUMENTO
+================================================================
+
+Este documento tiene DOS partes con propósitos distintos, y algunos
+conceptos aparecen en ambas a propósito:
+
+- PARTE I es una narrativa extensa y explicada de todo lo avanzado en
+  esta sesión de trabajo, en orden cronológico. Sirve para entender el
+  "por qué" completo de cada cosa, incluidos los callejones sin salida,
+  los hallazgos y las correcciones sobre la marcha.
+
+- PARTE II es un índice compacto, en formato de referencia rápida, de
+  las decisiones que deben trasladarse literalmente a la memoria
+  académica del TFM, con el apartado exacto donde encajan. Repite
+  conceptos de la Parte I de forma deliberada: la Parte I se lee una
+  vez para entender, la Parte II se consulta muchas veces mientras se
+  escribe la memoria, sin tener que releer la narrativa completa.
+
+Este documento complementa, no sustituye, a los documentos previos:
+Informe_Decisiones_N0_TFM_Reformas.txt, Adenda_Decisiones_N0_Endpoints
+_y_Excepciones.txt, y TFM_Decisiones_Arquitectura_MCP_y_DB.txt (que
+cubre en más profundidad el Rule of Three de la arquitectura MCP y de
+síncrono/asíncrono — aquí se resume, no se repite palabra por palabra).
+
+
+================================================================
+PARTE I — NARRATIVA EXTENSA DE LO AVANZADO EN ESTA SESIÓN
+================================================================
+
+1. Punto de partida
+------------------------
+Al empezar esta sesión, el estado era: 8 tablas en Supabase con RLS
+activo, reglas_negocio y tarifas_base pobladas, contrato de los 5
+endpoints FastAPI cerrado en documento, y CERO código de FastAPI
+escrito. El objetivo de la sesión era el punto 1 de lo pendiente:
+diseñar el servidor MCP en Python.
+
+2. Arquitectura del servidor MCP: proceso único dentro de FastAPI
+--------------------------------------------------------------------
+Antes de diseñar nada, se verificó (no se asumió) cómo conecta el nodo
+"MCP Client Tool" de n8n con un servidor MCP: solo admite SSE o HTTP
+Streamable, nunca stdio. Esto fija que el servidor MCP tiene que ser un
+proceso HTTP en un puerto, sí o sí.
+
+Con esa restricción clara, se evaluaron tres topologías (Rule of
+Three completo en TFM_Decisiones_Arquitectura_MCP_y_DB.txt, sección 1):
+dos procesos separados cada uno importando services/; un solo proceso
+con el servidor MCP montado como sub-app ASGI dentro de FastAPI; o un
+proceso MCP separado actuando como proxy HTTP hacia FastAPI. Se eligió
+la Opción B (un solo proceso) por dos motivos: mínimo consumo de RAM en
+la máquina de 8GB, y un único pool de conexión a Postgres, en vez de
+duplicarlo y agravar el riesgo de concurrencia del Session pooler de
+Supabase que ya estaba documentado como pendiente sin resolver.
+
+Aclaración conceptual que quedó fijada para la memoria: "servidor MCP
+propio en Python" (entidad lógica, con sus propias tools) y "proceso
+independiente del sistema operativo" (decisión de despliegue) son cosas
+DISTINTAS. La Opción B sigue siendo "servidor MCP propio" — simplemente
+no corre en un proceso aparte.
+
+3. Librería elegida: fastmcp, no el SDK oficial "mcp"
+----------------------------------------------------------
+Se verificó documentación actual y se encontró que el SDK oficial de
+MCP para Python sufrió una reescritura el 2 de agosto de 2026: la
+instalación por defecto pasa a resolver la versión 2.0, que renombra la
+clase FastMCP integrada a MCPServer y elimina la ruta de importación
+mcp.server.fastmcp. El patrón "clásico" de la mayoría de tutoriales ya
+no funciona con esa instalación por defecto.
+
+Decisión: usar el paquete independiente "fastmcp" (no el SDK oficial),
+que mantiene su propia clase FastMCP. Se instaló con el .venv activado
+(corrigiendo una instrucción inicial imprecisa que incluía
+--break-system-packages, un flag que solo tiene sentido fuera de un
+entorno virtual) y se fijó la versión EXACTA en requirements.txt tras
+comprobarla con "fastmcp version": fastmcp==4.0.3. No se fija como
+">=4.0.3" porque el propio ecosistema de fastmcp advierte de cambios de
+compatibilidad frecuentes entre versiones menores.
+
+4. Estructura de carpetas y disciplina arquitectónica
+----------------------------------------------------------
+app/main.py, app/api/ (routers REST delgados), app/mcp_server/server.py
+(tools MCP, delgado), app/services/ (ÚNICA capa con lógica de negocio
+real), app/db/ (pool de conexión compartido), app/schemas/ (modelos
+Pydantic), app/config.py. Regla de disciplina: services/ NUNCA importa
+fastapi ni fastmcp — si lo hiciera, dejaría de ser lógica de negocio
+pura y pasaría a ser un adaptador disfrazado.
+
+Se estableció también la distinción de las "dos puertas": calculate-
+estimate tiene REST y MCP (producción usa MCP porque es el agente quien
+decide cuándo calcular; REST queda para pruebas y uso administrativo);
+get_business_rules() y request_missing_information() son SOLO MCP (son
+ayudas de razonamiento internas del agente); leads, gate-decisions,
+visits y create-followup-task son SOLO REST en producción (los disparan
+sistemas deterministas: webhooks, botones de Telegram, temporizadores).
+Al estar todo en un único proceso, ambas puertas llaman literalmente a
+la misma función en memoria — no puede haber divergencia de cálculo
+entre el agente y una llamada REST directa, porque no hay dos copias
+del cálculo.
+
+5. El ciclo de vida (lifespan) combinado
+---------------------------------------------
+Se identificó que FastAPI solo acepta UN lifespan por aplicación, pero
+tanto fastmcp (para arrancar su gestor de sesiones) como el futuro pool
+de Postgres iban a necesitar cada uno el suyo. Se encontró un issue
+documentado en el propio repositorio de fastmcp ("FastMCP breaks
+FastAPI Testclient") que confirma este problema exacto y muestra la
+solución: combinar ambos lifespans en un único gestor de contexto
+anidado (combined_lifespan), en vez de que uno reemplace al otro. Se
+corrigió esto ANTES de escribir el pool, cuando el coste de hacerlo era
+mínimo, en vez de descubrirlo después como un bug confuso.
+
+6. Verificación real del bloque de scaffolding
+---------------------------------------------------
+Primera verificación reportada (arranque sin traceback, /health 200,
+/docs 200) se calificó inicialmente como suficiente, pero se corrigió:
+ninguna de las tres pruebas tocaba realmente el endpoint /mcp, y el
+fallo típico de este tipo de montaje aparece específicamente cuando un
+cliente MCP real intenta abrir una sesión, no al arrancar el servidor.
+Se añadió una cuarta verificación real: un script que usa el cliente
+propio de fastmcp (fastmcp.Client) para conectarse de verdad a
+http://localhost:8000/mcp/ y llamar a list_tools(). Devolvió una lista
+vacía sin errores (esperado, porque aún no había tools definidas) — el
+montaje quedó verificado bajo tráfico real del protocolo, no solo por
+lectura de código.
+
+7. Decisión síncrono vs. asíncrono para el acceso a la base de datos
+--------------------------------------------------------------------------
+Se evaluó primero con un Rule of Three simple (psycopg2 síncrono + pool
+vs. psycopg async vs. asyncpg), verificando primero que fastmcp 4.0.3
+soporta oficialmente tools síncronas con despacho automático a un pool
+de hilos. Se decidió inicialmente por lo síncrono, coherente con la
+disciplina de "esfuerzo de ingeniería ajustado a lo que el proyecto
+necesita".
+
+El alumno planteó una objeción legítima: el proyecto es también un
+portfolio profesional, las empresas reales manejan volumen, y un
+sistema que colapsara en producción por no considerar el volumen no
+sería un buen ejemplo. Se reevaluó la decisión, aceptando la parte
+válida de la objeción pero corrigiendo una idea inexacta: síncrono vs.
+asíncrono NO es la palanca principal para volumen masivo — lo es el
+ESCALADO HORIZONTAL (varias copias de la app tras un balanceador de
+carga), que funciona igual con código síncrono o asíncrono, y es
+independiente de esta decisión. Si la propia Postgres no aguanta el
+volumen, ser asíncrono en Python tampoco evita el cuello de botella.
+
+Decisión final (mantenida, reforzada): síncrono, con
+ThreadedConnectionPool. Se documentó un plan de migración explícito
+(qué cambiaría capa por capa) y se preparó un talking point completo
+para la defensa oral — ver TFM_Decisiones_Arquitectura_MCP_y_DB.txt,
+sección 7, para el texto exacto.
+
+8. Implementación real del pool de Postgres
+-------------------------------------------------
+Antes de escribir código, se justificaron dos parámetros como
+decisiones de diseño, no como números arbitrarios:
+
+- Tamaño del pool: se comparó un pool muy pequeño (min=1, max=3, cuello
+  de botella incluso en pruebas normales), uno grande cercano al límite
+  del threadpool (~40, que agravaría el riesgo de concurrencia contra
+  el Session pooler), y el elegido: min=2, max=10 — cubre con holgura
+  el tráfico de una demo de TFM sin acercarse al límite del threadpool,
+  y convierte el pool en el "cuello de botella intencional y
+  controlado" en vez de dejar el límite indefinido.
+
+- Verificación permanente, no script desechable: en vez de otro script
+  temporal, se añadió un endpoint permanente GET /health/db, distinto
+  de GET /health, aplicando la distinción estándar de ingeniería entre
+  liveness (¿está vivo el proceso? — lo comprueba /health) y readiness
+  (¿puede de verdad hacer su trabajo, es decir, hablar con la base de
+  datos? — lo comprueba /health/db).
+
+Implementación: psycopg2.pool.ThreadedConnectionPool (no
+SimpleConnectionPool, porque FastAPI y fastmcp despachan las funciones
+síncronas a varios hilos a la vez, y ThreadedConnectionPool es la
+variante segura para ese escenario). Un context manager
+get_db_connection() (con @contextmanager) que toma prestada una
+conexión con pool.getconn(), la cede con yield, y la devuelve SIEMPRE
+con pool.putconn() dentro de un finally — para que una conexión se
+devuelva al pool incluso si una consulta lanza una excepción a mitad de
+camino. init_pool() y close_pool() se engancharon a la función
+lifespan() que se había dejado vacía a propósito en el paso 5.
+
+Verificación con conexiones reales contra Supabase: se consultó
+pg_stat_activity con una conexión aparte, fuera del pool, y se encontró
+una fila (postgres, Supavisor, idle, 2) que coincidía exactamente con
+DB_POOL_MIN=2. Se señaló con honestidad un límite de esa prueba: el
+número cuadraba, pero no había certeza matemática de que esas 2
+conexiones fueran las nuestras y no las de otro cliente con el mismo
+rol — una correlación razonable, no una prueba.
+
+Para cerrar esa incertidumbre de forma barata, se añadió
+application_name="reformas-backend-fastapi" a los parámetros de
+conexión del pool — una etiqueta de texto que Postgres guarda junto a
+cada conexión y que aparece en pg_stat_activity, permitiendo filtrar
+por identidad en vez de por coincidencia numérica.
+
+9. El hallazgo de --reload en Windows (confirmado leyendo el código
+fuente de uvicorn, no por sospecha)
+--------------------------------------------------------------------------
+Al intentar verificar el filtrado por application_name, apareció un
+reinicio de uvicorn que se quedaba colgado indefinidamente en
+"Reloading...", con 3 procesos python.exe vivos (el vigilante/reloader,
+un servidor viejo que debería haberse cerrado, y un proceso nuevo a
+medio arrancar). Antes de matar nada, se recogió evidencia en caliente:
+se instaló py-spy para volcar en qué línea exacta estaba parado cada
+proceso.
+
+Los volcados mostraban el reloader esperando en un join() a que el
+worker terminara, y el worker en su bucle de eventos, sin rastro del
+código de cierre — el apagado nunca llegó a iniciarse. Con el código
+fuente de uvicorn delante (uvicorn/supervisors/basereload.py, líneas
+86-97), se confirmó la causa: en Windows, el reloader no mata al
+worker, le manda un evento de consola CTRL_C_EVENT — como si alguien
+pulsara Ctrl+C en la ventana — y esto SOLO llega a procesos que
+comparten una ventana de consola real. Un servidor lanzado en segundo
+plano (sin consola interactiva) nunca recibe ese evento, y el reloader
+se queda esperando para siempre.
+
+Esto reveló algo más importante que el propio cuelgue: hasta ese
+momento, cada vez que se había "parado el servidor" se había usado
+taskkill /F, que mata el proceso en seco sin pasar por el cierre del
+lifespan. La pregunta "¿el apagado ordenado en nuestro propio código
+funciona?" seguía completamente sin probar.
+
+Lección aplicada de forma incompleta la primera vez: tras confirmar el
+hallazgo, la conclusión fue "a partir de ahora, arrancar siempre sin
+--reload". Poco después, ese mismo --reload volvió a colgarse por la
+misma causa exacta (crear un archivo nuevo mientras el reloader
+vigilaba la carpeta). La lección quedó dicha una vez pero no aplicada
+de forma sistemática — se corrigió convirtiéndola en instrucción fija y
+explícita en cada prompt siguiente, no en algo que se da por
+sobreentendido.
+
+10. Test de apagado ordenado, diseñado para evitar el mismo problema
+que se está probando
+--------------------------------------------------------------------------
+Mandar Ctrl+C a un proceso en segundo plano tiene el mismo problema de
+consola que --reload — la prueba fallaría por un motivo ajeno a lo que
+se quiere medir. Se escribió check_graceful_shutdown.py, que:
+
+1. Arranca uvicorn desde Python (uvicorn.Server), sin --reload: un
+   único proceso, sin reloader ni worker separados.
+2. Llama a /health y /health/db, para que el pool preste y devuelva al
+   menos una conexión real, como en uso normal.
+3. Simula Ctrl+C poniendo servidor.should_exit = True — exactamente lo
+   que hace el manejador de señales de uvicorn al recibir la señal real,
+   así que el apagado recorre el mismo camino de código. Lo único que
+   esto NO prueba es que Windows entregue la señal real.
+4. Mide cada fase con una técnica de monkey patching: sustituye
+   app_main.close_pool por una versión instrumentada que apunta la hora
+   de entrada/salida y guarda qué conexiones tenía el pool justo antes
+   de cerrarse, para comprobar después que quedaron cerradas de verdad.
+   Esto funciona porque combined_lifespan busca el nombre close_pool en
+   su módulo EN EL MOMENTO de llamarlo, no en el momento en que se
+   definió la función — se puede sustituir desde fuera sin tocar el
+   código original.
+5. Tiene un vigilante (faulthandler.dump_traceback_later) que, si el
+   apagado no termina en 20 segundos, imprime en qué línea está parado
+   cada hilo — sin matar el proceso.
+
+Resultado: apagado completo en 0.213s, close_pool() en 1ms, 2 conexiones
+comprobadas y las 2 cerradas de verdad. La línea "libres=2, prestadas=0"
+confirmó dos cosas a la vez: que el finally de get_db_connection()
+funciona (la conexión prestada por /health/db se devolvió), y que el
+pool tenía exactamente DB_POOL_MIN conexiones — no por coincidencia
+externa, sino contadas por los propios objetos del pool.
+
+Límite reconocido con honestidad: esta prueba simula la señal, no
+prueba que Windows la entregue de verdad. Se cerró ese hueco pidiendo
+una comprobación manual: el alumno ejecutó uvicorn en su propia consola
+de Git Bash y pulsó Ctrl+C real, confirmando "Shutting down" →
+"Application shutdown complete", con el detalle añadido de que
+"Finished server process" y el control devuelto al prompt sin necesidad
+de matar nada a mano demostraban que no quedó ningún hilo colgando el
+proceso completo, no solo el lifespan de la aplicación.
+
+11. Decisión sobre cómo cerrar el punto 3c (application_name a través
+del Session pooler)
+--------------------------------------------------------------------------
+Se descubrió que Supavisor (el Session pooler de Supabase) sustituye el
+application_name del cliente por el suyo propio antes de que llegue a
+pg_stat_activity — incluso la conexión del script de diagnóstico, con
+su propio nombre distinto, aparecía como 'Supavisor'. El filtrado tal
+como se había planteado no podía funcionar por esa vía.
+
+Rule of Three para cerrar el punto: (A) aceptar como prueba la
+comprobación desde los propios objetos del pool (libres=2, prestadas=0,
+conexiones cerradas una a una y comprobadas, ya hecha en el paso 10);
+(B) conexión directa a Postgres sin pooler, con el riesgo de necesitar
+IPv6 sin confirmar en la red del alumno, y el problema más grave de
+dejar de probar el camino real de producción; (C) investigar si
+Supavisor tiene algún mecanismo de reenvío del nombre, con esfuerzo
+desconocido para, en el mejor caso, la misma certeza que ya da la
+Opción A. Decisión: Opción A — no era una prueba más débil que el plan
+original, sino una fuente de verdad más directa: el propio pool
+confirmando su estado interno, conexión por conexión, en vez de
+depender de una coincidencia numérica externa.
+
+12. Limpieza y organización del repositorio
+--------------------------------------------------
+- py-spy: desinstalado del .venv tras cumplir su función de
+  diagnóstico puntual (confirmado que nunca había entrado en
+  requirements.txt).
+- Los cuatro scripts de verificación (check_connection.py,
+  check_mcp_connection.py, check_pool_connections.py,
+  check_graceful_shutdown.py) se movieron de la raíz del repo a una
+  carpeta scripts/ dedicada. Se verificó, no se asumió, que el traslado
+  no rompía nada: load_dotenv() sube desde la ubicación del propio
+  archivo hasta encontrar .env (funciona igual desde scripts/), pero
+  check_graceful_shutdown.py hacía import app.main, y Python solo añade
+  la carpeta del script (no la raíz del repo) a sys.path — eso sí
+  rompió, con ModuleNotFoundError, y se arregló calculando la raíz de
+  forma relativa al propio archivo con pathlib
+  (Path(__file__).resolve().parents[1]) e insertándola al principio de
+  sys.path. Se revisó el código de ese arreglo directamente (no solo el
+  resumen de que "ya funciona") y se confirmó que es robusto: no
+  depende de ninguna ruta absoluta de una máquina concreta, y funciona
+  igual en Windows y Linux.
+- El comentario junto a application_name en connection.py se corrigió
+  dos veces: primero decía que permitía filtrar "con certeza", escrito
+  antes de descubrir la sustitución de Supavisor — se corrigió para no
+  dejar una afirmación falsa en el código, con la explicación completa
+  de por qué no sirve a través del pooler y para qué se mantiene
+  igualmente (conexión directa futura).
+- Estrategia de commits: se decidió NO hacer un único commit con todo,
+  sino DOS separados — uno para app/ + requirements.txt (el backend en
+  sí) y otro para scripts/ (la evidencia de que se probó). El motivo no
+  es estético: son dos categorías de artefacto distintas para la
+  memoria (solución vs. evidencia de pruebas), y mezclarlas en un solo
+  commit difumina esa distinción desde el primer día del historial. Se
+  señaló además, como aviso serio y no solo protocolario, que app/
+  entero llevaba 20 archivos sin commitear desde el principio de la
+  sesión — varios bloques de trabajo sin ninguna red de seguridad de
+  Git por debajo, algo que se corrigió como práctica hacia delante: cada
+  bloque cerrado con verificación real termina también con un commit,
+  no se deja acumular.
+
+13. Herramientas de trabajo y flujo de la sesión
+-------------------------------------------------------
+- Elección de modelo de Claude Code: para bloques con una decisión de
+  diseño real (arquitectura, Rule of Three) se recomendó Opus 5; para
+  bloques mecánicos una vez el patrón ya está establecido, Sonnet 5 es
+  suficiente y más rápido. Se verificó primero qué modelos soporta
+  Claude Code actualmente, en vez de asumir nombres de versiones
+  antiguas.
+- VS Code congelándose y pérdida de scroll en el terminal: se
+  identificó que Claude Code guarda automáticamente la transcripción
+  completa de cada sesión en disco (JSONL, en
+  C:\Users\<usuario>\.claude\projects\), así que nada se pierde de
+  verdad aunque el terminal se congele — se puede recuperar con
+  claude --resume o el selector /resume. Para el cuelgue en sí, se
+  dieron pasos concretos: cerrar aplicaciones que compiten por RAM
+  (coherente con la restricción de 8GB de toda la sesión), desactivar
+  la aceleración por GPU del terminal integrado, o lanzar Claude Code en
+  una terminal aparte fuera de VS Code.
+- Diferencia entre claude (sesión nueva), claude --continue (recupera
+  la última conversación completa, con todo su ruido) y CLAUDE.md +
+  memoria automática (se cargan solos al principio de CADA sesión,
+  nueva o no). Para el modo de trabajo de este proyecto — bloques en
+  días distintos, confiando en las decisiones ya documentadas más que
+  en el hilo exacto de cada depuración — se decidió usar claude a secas
+  cada vez, apoyado en un CLAUDE.md con el contexto esencial.
+- Conexión de GitHub a Claude, para poder leer el estado real del
+  repositorio directamente en vez de depender de que se pegue código
+  manualmente en cada verificación.
+
+14. CLAUDE.md
+-------------------
+Se preparó el contenido de un archivo CLAUDE.md para la raíz del repo,
+con instrucciones de que Claude Code lo contraste contra el código real
+antes de darlo por bueno (no que lo escriba a ciegas). Cubre: cómo se
+trabaja en el proyecto (bloques pequeños, explicar antes y después,
+verificación real), la regla crítica de no usar --reload en Windows, el
+stack y por qué, la estructura de carpetas y su regla de disciplina, las
+dos puertas REST/MCP, los gotchas ya resueltos (Supavisor, lifespan
+combinado), el estado actual, y un puntero a la carpeta docs/ para el
+razonamiento completo de cada decisión — deliberadamente breve, para no
+consumir presupuesto de contexto en cada sesión repitiendo todo el
+detalle que sí vive en los documentos de decisiones.
+
+
+================================================================
+PARTE II — DECISIONES PARA LA MEMORIA DEL TFM (índice de referencia
+rápida)
+================================================================
+
+Formato: [Decisión] → [Apartado de la memoria] → [Por qué es
+defendible en una frase]
+
+- Servidor MCP en un solo proceso, montado dentro de FastAPI →
+  §3 (stack) y §4 (arquitectura) → RAM 8GB + no duplica pools de
+  conexión + hace físicamente imposible divergir el cálculo entre
+  agente y REST.
+
+- Uso de fastmcp (no el SDK oficial "mcp") → §3 (stack) → rename del
+  SDK oficial en agosto 2026, verificado contra documentación actual,
+  no asumido de memoria; ejemplo citable de "verificación de vigencia
+  tecnológica" que pide el punto 7 del feedback del tutor.
+
+- Separación services/ vs. api/ vs. mcp_server/, con la regla de que
+  services/ nunca importa fastapi ni fastmcp → §4 (arquitectura) →
+  hace la reutilización de lógica una garantía estructural, no una
+  convención de estilo.
+
+- Acceso síncrono a Postgres (psycopg2 + ThreadedConnectionPool) →
+  §3 (stack) y §6 (limitaciones) → decisión consciente de escala
+  documentada con plan de migración explícito, no una omisión; el
+  argumento del escalado horizontal como palanca real frente al
+  malentendido común de "async = escala" es el punto más defendible
+  de toda la arquitectura si se explica bien.
+
+- Tamaño del pool (DB_POOL_MIN=2, DB_POOL_MAX=10) → §4 (arquitectura)
+  y §5 (resultados) → primer límite explícito y justificado sobre el
+  riesgo de concurrencia del Session pooler, verificado con
+  conexiones reales contra Supabase, no solo calculado en papel.
+
+- Distinción liveness (/health) vs. readiness (/health/db) → §4
+  (arquitectura) → patrón estándar de ingeniería, no un endpoint
+  inventado ad hoc; deja además infraestructura reutilizable para
+  monitorización futura.
+
+- Patrón combined_lifespan → §4 (arquitectura) y §6 (limitaciones) →
+  ejemplo de gestión de errores/robustez a nivel de infraestructura,
+  no solo de lógica de negocio; conecta con los puntos 3 y 5 del
+  feedback del tutor (excepciones y validación).
+
+- El hallazgo de --reload en Windows (confirmado en el código fuente
+  de uvicorn, con volcados de py-spy como evidencia) → §5
+  (resultados/pruebas) → ejemplo de rigor metodológico: no se aceptó
+  "parece que funciona", se llegó a la causa raíz real; además separa
+  con claridad un problema de entorno de desarrollo de una limitación
+  del sistema en producción.
+
+- Test de apagado ordenado con monkey patching y vigilante de cuelgue
+  → §5 (resultados/pruebas) → evidencia empírica y medida (tiempos por
+  fase, conexiones comprobadas una a una) de que el cierre del sistema
+  es robusto, no solo "parece que cierra bien".
+
+- Decisión sobre el punto 3c (Opción A: verificar por los objetos del
+  pool, no por application_name a través de Supavisor) → §5
+  (resultados/pruebas) y §6 (limitaciones) → ejemplo de pivote
+  metodológico justificado: se cambió de plan porque el original era
+  técnicamente inviable, no por comodidad, y el reemplazo es una
+  fuente de verdad más directa, no más débil.
+
+- Application_name como intento fallido a través del pooler, mantenido
+  documentado en el código para uso futuro → §6 (limitaciones) →
+  honestidad técnica: un intento razonable que no funcionó como se
+  esperaba, con la causa raíz identificada y no escondida.
+
+- Estrategia de dos commits separados (backend vs. scripts de
+  verificación) → §2 (introducción) o anexo de repositorio documental
+  → refleja la distinción exigida por el propio enunciado del TFM
+  entre la solución (PDD/código) y la evidencia de que se probó
+  (vídeo-demo, exports, logs de pruebas).
+
+- Versión exacta de fastmcp fijada en requirements.txt (no como
+  mínimo) → §6 (limitaciones) → mitigación de riesgo de despliegue,
+  justificada con el propio aviso del ecosistema fastmcp sobre
+  cambios de compatibilidad entre versiones menores.
+
+
+================================================================
+PARTE III — PENDIENTES Y PRÓXIMOS PASOS
+================================================================
+
+- Conectar GitHub de forma efectiva y subir a docs/ tanto este
+  documento como TFM_Decisiones_Arquitectura_MCP_y_DB.txt, para que
+  CLAUDE.md pueda apuntar a ellos.
+- Crear CLAUDE.md en la raíz del repo (prompt ya preparado,
+  pendiente de ejecutar con el cruce contra el código real).
+- Primer bloque de lógica de negocio real: implementar services/ y el
+  primer endpoint completo — el candidato natural es POST /leads, por
+  ser la entrada real del flujo Lead-to-Quote-to-Appointment.
+- Exploración en serio del riesgo de concurrencia del Session pooler
+  de Supabase bajo el webhook síncrono (limitación documentada desde
+  la Adenda, todavía sin resolver más allá de haber acotado el tamaño
+  del pool).
+- Medir y documentar el RSS real del proceso único (decisión de RAM de
+  la sección 2) como evidencia empírica para la memoria.

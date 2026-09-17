@@ -1,0 +1,607 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+DOCUMENTO DE DECISIONES DE ARQUITECTURA Y JUSTIFICACIÓN TÉCNICA
+Servidor MCP, estructura del backend y capa de acceso a datos (Nivel N0)
+
+Este documento recoge, con el "por qué" completo de cada una, todas las
+decisiones tomadas a lo largo de la sesión de trabajo dedicada al diseño
+del servidor MCP y a la capa de acceso a la base de datos. El objetivo es
+doble: servir de memoria de contexto del proyecto (para no tener que
+volver a explicar decisiones ya cerradas) y servir de base directa para
+redactar los apartados correspondientes de la memoria académica del TFM.
+
+No sustituye a Informe_Decisiones_N0_TFM_Reformas.txt ni a
+Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt, que siguen siendo la
+referencia para el esquema de datos, los endpoints y las reglas de
+negocio. Este documento se centra específicamente en las decisiones de
+arquitectura del servidor MCP y la capa de datos, tomadas en esta sesión.
+
+
+================================================================
+0. CONTEXTO PREVIO — decisiones ya cerradas en sesiones anteriores
+================================================================
+
+Resumen breve, para que este documento sea autocontenido. El detalle
+completo de estas decisiones está en Informe_Decisiones_N0 y en la Adenda.
+
+- Empresa ficticia: "Reformas Integrales Amedida".
+- Los 8 tablas de Supabase están creadas y con RLS activo; reglas_negocio
+  (4 filas) y tarifas_base (12 filas) están completas y pobladas.
+- margen_empresa_pct = 15%; recargo_informe_tecnico = 600€ fijo.
+- Umbral de aprobación manual (Gate HITL) = 10.000€ (revisado desde
+  8.000€ iniciales, justificado con datos de mercado de baño/cocina gama
+  alta, para evitar que el Gate se dispare sistemáticamente en el
+  segmento de mayor volumen de leads).
+- El webhook de recepción de lead responde de forma SÍNCRONA (no por
+  email diferido) — decisión comercial para no dar tiempo al cliente a
+  comparar con otras empresas mientras espera.
+- Se descartó (aparcada, no implementar en N0/N1) la generación de
+  imágenes IA "antes/después" de la reforma, por riesgo comercial de
+  disputa si la imagen no coincide con el resultado real.
+- Contrato cerrado de los 5 endpoints FastAPI (patrón híbrido REST+RPC):
+  POST /leads, POST /calculate-estimate, POST /gate-decisions,
+  POST /visits, POST /create-followup-task. get_business_rules() y
+  request_missing_information() son MCP tools puras, sin endpoint HTTP.
+- check_connection.py (script de verificación puntual con psycopg2,
+  NO reutilizable como capa de datos de la aplicación — ver sección 7).
+
+
+================================================================
+1. ARQUITECTURA DEL SERVIDOR MCP: PROCESO ÚNICO VS PROCESO SEPARADO
+================================================================
+
+1.1 El problema a resolver
+---------------------------
+La propuesta de Fase 1 y el Informe de Decisiones N0 ya habían cerrado
+QUE debía existir un servidor MCP propio en Python, reutilizando la capa
+services/ de FastAPI sin duplicar lógica de cálculo. Lo que no estaba
+decidido era CÓMO se despliega ese servidor: como proceso independiente,
+o integrado en el mismo proceso que FastAPI.
+
+1.2 Restricción técnica verificada primero
+--------------------------------------------
+Antes de diseñar nada, se verificó (búsqueda web, no supuesto) cómo
+conecta realmente el nodo "MCP Client Tool" de n8n con un servidor MCP.
+Resultado: ese nodo solo admite conexión vía SSE o HTTP Streamable — NO
+soporta stdio de forma nativa. Esto fija una restricción real e
+innegociable: el servidor MCP tiene que ser, sí o sí, un proceso HTTP
+escuchando en un puerto; no puede ser un script que n8n lance como
+subproceso.
+
+1.3 Rule of Three
+-------------------
+OPCIÓN A — Dos procesos separados (FastAPI y MCP), cada uno importando
+services/ como paquete compartido.
+  Pros: separación de responsabilidades limpia, resiliencia (si uno cae,
+  el otro sigue vivo).
+  Contras: dos intérpretes Python cargando FastAPI/uvicorn/psycopg2 en
+  paralelo — coste de RAM real en una máquina de 8GB, sumado a n8n
+  (Node.js, ya identificado como pesado) + VS Code + Claude Code CLI.
+  Además, DUPLICA el número de pools de conexión independientes contra
+  el Session pooler de Supabase, empeorando un riesgo de concurrencia ya
+  documentado y sin resolver.
+
+OPCIÓN B — Un solo proceso: el servidor MCP montado como sub-aplicación
+ASGI dentro de la misma app FastAPI.
+  Pros: un único proceso Python (mínimo footprint de RAM posible); un
+  único pool de conexión a Postgres (no empeora el riesgo del Session
+  pooler); la garantía de "no duplicar lógica de cálculo" deja de ser una
+  convención de código (dos importaciones del mismo paquete) y pasa a ser
+  una imposibilidad física: es literalmente el mismo objeto función en
+  memoria el que responde por las dos puertas.
+  Contras: existe una trampa técnica real y documentada al montar un
+  sub-servidor MCP dentro de FastAPI si no se gestiona correctamente el
+  lifespan (ver sección 5) — con solución conocida, pero no trivial para
+  alguien empezando en Python.
+
+OPCIÓN C — Proceso MCP separado, actuando como proxy HTTP hacia FastAPI
+(sin importar services/ directamente, solo llamando a los endpoints REST
+por HTTP).
+  Pros: mantiene un único pool de conexión a Postgres (solo FastAPI toca
+  la BD).
+  Contras: sigue siendo dos procesos (mismo coste base de RAM que A);
+  introduce una vuelta de red y doble serialización JSON innecesaria; y,
+  más grave, deja de reutilizar la capa services/ como se decidió —
+  reutiliza el contrato HTTP, que es una forma de reuso más débil y
+  contradice literalmente lo cerrado en el Informe de Decisiones N0.
+
+1.4 Decisión y justificación
+------------------------------
+OPCIÓN B: un solo proceso, servidor MCP montado dentro de FastAPI.
+Justificación: mínimo consumo de RAM en un entorno de 8GB, no agrava el
+riesgo de concurrencia del Session pooler, y hace físicamente imposible
+la duplicación de lógica de cálculo entre el agente y las pruebas REST
+directas — un argumento defendible en la memoria y en la defensa oral
+ante la pregunta "¿cómo garantizas que el agente y el endpoint REST
+calculan lo mismo?".
+
+Aclaración conceptual importante para la memoria: "servidor MCP propio en
+Python" (entidad lógica, con sus propias tools) y "proceso independiente
+del sistema operativo" (decisión de despliegue) son cosas DISTINTAS. La
+Opción B sigue siendo "tu servidor MCP propio" — simplemente no corre en
+un proceso aparte.
+
+1.5 Implicación directa para el punto pendiente del Session pooler
+----------------------------------------------------------------------
+Esta decisión no resuelve el riesgo de concurrencia del Session pooler
+(sigue siendo tarea aparte), pero lo condiciona positivamente: al haber
+un único proceso, solo hace falta gestionar UN pool de conexión, no dos.
+Cuando se aborde ese punto pendiente, se parte de una superficie de
+conexión ya reducida a la mitad respecto a la Opción A.
+
+
+================================================================
+2. LIBRERÍA MCP: fastmcp (standalone) vs SDK oficial "mcp"
+================================================================
+
+2.1 Hallazgo verificado
+--------------------------
+Al buscar documentación actual (no dar por vigente lo aprendido en
+entrenamiento), se encontró que el SDK oficial de MCP para Python
+(paquete "mcp") sufrió una reescritura importante recientemente: desde
+el 2 de agosto de 2026, la instalación por defecto de "mcp" resuelve la
+versión 2.0, que renombra la clase FastMCP integrada a MCPServer y
+elimina la ruta de importación mcp.server.fastmcp. El patrón "clásico"
+que aparece en la mayoría de tutoriales antiguos (from mcp.server.fastmcp
+import FastMCP) ya no funciona con esa instalación por defecto.
+
+2.2 Decisión
+---------------
+Usar el paquete independiente "fastmcp" (no el SDK oficial "mcp"), que
+mantiene su propia clase FastMCP y no coincide en nombres con el paquete
+oficial. Su método http_app() resuelve además, de forma más directa, el
+problema de lifespan al montar dentro de FastAPI (ver sección 5).
+
+2.3 Instalación — corrección aplicada
+------------------------------------------
+Instrucción inicial incorrecta (arrastrada de un hábito de entorno
+distinto al del alumno): "pip install fastmcp --break-system-packages".
+Corrección: el flag --break-system-packages existe para saltarse la
+protección PEP 668 en sistemas que bloquean pip fuera de un entorno
+virtual (Debian/Ubuntu). Con el .venv del proyecto activado, esa
+protección no aplica, así que el flag sobra y es una instrucción
+imprecisa. Instalación correcta: pip install fastmcp, con el venv activo.
+
+2.4 Versión fijada
+----------------------
+Se instaló y se verificó con el comando "fastmcp version": fastmcp==4.0.3
+Se fija esta versión EXACTA en requirements.txt (no como fastmcp>=4.0.3),
+porque el propio ecosistema de fastmcp advierte de cambios de
+compatibilidad frecuentes entre versiones menores — instalar "la última"
+en cualquier momento futuro no es una práctica segura para este proyecto.
+Investigación posterior (sección 7, al reevaluar la decisión síncrono vs
+asíncrono) confirmó además que la propia migración de fastmcp 3→4 tuvo
+cambios que "compilan pero fallan en tiempo de ejecución" — razón de más
+para no actualizar sin motivo durante el desarrollo del TFM.
+
+
+================================================================
+3. ESTRUCTURA DE CARPETAS DEL BACKEND
+================================================================
+
+3.1 Árbol de carpetas cerrado
+----------------------------------
+app/
+  main.py                  — instancia FastAPI, monta /mcp, incluye routers REST
+  api/                     — adaptadores REST (delgados, sin lógica)
+    leads.py
+    estimates.py
+    gate_decisions.py
+    visits.py
+    followup_tasks.py
+  mcp_server/
+    server.py              — instancia FastMCP + tools (adaptadores, sin lógica)
+  services/                — ÚNICA capa con lógica de negocio real
+    leads_service.py
+    estimate_service.py    — aquí vive calculate_estimate()
+    gate_service.py
+    visits_service.py
+    followup_service.py
+  db/
+    connection.py          — pool de conexión, compartido por REST y MCP
+  schemas/                 — modelos Pydantic (request/response)
+  config.py                — carga de .env, lectura de reglas_negocio
+
+3.2 Regla de disciplina arquitectónica
+-------------------------------------------
+services/ NUNCA debe importar nada de fastapi ni de fastmcp. Si algún
+archivo dentro de services/ importa alguna de las dos, es una señal de
+que la separación se está rompiendo: ha dejado de ser lógica de negocio
+pura y se ha convertido en un adaptador disfrazado. api/ y
+mcp_server/server.py son las únicas capas que conocen a FastAPI y a
+fastmcp respectivamente; ambas son delgadas y llaman siempre a las mismas
+funciones de services/.
+
+3.3 Analogía usada para explicar la estructura (útil para la memoria si
+se quiere hacer la arquitectura más accesible a un lector no técnico)
+--------------------------------------------------------------------------
+El backend como un restaurante:
+- services/ es la cocina: aquí se "cocina" el trabajo real.
+- api/ es el mostrador de pedidos normal: cualquiera que sepa qué pedir
+  y cómo (tú probando a mano, un temporizador de n8n, botones de
+  Telegram) llega aquí.
+- mcp_server/ es una puerta especial solo para el agente de IA: antes de
+  pedir nada, permite preguntar "¿qué puedes hacer por mí?" y recibe un
+  menú de lo disponible — eso es, en esencia, el protocolo MCP.
+- db/ es la despensa (Supabase).
+- schemas/ son las fichas de receta: forma exacta que debe tener un
+  pedido y una respuesta.
+- config.py son las normas generales del restaurante.
+
+
+================================================================
+4. DOS PUERTAS DE ENTRADA: REST (api/) vs MCP (mcp_server/)
+================================================================
+
+4.1 Por qué existen dos puertas y no una sola
+--------------------------------------------------
+No todo lo que llega al sistema necesita razonamiento de un agente de
+IA. Hay disparadores "tontos" y deterministas (un temporizador de n8n,
+un botón de Telegram, una prueba manual) que ya saben exactamente qué
+quieren pedir y no necesitan que un LLM decida nada. Para esos casos,
+una ruta REST normal es más simple y más rápida de depurar. El agente de
+IA, en cambio, necesita "descubrir" qué herramientas tiene disponibles y
+decidir cuándo usarlas según el contexto de la conversación — eso es
+exactamente lo que MCP resuelve y una ruta REST normal no.
+
+4.2 Qué endpoints tienen ambas puertas, y cuáles solo una
+----------------------------------------------------------------
+- calculate-estimate: TIENE las dos puertas. En producción, la usa el
+  agente vía MCP (porque es él quien decide cuándo tiene datos
+  suficientes para calcular). La puerta REST existe para pruebas y uso
+  administrativo manual, sin tener que simular una conversación completa
+  del agente.
+- get_business_rules() y request_missing_information(): SOLO existen
+  como tools MCP, sin puerta REST. Son ayudas de razonamiento puramente
+  internas para el agente; ningún sistema externo necesitaría llamarlas
+  directamente.
+- leads, gate-decisions, visits, create-followup-task: en producción
+  usan SOLO la puerta REST, porque quien los dispara (un webhook, un
+  botón, un temporizador) no necesita razonamiento de IA.
+
+4.3 Garantía de no duplicar lógica
+---------------------------------------
+Al estar todo el proceso en un único proceso Python (decisión de la
+sección 1), ambas puertas llaman literalmente a la misma función de
+Python en memoria. No es solo una convención de "reutilizar el código" —
+es físicamente imposible que el resultado del agente y el resultado de
+una llamada REST directa diverjan, porque no hay dos copias del cálculo,
+hay una sola.
+
+
+================================================================
+5. CICLO DE VIDA (LIFESPAN) COMBINADO
+================================================================
+
+5.1 Qué es un lifespan (explicado para la memoria en términos simples)
+----------------------------------------------------------------------------
+El "lifespan" de una aplicación FastAPI es el código que se ejecuta UNA
+sola vez al arrancar el servidor (antes de atender la primera petición)
+y UNA sola vez al apagarlo — nunca en cada petición individual. Sirve
+para preparar recursos que se van a reutilizar muchas veces: abrir un
+pool de conexión a la base de datos, arrancar un gestor de sesiones,
+etc. Es distinto de las rutas o las tools, que se ejecutan una vez por
+cada petición.
+
+5.2 El problema detectado
+------------------------------
+FastAPI solo acepta UN lifespan por aplicación. El montaje del servidor
+MCP (sección 1) necesita su propio lifespan interno (para arrancar su
+gestor de sesiones). Y muy pronto, la capa db/connection.py también va a
+necesitar su propio lifespan (para abrir y cerrar el pool de Postgres).
+Si simplemente se sustituye uno por el otro, uno de los dos deja de
+ejecutarse EN SILENCIO — sin ningún error inmediato que lo delate — y el
+fallo aparece más tarde, de forma confusa, en el peor momento.
+
+5.3 Hallazgo verificado (no una sospecha propia)
+------------------------------------------------------
+Se encontró un issue documentado en el propio repositorio de fastmcp
+("FastMCP breaks FastAPI Testclient", con ejemplo de código incluido)
+que confirma exactamente este problema y muestra la solución oficial:
+combinar ambos lifespans en un único gestor de contexto anidado, en vez
+de que uno reemplace al otro.
+
+5.4 Patrón adoptado (combined_lifespan)
+--------------------------------------------
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastmcp import FastMCP
+
+mcp = FastMCP("Reformas Integrales Amedida — MCP Server")
+mcp_app = mcp.http_app(path="/")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # aquí se abrirá el pool de Postgres (próximo bloque)
+    yield
+    # aquí se cerrará el pool de Postgres
+
+@asynccontextmanager
+async def combined_lifespan(app: FastAPI):
+    async with lifespan(app):
+        async with mcp_app.lifespan(app):
+            yield
+
+app = FastAPI(lifespan=combined_lifespan)
+app.mount("/mcp", mcp_app)
+
+5.5 Por qué se decidió AHORA, antes de escribir el pool de Postgres
+--------------------------------------------------------------------------
+Se pudo haber dejado tal cual (lifespan=mcp_app.lifespan) y arreglarlo
+más adelante, cuando hiciera falta el pool. Se decidió corregirlo ya
+porque el coste de hacerlo ahora es mínimo (la función lifespan() todavía
+está vacía) frente al coste de descubrirlo más tarde en forma de un bug
+confuso que silenciosamente rompe uno de los dos subsistemas. Es una
+aplicación directa del principio de "barato de corregir cuanto antes se
+detecta".
+
+
+================================================================
+6. VERIFICACIÓN DEL BLOQUE 1 (SCAFFOLDING) — qué se verificó de verdad
+================================================================
+
+6.1 Primera verificación reportada (insuficiente)
+--------------------------------------------------------
+El alumno reportó tres comprobaciones tras el arranque: (a) sin
+traceback en el log de arranque, (b) GET /health devuelve 200, (c)
+GET /docs carga correctamente. Se calificó esto inicialmente como
+"verificado en ejecución real".
+
+6.2 Por qué esa afirmación era incorrecta
+------------------------------------------------
+Las tres comprobaciones confirman que FastAPI arrancó sin morir — pero
+NINGUNA de las tres toca realmente el endpoint /mcp. El fallo típico del
+montaje MCP dentro de FastAPI (documentado en el issue de GitHub de la
+sección 5.3) no aparece al arrancar el servidor ni al pedir /health:
+aparece específicamente cuando un cliente MCP real intenta abrir una
+sesión contra el sub-app montado. Se puede tener un arranque limpio y
+aun así tener /mcp completamente roto por dentro.
+
+6.3 Verificación real añadida
+----------------------------------
+Se pidió un cuarto paso: un script (check_mcp_connection.py, temporal,
+en la raíz del repo) que usa el cliente propio de fastmcp
+(fastmcp.Client) para conectarse de verdad a http://localhost:8000/mcp/
+y llamar a list_tools(). Como todavía no había ninguna tool definida, el
+resultado esperado era una lista vacía, sin ningún error.
+
+6.4 Resultado
+------------------
+El script se ejecutó y devolvió una lista de tools vacía, sin errores.
+Con esto, el montaje del servidor MCP queda verificado bajo tráfico real
+del protocolo MCP, no solo por lectura de código — el Bloque 1
+(scaffolding) se da por cerrado con rigor en este punto.
+
+
+================================================================
+7. ACCESO A LA BASE DE DATOS: SÍNCRONO VS ASÍNCRONO
+================================================================
+
+7.1 Por qué esto es distinto de check_connection.py
+----------------------------------------------------------
+check_connection.py abre una conexión suelta, hace un SELECT COUNT(*) de
+comprobación, y la cierra — válido para su propósito puntual de entonces
+(verificar credenciales), pero no reutilizable como la forma en que la
+aplicación habla con la base de datos en marcha. Abrir una conexión
+nueva por cada petición sería lento y agravaría el riesgo de concurrencia
+del Session pooler ya documentado como pendiente.
+
+7.2 Qué es un pool de conexiones (explicado para la memoria)
+--------------------------------------------------------------------
+Un pool es una flota de conexiones ya abiertas de antemano, en vez de
+fabricar una nueva cada vez que hace falta — analogía: una flota de
+coches de alquiler ya matriculados en vez de comprar un coche por
+cliente. Al arrancar la app (en el lifespan) se abren, por ejemplo, 5
+conexiones de golpe. Cada función de services/ que necesita hablar con
+Postgres toma prestada una, la usa, y la devuelve. El TAMAÑO del pool es
+el número máximo de conversaciones simultáneas con Postgres que la app
+puede sostener — y es el número que conecta directamente con el riesgo
+pendiente del Session pooler.
+
+7.3 Diferencia conceptual síncrono / asíncrono (explicado para la
+memoria)
+-----------------------------------------------------------------------
+Modelo síncrono: cada "trabajador" (hilo del pool) hace una sola cosa a
+la vez. Si tiene que esperar una respuesta de la base de datos, se queda
+bloqueado sin hacer nada más hasta que llega. Si hay más peticiones
+simultáneas que trabajadores disponibles, las peticiones sobrantes
+esperan su turno.
+Modelo asíncrono: un solo "trabajador" (hilo/event loop) puede alternar
+entre varias tareas: mientras una espera una respuesta, el trabajador
+atiende otra en vez de quedarse parado, y vuelve a la primera cuando su
+respuesta está lista.
+
+7.4 Primera evaluación (Rule of Three inicial)
+-----------------------------------------------------
+Se verificó primero (no se asumió) que fastmcp 4.0.3 soporta
+oficialmente tools tanto síncronas como asíncronas, con despacho
+automático de las síncronas a un pool de hilos — documentación actual
+confirmada, no un comportamiento obsoleto.
+
+OPCIÓN A — Síncrono: psycopg2 (ya instalado y probado) + pool de
+conexión, usado en funciones def normales (FastAPI y fastmcp las
+despachan automáticamente a un pool de hilos).
+  Pros: cero conceptos nuevos de async/await para la parte de base de
+  datos; reutiliza lo ya instalado y probado; comportamiento
+  oficialmente soportado por ambos frameworks.
+  Contras: si el pool de hilos se agotara bajo carga muy alta, las
+  peticiones adicionales harían cola — riesgo bajo para la escala de una
+  demo de TFM.
+
+OPCIÓN B — Asíncrono: psycopg en modo async (v3).
+  Pros: no necesita pool de hilos, arquitectura "moderna" de extremo a
+  extremo, API parecida a psycopg2 (transición más suave que asyncpg).
+  Contras: nueva dependencia y nuevo concepto (async/await, gestores de
+  contexto asíncronos) a aprender desde cero, añadido sobre todo lo
+  demás; mayor superficie para bugs sutiles (un await olvidado) en la
+  fase de aprendizaje.
+
+OPCIÓN C — Asíncrono: asyncpg.
+  Pros: el más rápido de los tres en rendimiento puro.
+  Contras: API distinta (no compatible con el estándar DB-API de
+  psycopg2), la curva de aprendizaje más pronunciada de las tres, sin
+  beneficio real medible a la escala de este proyecto.
+
+Decisión inicial: OPCIÓN A, por coherencia con la disciplina ya aplicada
+al elegir el proceso único para MCP — igualar el esfuerzo de ingeniería
+a lo que el proyecto realmente necesita, no maximizar rendimiento que no
+se va a poder demostrar ni necesitar.
+
+7.5 Objeción del alumno y reevaluación
+--------------------------------------------
+El alumno planteó una objeción legítima: el proyecto es también un
+portfolio profesional, las empresas reales manejan volúmenes grandes de
+datos, y un sistema que "colapsa" al pasar a producción por no haber
+tenido en cuenta el volumen no es un buen ejemplo de eficiencia. Pidió
+reevaluar la decisión buscando algo eficiente y válido en un entorno real
+masivo.
+
+7.6 Corrección conceptual aportada en la reevaluación
+------------------------------------------------------------
+Se aceptó la parte válida de la objeción (el criterio de defensa ante
+una empresa no se había evaluado en la primera pasada) pero se corrigió
+una idea inexacta en el planteamiento: síncrono vs asíncrono NO es la
+palanca principal para aguantar volumen masivo. La palanca principal es
+el ESCALADO HORIZONTAL — correr varias copias de la aplicación en
+paralelo detrás de un balanceador de carga —, que funciona igual de bien
+con código síncrono que con código asíncrono, y es independiente de esta
+decisión. Además, si la propia base de datos (Postgres) no aguanta el
+volumen de consultas, ser asíncrono en el lado de Python no evita el
+cuello de botella.
+
+7.7 Decisión final (mantenida, con justificación reforzada)
+------------------------------------------------------------------
+Se mantiene la OPCIÓN A (síncrono, psycopg2 + pool con
+ThreadedConnectionPool, por ser thread-safe frente a la variante
+Simple), pero reforzada con dos compromisos nuevos, incorporados
+precisamente por la objeción del alumno:
+  (1) Documentar explícitamente en la memoria esta decisión como una
+      elección consciente de escala, no como una omisión.
+  (2) Mantener la capa services/ como el único punto de acoplamiento con
+      la base de datos (ya decidido en la sección 3), de forma que una
+      futura migración a asíncrono sea un cambio mecánico y acotado, no
+      un rediseño completo.
+
+7.8 Plan de migración documentado — qué cambiaría y qué no
+------------------------------------------------------------------
+Capa                                          | ¿Cambia? | Qué cambiaría
+-----------------------------------------------------------------------
+db/connection.py                              | Sí, del todo | Se reescribe con un driver async
+services/ (lógica de negocio)                 | Sí, mecánicamente | def -> async def + await en las llamadas a la BD; la lógica y los parámetros NO cambian
+api/ (rutas REST)                             | Sí, mecánicamente | def -> async def en cada endpoint
+mcp_server/server.py (tools)                  | Sí, mecánicamente | igual, def -> async def
+Esquema de Postgres, reglas de negocio,       | No cambia | Independiente de sync/async
+contrato de los 5 endpoints                   |            |
+
+Conclusión honesta: SÍ habría que tocar bastante código (no es un cambio
+de una línea), pero NO habría que rediseñar el sistema, porque la lógica
+de negocio y los contratos de entrada/salida no dependen de si el código
+es síncrono o asíncrono. Esto es una consecuencia directa de haber
+aislado services/ desde el principio.
+
+7.9 Talking point preparado para la defensa oral
+-------------------------------------------------------
+Respuesta sugerida ante la pregunta "¿por qué no usaste async si esto
+podría necesitar escalar?":
+
+"Elegí acceso síncrono con un pool de conexiones acotado porque, para el
+volumen real de este caso de uso — un formulario web recibiendo leads,
+no una API de alto tráfico —, la concurrencia de un pool bien
+dimensionado es más que suficiente, y preferí centrar el rigor del
+proyecto en el control de excepciones y la trazabilidad, que es donde de
+verdad se juega la robustez de un sistema como este, en vez de introducir
+complejidad asíncrona sin una necesidad real que la justifique. Aislé el
+acceso a datos en una capa services/ independiente de FastAPI y de MCP
+precisamente para que, si el volumen creciera, la migración a un driver
+asíncrono fuera un cambio acotado y mecánico a esa capa, no un rediseño
+completo. Y para escalar de verdad a un volumen masivo, la primera
+palanca no sería async dentro de un proceso — sería correr varias
+instancias de esta misma arquitectura detrás de un balanceador de carga,
+algo que el diseño actual ya permite sin cambios."
+
+
+================================================================
+8. APARTADO ESPECIAL — IMPLICACIONES PARA LA MEMORIA DEL TFM
+================================================================
+
+Mapeo de las decisiones de este documento al índice estándar de la
+memoria (ver TFM.txt), y a los puntos concretos del feedback del tutor
+(ver Nota_tutor.txt):
+
+§3 Marco metodológico y herramientas (selección del stack)
+------------------------------------------------------------------
+- Justificar la elección de fastmcp frente al SDK oficial "mcp",
+  citando el rename de agosto de 2026 (sección 2) como ejemplo concreto
+  de "verificación de vigencia tecnológica" — responde directamente al
+  punto 7 del feedback del tutor (justificar decisiones técnicas, no
+  darlas por sentadas, apoyándose en fuentes).
+- Justificar la decisión de proceso único para el servidor MCP con la
+  Rule of Three completa de la sección 1 (RAM de 8GB + riesgo del
+  Session pooler como criterios decisivos). Presentarlo como ejemplo de
+  ingeniería ajustada a la escala real del proyecto, no como una
+  limitación sufrida.
+- Justificar la elección de acceso síncrono a la base de datos con el
+  razonamiiento completo de la sección 7, incluyendo la corrección
+  conceptual sobre escalado horizontal — este es probablemente el punto
+  más defendible de toda la arquitectura si se explica bien, porque
+  demuestra criterio de ingeniería, no desconocimiento.
+
+§4 Desarrollo de la solución — Arquitectura
+------------------------------------------------
+- Incluir el diagrama de las "dos puertas" (REST vs MCP) de la sección 4,
+  aclarando explícitamente la distinción entre "servidor MCP propio"
+  (entidad lógica) y "proceso independiente" (decisión de despliegue) —
+  para que no parezca contradictorio con la propuesta de Fase 1, que
+  hablaba de "servidor MCP propio" sin especificar la topología.
+- Documentar el patrón combined_lifespan de la sección 5 como ejemplo de
+  gestión de errores/robustez a nivel de infraestructura, no solo a
+  nivel de lógica de negocio — conecta con el punto 3 y 5 del feedback
+  del tutor (control de excepciones y rutas de escalado).
+
+§5 Resultados y validación — Pruebas de funcionamiento
+------------------------------------------------------------
+- Documentar la diferencia entre la "primera verificación" (insuficiente,
+  sección 6.1-6.2) y la verificación real (sección 6.3-6.4) como
+  evidencia de rigor metodológico: no basta con que el código "no dé
+  error al leerlo", hace falta probarlo bajo el protocolo real que se va
+  a usar en producción. Este contraste es un buen ejemplo citable para
+  el punto 5 del feedback del tutor (validación y testing, casos límite).
+- Cuando se implemente el pool de Postgres, medir y documentar el RSS
+  real del proceso único (Opción B de la sección 1) como evidencia
+  empírica de la decisión de RAM — convierte una decisión "razonada en
+  RAM" en una decisión "validada en RAM".
+
+§6 Discusión y reflexión — Limitaciones técnicas
+--------------------------------------------------------
+- Documentar explícitamente la decisión síncrono/asíncrono como
+  limitación consciente y su plan de migración (tabla de la sección
+  7.8) — este es el apartado donde el talking point de la sección 7.9
+  encaja casi textualmente.
+- Documentar que fastmcp advierte inestabilidad entre versiones menores
+  como justificación del pin de versión exacta (sección 2.4) — mitigación
+  de riesgo de despliegue.
+- El riesgo de concurrencia del Session pooler de Supabase bajo el
+  webhook síncrono sigue siendo una limitación documentada, no resuelta
+  — mencionar que la arquitectura de proceso único (sección 1) ya reduce
+  la superficie del problema a la mitad frente a la alternativa de dos
+  procesos, aunque no lo resuelve del todo.
+
+
+================================================================
+9. PENDIENTES ABIERTOS (no resueltos todavía en esta sesión)
+================================================================
+
+- Implementación real de db/connection.py (pool con
+  ThreadedConnectionPool) y relleno de la función lifespan() que sigue
+  vacía en main.py.
+- Verificación del pool dentro del ciclo de vida real de FastAPI (no
+  solo por lectura de código), en el mismo espíritu que el smoke test de
+  /mcp de la sección 6.
+- Medición del RSS real del proceso único, para documentar en la
+  memoria (sección 8, apartado §5).
+- Exploración del riesgo de concurrencia del Session pooler de Supabase
+  bajo el webhook síncrono (limitación documentada desde la Adenda,
+  todavía sin resolver).
+- Implementación endpoint por endpoint de api/ y tool por tool de
+  mcp_server/server.py, una vez cerrado el bloque de la capa de datos.
