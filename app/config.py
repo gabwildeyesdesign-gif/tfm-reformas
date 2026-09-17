@@ -21,7 +21,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
 
 # Número máximo de conexiones que el pool puede llegar a abrir a la vez.
-# Si se piden más conexiones de las que el pool tiene disponibles y ya
-# llegó a este límite, la petición que pide una conexión de más espera
-# o falla, según cómo se use el pool.
+#
+# Qué pasa EXACTAMENTE al superar este límite (verificado en el código
+# fuente de psycopg2, psycopg2/pool.py, método _getconn): el pool NO
+# espera. Lanza inmediatamente PoolError("connection pool exhausted").
+# Como PoolError hereda de psycopg2.Error, un endpoint que capture
+# psycopg2.Error la recoge igual que un fallo de base de datos.
+#
+# (Este comentario decía antes que la petición "espera o falla, según
+# cómo se use el pool". Era falso y se corrigió: no hay ningún modo de
+# uso en el que espere.)
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))

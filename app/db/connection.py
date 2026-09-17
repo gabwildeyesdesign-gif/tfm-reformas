@@ -84,12 +84,18 @@ def close_pool():
 @contextmanager
 def get_db_connection():
     """
-    Context manager que presta una conexión del pool y la devuelve sola.
+    Context manager de SOLO LECTURA: presta una conexión del pool, la
+    devuelve sola, y NO confirma nada.
 
-    Uso previsto:
+    Uso previsto (consultas que no modifican datos):
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(...)
+            cursor.execute("SELECT ...")
+
+    ATENCIÓN: esta función NO hace commit(). Cualquier INSERT, UPDATE o
+    DELETE hecho a través de ella se DESHACE al salir del "with" y no
+    queda guardado en la base de datos. Para escrituras hay que usar
+    get_transactional_connection(), definida más abajo.
 
     Todo lo que hay antes del yield ocurre al ENTRAR en el "with"; lo
     que hay en el finally ocurre siempre al SALIR del "with", tanto si
@@ -116,4 +122,87 @@ def get_db_connection():
         # conexiones (llegando a DB_POOL_MAX) y las siguientes peticiones
         # se quedarían esperando indefinidamente una conexión libre que
         # nunca llega — un servidor "atascado" sin ningún error visible.
+
+        # rollback() incluso para lecturas: en psycopg2 un simple SELECT
+        # también abre una transacción implícita, y una conexión devuelta
+        # sin cerrarla se queda en el estado "idle in transaction" —
+        # inactiva pero reteniendo recursos del servidor (bloqueos y
+        # visibilidad de versiones antiguas de las filas, lo que impide
+        # al recolector de basura de Postgres limpiar). Cerrarla aquí es
+        # gratis y deja la conexión en estado IDLE limpio.
+        #
+        # conn.closed vale 0 mientras la conexión está viva; si se
+        # perdió, intentar hacerle rollback lanzaría otra excepción
+        # ENCIMA de la que ya estuviera propagándose, tapando el error
+        # original. Por eso se comprueba antes.
+        if not conn.closed:
+            conn.rollback()
+        _pool.putconn(conn)
+
+
+@contextmanager
+def get_transactional_connection():
+    """
+    Context manager de ESCRITURA: presta una conexión del pool y
+    confirma o deshace la transacción automáticamente.
+
+    Uso previsto (cuando se modifican datos):
+        with get_transactional_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO clientes ...")
+            cursor.execute("INSERT INTO leads ...")
+        # al llegar aquí sin excepciones, las DOS filas están guardadas
+
+    Qué garantiza:
+      - Si el bloque "with" termina sin excepción -> commit(): los
+        cambios quedan guardados de verdad.
+      - Si dentro del "with" salta CUALQUIER excepción -> rollback():
+        no queda ni una fila a medias, y la excepción sigue subiendo
+        hacia quien llamó (para que la capa de API pueda convertirla en
+        una respuesta HTTP de error).
+
+    Esto es lo que se llama ATOMICIDAD: varias operaciones se comportan
+    como una sola indivisible — o se aplican todas, o ninguna. Es
+    imprescindible en POST /leads, donde se escriben tres filas
+    encadenadas (cliente, lead y oportunidad): un fallo a mitad no puede
+    dejar un cliente sin lead ni un lead sin oportunidad.
+
+    Se llama get_transactional_connection() y no algo parecido a
+    get_db_connection() A PROPÓSITO: los dos nombres tienen que ser
+    difíciles de confundir de un vistazo, porque usar la de lectura para
+    escribir no da ningún error — simplemente los datos no se guardan.
+    """
+    conn = _pool.getconn()
+    try:
+        # Se entrega la conexión al bloque "with". Mientras ese bloque
+        # se ejecuta, esta función está detenida justo en esta línea.
+        yield conn
+
+        # Solo se llega aquí si el bloque "with" terminó SIN excepción.
+        # commit() le dice a Postgres "haz definitivos todos los cambios
+        # de esta transacción". Sin esta línea se perderían: psycopg2 no
+        # confirma solo (no trabaja en modo autocommit).
+        conn.commit()
+    except Exception:
+        # "except Exception" captura cualquier error ocurrido dentro del
+        # "with": un fallo de SQL, una violación de clave única, o
+        # incluso un error de Python del código de negocio a mitad de la
+        # escritura. rollback() deshace TODO lo hecho en esta
+        # transacción, dejando la base de datos como estaba al empezar.
+        #
+        # Nota: si la conexión se perdiera del todo, este rollback podría
+        # fallar; aun así el putconn() del finally se ejecuta igualmente,
+        # y se comprobó empíricamente que el pool descarta o limpia las
+        # conexiones rotas antes de reutilizarlas.
+        conn.rollback()
+
+        # "raise" a secas vuelve a lanzar la MISMA excepción que se
+        # acaba de capturar, con su traza original intacta. Sin esta
+        # línea, el error se quedaría aquí tragado en silencio y quien
+        # llamó creería que todo fue bien.
+        raise
+    finally:
+        # Pase lo que pase (commit correcto, rollback, o un error dentro
+        # del propio rollback), la conexión vuelve al pool. Si no, se
+        # quedaría marcada como "en uso" para siempre.
         _pool.putconn(conn)
