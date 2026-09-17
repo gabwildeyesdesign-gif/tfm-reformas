@@ -1,0 +1,299 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+RESUMEN DE SESIÓN — PRIMER ENDPOINT DE NEGOCIO: POST /leads
+Esquemas Pydantic, capa transaccional, servicio, router y documentación
+
+Documento de contexto de proyecto · Nivel N0
+
+Continúa a TFM_Resumen_Sesion_Backend_N0.txt, que cubría el scaffolding
+(servidor MCP montado, pool de Postgres, /health y /health/db, apagado
+ordenado). Esta sesión es el primer bloque de LÓGICA DE NEGOCIO real.
+
+El razonamiento completo de cada decisión del modelo de datos está en
+TFM_Decisiones_Modelo_Datos_Leads.txt; aquí se resume qué se hizo, en qué
+orden, qué se verificó y qué queda abierto.
+
+Regla de trabajo aplicada en toda la sesión: nada se da por bueno por
+leerlo. Cada afirmación de este documento procede de una ejecución real
+cuya salida se revisó.
+
+
+================================================================
+1. LO QUE SE HIZO, EN ORDEN
+================================================================
+
+1.1 Esquemas Pydantic (app/schemas/)
+------------------------------------
+Se crearon dos archivos:
+
+  common.py — los enums TipoReforma y NivelAcabados, y la constante
+      MAX_FOTOS_LEAD. Están aquí y no dentro de leads.py porque
+      calculate-estimate va a necesitar los mismos valores: si vivieran
+      en leads.py, el esquema de presupuestos tendría que importar del
+      de leads, una dependencia entre dominios que no significa nada.
+
+  leads.py — PhotoUploadSlot, LeadPhotoUploadResponse, LeadCreate y
+      LeadCreateResponse.
+
+Decisiones concretas de este bloque:
+
+  - Los valores de los enums se copiaron de la BASE DE DATOS
+    (SELECT DISTINCT sobre tarifas_base), no de la documentación. Son
+    'bano' y 'basico', sin eñe y sin tilde.
+  - LeadCreate usa extra="forbid". Por defecto Pydantic ignora en
+    silencio los campos que no conoce; con forbid, un "telefono_movil"
+    escrito por error en el workflow de n8n da un 422 que lo nombra, en
+    vez de perderse sin que nadie se entere.
+  - Los límites de longitud replican el ancho real de las columnas
+    (nombre/email VARCHAR(150), telefono VARCHAR(30)). Así lo que sería
+    un error 500 de Postgres ("value too long") es un 422 limpio.
+  - Fotos opcionales con default_factory=list, máximo MAX_FOTOS_LEAD.
+  - lead_id, cliente_id y oportunidad_id son int porque las claves
+    primarias reales son SERIAL (integer con default nextval), no UUID.
+    Verificado en information_schema antes de escribir el modelo.
+
+Verificación: 34 comprobaciones, 0 fallos. No solo casos válidos: cada
+caso que debe rechazarse comprueba ADEMÁS que el motivo del rechazo es
+el correcto, para que un email inválido no pase la prueba por fallar de
+rebote en otro campo.
+
+
+1.2 Capa de conexión: el bug del commit ausente
+-----------------------------------------------
+Se detectó que get_db_connection() prestaba una conexión y la devolvía
+al pool sin llamar nunca a commit(). psycopg2 no opera en autocommit,
+así que cualquier escritura hecha a través de esa función se habría
+perdido EN SILENCIO: respuesta 201 con un id, y la tabla vacía.
+
+Antes de arreglarlo se comprobó EMPÍRICAMENTE —ejecutando, no leyendo el
+código fuente de psycopg2— si una transacción abierta sin commitear se
+queda pegada a la conexión para el siguiente que la tome del pool. La
+distinción importaba: si se quedara pegada, el problema no sería pérdida
+de datos sino contaminación entre peticiones de usuarios distintos.
+
+Resultado: NO se queda pegada. Con una conexión devuelta en estado
+INTRANS, el pool la entrega después en IDLE (misma conexión física,
+mismo backend_pid). Si el pool ya tiene sus minconn libres, directamente
+la cierra. El fallo era pérdida de datos, no contaminación.
+
+Arreglo, dos context managers deliberadamente distintos:
+
+  get_db_connection()            SOLO LECTURA. Añadido rollback() al
+                                 salir, porque un SELECT también abre
+                                 transacción implícita en psycopg2 y sin
+                                 cerrarla la conexión queda "idle in
+                                 transaction" reteniendo recursos.
+
+  get_transactional_connection() ESCRITURA. commit() si el bloque
+                                 termina bien, rollback() + raise si
+                                 salta cualquier excepción, putconn()
+                                 siempre.
+
+Los nombres no se parecen a propósito: usar la de lectura para escribir
+no produce ningún error, simplemente los datos desaparecen.
+
+Verificación: 11 comprobaciones, 0 fallos, comprobando el estado real de
+la tabla desde una conexión AJENA al pool (desde dentro de la misma
+transacción se verían filas no confirmadas y la prueba mentiría). Se
+probaron commit correcto, excepción de Python a mitad de dos inserciones,
+y error de Postgres (NotNullViolation): en los dos casos de error, cero
+filas a medias.
+
+
+1.3 CHECK en oportunidades.tipo_reforma
+---------------------------------------
+La columna era varchar sin restricción. Un 'baño' con eñe habría entrado
+sin queja y el fallo habría aparecido mucho después, en
+calculate-estimate, al no encontrar tarifa: todos los leads de baño
+marcados como requiere_revision, con la causa a tres capas del síntoma.
+
+    ALTER TABLE oportunidades
+    ADD CONSTRAINT chk_oportunidades_tipo_reforma
+    CHECK (tipo_reforma IN ('bano','cocina','integral_vivienda',
+                            'parcial_acabados') OR tipo_reforma IS NULL);
+
+Verificación con filas descartables dentro de una transacción deshecha
+al final: 'bano' aceptado, NULL aceptado, 'baño' RECHAZADO con
+CheckViolation, 'tejado' rechazado. Cero filas persistidas.
+
+La defensa queda doble a propósito: Pydantic protege la puerta HTTP, el
+CHECK protege la tabla venga el dato de donde venga (un script suelto,
+el editor SQL de Supabase, un INSERT manual).
+
+
+1.4 app/services/leads_service.py
+---------------------------------
+Una sola función, create_lead(data: LeadCreate) -> LeadCreateResponse,
+que escribe tres filas dentro de UNA transacción: cliente, lead y
+oportunidad. El orden lo impone la base de datos (las claves foráneas).
+
+El detalle de cada campo y su porqué está en
+TFM_Decisiones_Modelo_Datos_Leads.txt, sección 4. Lo esencial:
+
+  - Cliente: INSERT ... ON CONFLICT (email) DO UPDATE SET
+    email = EXCLUDED.email RETURNING id. El DO UPDATE trivial es
+    deliberado: DO NOTHING no devuelve fila en RETURNING cuando hay
+    conflicto, y se necesita el id en los dos casos. Una sola sentencia
+    en vez de "SELECT y si no hay, INSERT", que abriría una condición de
+    carrera con dos webhooks simultáneos del mismo email.
+  - Lead: canal fijo 'formulario_web', mensaje_original NULL (no hay
+    texto libre en N0, no es un dato que falte), fotos y datos del
+    formulario al JSONB tal como llegaron.
+  - Oportunidad: tipo_reforma en su columna, prioridad y confianza_ia a
+    NULL (los rellena el agente), datos_completos=false y estado='nueva'
+    escritos EXPLÍCITAMENTE aunque la tabla los tenga por defecto, para
+    dejar la intención en el código y no depender de que el DEFAULT del
+    esquema no cambie.
+  - RETURNING id, estado en la oportunidad, de forma que el status de la
+    respuesta sea el valor que Postgres acaba de escribir, no una copia
+    escrita aparte en Python que pudiera desincronizarse.
+
+Regla de disciplina respetada: este archivo NO importa fastapi ni
+fastmcp.
+
+Verificación: 31 comprobaciones, 0 fallos, en tres pruebas.
+  A) Lead con fotos -> las tres filas existen y un JOIN por las tres
+     claves foráneas las une; todos los campos con el valor esperado.
+  B) Lead sin fotos -> fotos_urls queda como lista vacía [], no NULL.
+  C) Segundo lead con el MISMO email -> mismo cliente_id, una sola fila
+     en clientes, lead y oportunidad nuevos, y la ficha del cliente
+     conserva nombre y teléfono originales pese a que la segunda llamada
+     enviaba otros distintos (decisión D2 comprobada en la práctica).
+
+
+1.5 app/api/leads.py y wiring en main.py
+----------------------------------------
+Router delgado: recibe LeadCreate, llama a create_lead(), devuelve
+LeadCreateResponse. Una línea de cuerpo. Se eligió status_code=201
+(Created) en vez del 200 por defecto de FastAPI, por semántica REST;
+n8n trata cualquier 2xx como éxito.
+
+Registrado en main.py con app.include_router(): es el PRIMER
+include_router del proyecto. Se verificó antes que no había ninguno.
+
+Nota técnica útil para futuras comprobaciones: en FastAPI 0.141.1,
+iterar app.routes NO muestra las rutas incluidas por include_router —
+aparece un objeto perezoso _IncludedRouter en su lugar. La fuente de
+verdad para comprobar qué endpoints existe de verdad es el esquema
+OpenAPI (app.openapi()['paths']), que publica /leads -> POST con los
+códigos 201 y 422.
+
+Verificación por HTTP REAL, no llamando a la función: se arrancó el
+servidor con uvicorn.Server (sin --reload, por la limitación de Windows
+ya documentada), en un hilo, y se le mandaron peticiones con requests.
+12 comprobaciones, 0 fallos:
+
+  - POST /leads válido -> HTTP 201,
+    {"lead_id":5,"cliente_id":7,"oportunidad_id":8,"status":"nueva"};
+    filas (0,0,0) -> (1,1,1).
+  - POST /leads con email inválido -> HTTP 422 apuntando a
+    ["body","email"], y filas (1,1,1) -> (1,1,1): la validación corta
+    ANTES de tocar la base de datos.
+  - POST /leads con tipo_reforma='baño' -> HTTP 422 listando los cuatro
+    valores válidos; tampoco se creó ninguna fila.
+
+Servidor arriba en 6.37s, apagado ordenado en 0.169s, filas de prueba
+borradas al terminar.
+
+
+1.6 Corrección de documentación
+-------------------------------
+- CLAUDE.md afirmaba que la carpeta docs/ no existía y que el plan de
+  migración a async no estaba escrito. Las dos eran falsas: docs/ existe
+  desde el commit 90bca98, y el plan está en
+  TFM_Decisiones_Arquitectura_MCP_y_DB.txt, sección 7.8. Corregido.
+- CLAUDE.md afirmaba además que nada de la sección "Dos puertas" estaba
+  implementado. Cierto al escribirlo, falso tras esta sesión. Corregido
+  junto con el apartado de estado actual.
+- La Adenda y el Informe de decisiones vivían solo en el Escritorio del
+  equipo, fuera del repositorio. Copiados a docs/.
+- schema_n0_v2.sql marcado como DESACTUALIZADO con las tres diferencias
+  concretas verificadas contra la base de datos real: le falta la
+  columna presupuestos.motivo_gate, le faltan las tablas reglas_negocio
+  y tarifas_base enteras, y le falta el CHECK nuevo. Regenerarlo es una
+  tarea aparte.
+- app/config.py decía que al superar DB_POOL_MAX la petición "espera o
+  falla, según cómo se use el pool". Falso: lanza PoolError de
+  inmediato, nunca espera. Corregido con la explicación real.
+- Añadido docs/TFM_Decisiones_Modelo_Datos_Leads.txt.
+
+
+================================================================
+2. HALLAZGOS QUE MERECEN ESTAR EN LA MEMORIA DEL TFM
+================================================================
+
+- El bug del commit ausente, y sobre todo CÓMO se acotó su gravedad:
+  se distinguió empíricamente entre "pérdida de datos" y "contaminación
+  entre peticiones" en vez de asumir lo peor o lo mejor. Ejemplo de
+  rigor metodológico: leer el código fuente sirvió para formular la
+  hipótesis, la prueba ejecutada fue la que la confirmó.
+
+- La trampa de 'baño' vs 'bano': un carácter de diferencia que no habría
+  producido ningún error visible, solo un comportamiento degradado a tres
+  capas de distancia. Ejemplo citable de por qué los valores se copian de
+  la fuente real y no de la documentación, y de defensa en profundidad
+  (validación en la aplicación MÁS restricción en la base de datos).
+
+- La separación en tres tablas justificada por ciclo de vida
+  (identidad / evidencia inmutable / proceso mutable) en vez de por
+  normalización por costumbre.
+
+- La verificación por HTTP real frente a la llamada directa a la
+  función: solo la primera demuestra que la validación corta antes de
+  llegar a la base de datos, que es lo que exige la política de
+  excepciones de la Adenda para los 4xx.
+
+- Documentación corregida contra el código real: cuatro afirmaciones
+  falsas encontradas y arregladas, incluida una dentro del propio
+  código. Honestidad técnica, y ejemplo de que la documentación se
+  contrasta, no se acumula.
+
+
+================================================================
+3. PUNTOS ABIERTOS AL CERRAR ESTA SESIÓN
+================================================================
+
+1. ORDEN DE LOS ESTADOS presupuesto_enviado / visita_agendada. Hay dos
+   lecturas incompatibles entre la Adenda y la narrativa de negocio
+   manejada en esta sesión. Detalle completo en
+   TFM_Decisiones_Modelo_Datos_Leads.txt, sección 2. No bloquea
+   POST /leads, que solo escribe 'nueva', pero condiciona el diseño de
+   POST /visits y POST /gate-decisions. ES EL PRIMER PUNTO A CERRAR.
+
+2. 'convertido' y 'descartado' de la Adenda no existen en la base de
+   datos; equivalen a 'ganada' y 'perdida'.
+
+3. Idempotencia (D7): oportunidades.lead_id no tiene UNIQUE, así que un
+   reintento de n8n duplicaría lead y oportunidad. Limitación asumida y
+   documentada para N0.
+
+4. La tabla de excepciones de la Adenda no está implementada: hoy un
+   error no controlado de services/ sale como un 500 genérico de
+   FastAPI. Los 4xx de validación sí se comportan como manda.
+
+5. reglas_negocio.max_fotos_lead existe (valor 5) pero nadie la lee: el
+   límite lo aplica la constante del código. Al implementar la lectura,
+   la columna valor es NUMERIC(10,2) y vuelve como Decimal('5.00').
+
+6. Falta el script que compare los enums del código con el contenido de
+   tarifas_base, mitigación acordada del coste de la decisión D5.
+
+7. schema_n0_v2.sql sigue viviendo en el Escritorio, no en el
+   repositorio; se marcó como desactualizado ahí.
+
+8. Concurrencia del Session pooler de Supabase bajo el webhook síncrono:
+   limitación documentada desde la Adenda, todavía sin medir bajo carga.
+
+9. EmailStr rechaza dominios reservados (.invalid, .test) además de los
+   emails mal formados. Usar example.com en los datos del vídeo-demo.
+
+
+================================================================
+4. SIGUIENTE BLOQUE NATURAL
+================================================================
+
+POST /calculate-estimate, que es quien consume oportunidades.tipo_reforma
+y tarifas_base, y donde entra el Gate HITL. Conviene cerrar antes el
+punto abierto 1, porque afecta a cómo evoluciona el estado de la
+oportunidad a partir de ese endpoint.

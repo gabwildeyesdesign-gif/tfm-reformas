@@ -53,12 +53,14 @@ services/ NUNCA importa fastapi ni fastmcp — es la única capa con
 lógica de negocio real. api/ y mcp_server/server.py son adaptadores
 delgados que llaman siempre a las mismas funciones de services/.
 
-## Dos puertas: REST vs MCP — DISEÑO PREVISTO, AÚN NO IMPLEMENTADO
+## Dos puertas: REST vs MCP — IMPLEMENTADO SOLO PARCIALMENTE
 
-Nada de esta sección existe todavía en el código: los archivos de
-app/api/ y app/services/ contienen solo un docstring de una línea, y el
+Estado real del código a día de hoy: POST /leads está implementado y
+verificado por HTTP real (app/api/leads.py + app/services/leads_service.py,
+registrado en main.py con el único include_router del proyecto). Los
+otros cuatro endpoints siguen siendo un docstring de una línea, y el
 servidor MCP no tiene ninguna tool registrada (list_tools() devuelve []).
-Es la especificación a implementar, no el estado actual.
+Lo que sigue es la especificación completa, no el estado actual.
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -81,15 +83,30 @@ SOLO REST.
 ## Estado actual / pendiente
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
-montado, pool de Postgres, /health y /health/db, apagado ordenado.
-Pendiente: servicios de negocio (services/), endpoints reales,
-concurrencia del Session pooler bajo carga.
+montado, pool de Postgres, /health y /health/db, apagado ordenado,
+esquemas Pydantic de leads, get_transactional_connection() (commit /
+rollback automáticos), CHECK en oportunidades.tipo_reforma, y POST
+/leads completo de punta a punta (HTTP real: 201 con datos válidos, 422
+sin tocar la base de datos con datos inválidos).
+
+Pendiente: los otros cuatro endpoints, las tools MCP, la concurrencia
+del Session pooler bajo carga, la tabla de excepciones de la Adenda
+(hoy un error no controlado de services/ sale como 500 genérico), y la
+idempotencia frente a reintentos de n8n (D7, limitación asumida en N0).
 
 ## Para el razonamiento completo de cada decisión
 
 Ver docs/ en este repo — este archivo es un resumen de referencia
-rápida, no sustituye esa documentación.
+rápida, no sustituye esa documentación. Contiene:
 
-PENDIENTE: la carpeta docs/ todavía no existe en el repositorio, y el
-"plan de migración a async" citado en la sección de stack tampoco está
-escrito en ningún sitio. Ambos están por crear.
+- Informe_Decisiones_N0_TFM_Reformas.txt — esquema de datos y reglas
+  de negocio.
+- Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt — contrato de los 5
+  endpoints y tabla de excepciones.
+- TFM_Decisiones_Arquitectura_MCP_y_DB.txt — servidor MCP y capa de
+  datos. El "plan de migración a async" citado en la sección de stack
+  está aquí, en la sección 7.8.
+- TFM_Resumen_Sesion_Backend_N0.txt — narrativa de la sesión de
+  scaffolding.
+- TFM_Decisiones_Modelo_Datos_Leads.txt — modelo de datos de leads y
+  decisiones D1 a D7.

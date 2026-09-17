@@ -1,0 +1,421 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+DECISIONES DEL MODELO DE DATOS DE LEADS
+Por qué tres tablas, ciclo de vida de una oportunidad, y decisiones D1–D7
+
+Documento de contexto de proyecto · Nivel N0
+
+Este documento existe para que quien lea el repositorio no tenga que
+reconstruir la conversación en la que se tomaron estas decisiones. Cubre
+el bloque POST /leads: el alta de un lead y todo lo que se escribe con
+ella. Complementa a Informe_Decisiones_N0 (esquema de datos) y a la
+Adenda (contrato de endpoints); no los sustituye.
+
+Todo lo que se afirma aquí está verificado contra la base de datos real
+de Supabase y con ejecución real del código, no deducido de la
+documentación.
+
+
+================================================================
+1. POR QUÉ TRES TABLAS Y NO DOS
+================================================================
+
+Un alta de lead escribe TRES filas: clientes, leads y oportunidades. La
+pregunta razonable es por qué no bastan dos —o incluso una— si los tres
+registros nacen a la vez, del mismo formulario, con los mismos datos.
+
+La respuesta no es normalización por costumbre. Es que los tres
+registros tienen CICLOS DE VIDA DISTINTOS, y mezclar en una misma tabla
+datos con ciclos de vida distintos es lo que genera, con el tiempo, las
+tablas imposibles de mantener.
+
+  clientes  — IDENTIDAD, persistente y compartida.
+      Una persona existe una sola vez y sobrevive a todas sus
+      solicitudes. Si Ana pide una reforma de baño en marzo y una de
+      cocina en noviembre, es la MISMA Ana. Por eso email tiene un
+      UNIQUE: es la clave natural de identidad del negocio.
+
+  leads     — EVIDENCIA, inmutable.
+      Es el acta de lo que llegó: qué pidió esta persona, en qué
+      momento, por qué canal, con qué fotos. Una vez escrita NO SE
+      MODIFICA NUNCA. Si el cliente se corrige, eso es un lead nuevo,
+      no una edición del anterior. Esta inmutabilidad es lo que permite
+      auditar después por qué el sistema calculó lo que calculó: los
+      datos de entrada siguen ahí, intactos, aunque el precio de la
+      tarifa haya cambiado desde entonces.
+
+  oportunidades — PROCESO, mutable.
+      Es la entidad viva: el trato comercial que avanza. Cambia de
+      estado muchas veces (nueva, cualificada, ...), se le asigna
+      prioridad, el agente le escribe una confianza, se le cuelgan
+      presupuestos y visitas. Es la única de las tres que se actualiza
+      de forma continuada, y por eso es la única con columna updated_at.
+
+El criterio, resumido en una frase: LO INMUTABLE Y LO MUTABLE NO
+COMPARTEN TABLA. Si lead y oportunidad fueran una sola fila, cada cambio
+de estado del proceso comercial estaría reescribiendo la misma fila que
+guarda la evidencia de lo que el cliente pidió — y bastaría un UPDATE
+mal hecho para perder el dato original sin posibilidad de recuperarlo.
+
+Consecuencia práctica ya visible en el código: leads.datos_estructurados
+guarda el JSON crudo del formulario, y oportunidades.tipo_reforma guarda
+el mismo dato en una columna aparte. Esa duplicación es deliberada (ver
+D3) y es consecuencia directa de esta separación: uno es evidencia, el
+otro es dato de trabajo.
+
+Estructura real verificada (information_schema, constraint_type =
+'FOREIGN KEY'):
+
+    clientes.id
+        ^
+        | leads_cliente_id_fkey
+    leads.cliente_id  ... leads.id
+                             ^
+                             | oportunidades_lead_id_fkey
+                         oportunidades.lead_id  ... oportunidades.id
+                                                       ^         ^
+                     presupuestos_oportunidad_id_fkey  |         |
+                          visitas_oportunidad_id_fkey  ----------+
+
+Son las 4 únicas claves foráneas del esquema. Nótese que oportunidades
+NO tiene clave foránea a clientes: se llega al cliente a través de
+leads.cliente_id. No es un olvido — evita un segundo camino hacia el
+mismo dato, que podría desincronizarse.
+
+
+================================================================
+2. CICLO DE VIDA DE UNA OPORTUNIDAD
+================================================================
+
+La columna oportunidades.estado tiene un CHECK que admite exactamente
+seis valores, verificado en la base de datos:
+
+    nueva, cualificada, visita_agendada, presupuesto_enviado,
+    ganada, perdida
+
+Significado de cada uno en la narrativa de negocio:
+
+  nueva
+      El lead acaba de entrar por el formulario. Nadie lo ha evaluado
+      todavía. Es el valor que escribe POST /leads, junto con
+      datos_completos = false. Ese false no significa "faltan datos":
+      significa "todavía no evaluado por el agente".
+
+  cualificada
+      El agente de IA ha revisado el lead y ha confirmado que la
+      información es suficiente para trabajar con ella (y ha rellenado
+      datos_completos, confianza_ia y prioridad). Si faltara
+      información, es aquí donde entra la tool MCP
+      request_missing_information.
+
+  visita_agendada
+      El cliente ha elegido una franja horaria y existe una fila en
+      visitas (POST /visits).
+
+  presupuesto_enviado
+      Se le ha entregado al cliente un presupuesto, con el Gate HITL ya
+      resuelto si el importe o los cambios estructurales lo activaron.
+
+  ganada
+      El cliente acepta y la reforma se contrata.
+
+  perdida
+      El cliente rechaza, o se agota el seguimiento sin respuesta.
+
+  --------------------------------------------------------------
+  PUNTO ABIERTO — EL ORDEN DE LOS DOS ESTADOS CENTRALES
+  --------------------------------------------------------------
+  Existe una contradicción sin resolver entre dos fuentes del propio
+  proyecto, y se deja aquí señalada en vez de elegir en silencio:
+
+  (a) Orden indicado al redactar este documento:
+        nueva -> cualificada -> visita_agendada -> presupuesto_enviado
+        -> ganada/perdida
+      Lectura: primero se visita la obra, y con lo visto allí se emite
+      el presupuesto. Es el orden natural de una reforma real.
+
+  (b) Orden que se deduce de la Adenda (puntos 3 y 4):
+        nueva -> cualificada -> presupuesto_enviado -> visita_agendada
+        -> ganada/perdida
+      Lectura: el webhook responde al cliente de forma SÍNCRONA con una
+      pre-estimación, y solo después se le ofrece la OPCIÓN de agendar
+      una visita, que ocurre en una interacción posterior separada. La
+      Adenda es explícita en que la reserva de visita no forma parte de
+      la respuesta síncrona inicial.
+
+  Las dos lecturas son defendibles y probablemente conviven: (b)
+  describe la PRE-estimación automática y (a) el presupuesto CERRADO
+  tras la visita. Si es así, el modelo actual tiene un hueco: un único
+  estado presupuesto_enviado no puede representar dos momentos
+  distintos del proceso.
+
+  Esto NO bloquea POST /leads, que solo escribe 'nueva'. Debe resolverse
+  antes de implementar POST /visits y POST /gate-decisions.
+
+  --------------------------------------------------------------
+  CORRECCIÓN DE NOMENCLATURA
+  --------------------------------------------------------------
+  La Adenda, en su punto 2, habla de que el estado llegue a
+  "convertido/descartado". Esos dos valores NO EXISTEN en la base de
+  datos y un UPDATE a 'convertido' fallaría con un error de CHECK.
+  Manda la base de datos. Equivalencia para la memoria del TFM:
+      convertido -> ganada
+      descartado -> perdida
+
+
+================================================================
+3. DECISIONES D1 – D7, RESUELTAS
+================================================================
+
+D1 — ¿QUIÉN CREA LA FILA EN oportunidades?
+------------------------------------------------
+Problema: presupuestos.oportunidad_id y visitas.oportunidad_id son NOT
+NULL y apuntan a oportunidades, POST /visits la recibe como input, pero
+POST /calculate-estimate recibe lead_id, y NINGUNO de los 5 endpoints
+del contrato decía crearla. Había una tabla obligatoria en medio de la
+cadena que nadie rellenaba.
+
+Alternativas evaluadas: (A) la crea POST /leads; (B) la crea
+calculate-estimate al vuelo; (C) un endpoint nuevo POST /oportunidades.
+
+DECISIÓN: A. En N0 la relación lead->oportunidad es 1:1 y determinista,
+y todo el flujo posterior cuelga de oportunidad_id, así que crearla en
+la entrada garantiza que ningún lead quede huérfano de la cadena. La
+opción B dejaría sin oportunidad a un lead que nunca pidiera
+presupuesto, que es precisamente el caso que create_followup_task debe
+detectar. La opción C rompía el contrato de 5 endpoints sin aportar nada
+en N0.
+
+Coste asumido y documentado: el output de POST /leads en la Adenda
+(lead_id, cliente_id, status) se queda corto. Se AMPLÍA con
+oportunidad_id. Es una ampliación justificada del contrato, no un
+incumplimiento: sin ella, n8n necesitaría una consulta extra para
+agendar la visita más adelante.
+
+
+D2 — CLIENTE REPETIDO (UNIQUE EN clientes.email)
+------------------------------------------------
+Problema: un segundo lead con el mismo email haría fallar un INSERT
+ciego con UniqueViolation, y un cliente que pide dos reformas es negocio
+normal, no un error.
+
+DECISIÓN: se reutiliza el cliente existente y NO se tocan sus datos.
+Nombre y teléfono de la nueva llamada quedan registrados en
+leads.datos_estructurados, pero nunca sobrescriben la ficha de cliente:
+un "Gabi" tecleado con prisa no debe pisar un "Gabriela Gómez" correcto.
+
+Implementación, y por qué esta y no otra:
+
+    INSERT INTO clientes (...) VALUES (...)
+    ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+    RETURNING id;
+
+El DO UPDATE es deliberadamente trivial (asigna el email que ya tenía).
+Se hace así y no con DO NOTHING porque DO NOTHING no devuelve ninguna
+fila en RETURNING cuando hay conflicto, y se necesita el id en los dos
+casos. Y se hace en UNA sola sentencia y no con "SELECT y si no hay,
+INSERT" porque eso último abre una condición de carrera real: dos
+webhooks simultáneos con el mismo email pasarían los dos por el SELECT
+vacío y chocarían en el INSERT.
+
+Verificado: dos altas con el mismo email devuelven el MISMO cliente_id,
+crean lead y oportunidad NUEVOS cada vez, dejan una sola fila en
+clientes, y la ficha del cliente conserva el nombre y el teléfono
+originales.
+
+
+D3 — DÓNDE VIVEN LOS DATOS DEL FORMULARIO
+------------------------------------------------
+Problema: leads no tiene columnas para tipo_reforma, nivel_acabados, m2
+ni incluye_cambios_estructurales. Solo tiene dos columnas JSONB.
+
+DECISIÓN: los cuatro datos van al JSONB datos_estructurados TAL COMO
+LLEGARON, y además tipo_reforma se escribe también en la columna
+oportunidades.tipo_reforma.
+
+La duplicación de tipo_reforma es intencional y tiene una razón: el
+JSONB es la evidencia cruda e inmutable de la petición; la columna es el
+dato de negocio consultable con SQL normal (índices, GROUP BY para los
+resultados de la memoria) sin pelearse con operadores JSONB. Son dos
+usos distintos del mismo valor, no una redundancia por descuido.
+
+Se descartó añadir columnas reales con un ALTER TABLE: habría tocado un
+esquema ya cerrado y va contra la razón por la que se eligió JSONB (un
+formulario web cuyos campos pueden cambiar sin migración).
+
+Nota sobre mensaje_original: se deja en NULL a propósito. NO es un dato
+que falte. En N0 el disparador es un formulario estructurado, no una
+conversación, así que no existe texto libre que guardar. La columna
+queda reservada para un canal futuro (chat, WhatsApp) que N0 no
+implementa.
+
+
+D4 — QUÉ SIGNIFICA EL CAMPO status DE LA RESPUESTA
+------------------------------------------------
+El contrato lo pedía pero no lo definía.
+
+DECISIÓN: devuelve el estado REAL de la oportunidad recién creada, no
+una etiqueta inventada. Implementado con RETURNING id, estado en el
+INSERT, de modo que el valor devuelto es literalmente el que Postgres
+acaba de escribir en la fila, no una copia escrita aparte en Python que
+pudiera desincronizarse del dato. En N0 siempre será 'nueva'.
+
+Se descartó devolver "completo"/"incompleto": por la puerta REST todos
+los campos son obligatorios, así que ese caso no puede darse. La
+detección de datos insuficientes es trabajo de la tool MCP
+request_missing_information, un camino distinto.
+
+
+D5 — VALIDACIÓN DE tipo_reforma Y nivel_acabados
+------------------------------------------------
+DECISIÓN: lista fija en el código, como enums de Python en
+app/schemas/common.py (TipoReforma y NivelAcabados), con los valores
+copiados de la base de datos real, no de la documentación.
+
+Se descartó consultar tarifas_base en cada petición: añadiría una
+consulta y una conexión del pool por cada lead, justo encima de la
+limitación ya documentada de concurrencia del Session pooler con webhook
+síncrono. Se descartó no validar: guardaría leads basura y el error
+aparecería tarde, con el cliente esperando una respuesta síncrona,
+contradiciendo la política de la Adenda de que los 4xx fallan rápido.
+
+Coste asumido: la verdad queda duplicada en dos sitios (código y tabla).
+Mitigación pendiente: un script en scripts/ que compare la lista del
+código con el contenido de tarifas_base, para que un desfase se detecte
+a propósito en vez de descubrirse en producción.
+
+AVISO IMPORTANTE, causa de un bug silencioso evitado: los valores
+reales son 'bano' y 'basico', SIN eñe y SIN tilde. Escribir 'baño' no
+habría dado ningún error al insertar (oportunidades.tipo_reforma no
+tenía CHECK), pero calculate-estimate no habría encontrado tarifa y
+TODOS los leads de baño habrían caído en requiere_revision, con la
+causa a tres capas de distancia del síntoma. Por eso se añadió, además
+de la validación en Python, un CHECK en la propia base de datos:
+
+    ALTER TABLE oportunidades
+    ADD CONSTRAINT chk_oportunidades_tipo_reforma
+    CHECK (tipo_reforma IN ('bano','cocina','integral_vivienda',
+                            'parcial_acabados') OR tipo_reforma IS NULL);
+
+Se permite NULL porque la columna es nullable y el agente podría no
+haber confirmado el tipo en algún punto futuro del flujo. (Nota de SQL:
+esa cláusula es técnicamente redundante —un CHECK solo rechaza cuando
+la condición es FALSA, y NULL IN (...) evalúa a desconocido, que pasa—
+pero se escribe para dejar la intención explícita a quien lea el
+esquema.)
+
+La defensa es doble a propósito: Pydantic protege la puerta HTTP, el
+CHECK protege la tabla venga el dato de donde venga (un script suelto,
+el editor SQL de Supabase, un INSERT manual).
+
+
+D6 — TRANSACCIÓN Y COMMIT
+------------------------------------------------
+Problema encontrado: get_db_connection() prestaba una conexión y la
+devolvía al pool sin llamar nunca a commit(). psycopg2 no opera en
+autocommit, así que cualquier escritura hecha a través de esa función se
+habría perdido EN SILENCIO: el endpoint habría respondido 201 con un id
+y la tabla habría seguido vacía.
+
+Se comprobó empíricamente (ejecutando, no leyendo el código fuente) si
+una transacción abierta sin commitear se queda pegada a la conexión para
+el siguiente que la tome del pool. NO se queda: putconn() hace rollback
+si conserva la conexión, y la cierra si el pool ya tiene sus minconn
+libres. Conclusión: el fallo era pérdida de datos, no contaminación
+entre peticiones. Importante para la memoria, porque cambia la gravedad
+del hallazgo.
+
+DECISIÓN: dos context managers distintos en app/db/connection.py.
+
+  get_db_connection()          — SOLO LECTURA. Hace rollback() al salir
+                                 (incluso tras un SELECT, que también
+                                 abre transacción implícita en psycopg2)
+                                 para no dejar la conexión en estado
+                                 "idle in transaction" reteniendo
+                                 recursos del servidor.
+
+  get_transactional_connection() — ESCRITURA. commit() si el bloque
+                                 termina bien, rollback() + raise si
+                                 salta cualquier excepción, y putconn()
+                                 siempre.
+
+Los nombres son deliberadamente distintos, no dos variantes parecidas:
+usar la de lectura para escribir NO PRODUCE NINGÚN ERROR, simplemente
+los datos desaparecen. Un nombre confundible sería una trampa.
+
+Se descartó poner el pool entero en autocommit: eliminaría la
+atomicidad, y este endpoint escribe tres filas encadenadas donde un
+fallo a mitad no puede dejar un cliente sin lead ni un lead sin
+oportunidad.
+
+
+D7 — IDEMPOTENCIA FRENTE A LOS REINTENTOS DE n8n
+------------------------------------------------
+Problema: la Adenda manda reintentar los errores 5xx con backoff. Si el
+INSERT se completó pero la respuesta se perdió por un timeout de red, el
+reintento crea un lead DUPLICADO. El cliente no se duplica (lo impide el
+UNIQUE del email), pero el lead y la oportunidad sí. Confirmado a nivel
+de esquema: oportunidades.lead_id no tiene UNIQUE, así que la base de
+datos tampoco lo impediría.
+
+Alternativas: (a) aceptarlo y documentarlo; (b) clave de idempotencia
+enviada por n8n, con una columna UNIQUE nueva; (c) deduplicación por
+ventana temporal.
+
+DECISIÓN: (a) para N0, escrito explícitamente en el apartado de
+limitaciones de la memoria. (b) es la solución de producción y queda
+señalada como tal. Se descartó (c) por ser una heurística que podría
+tragarse un lead legítimo de un cliente que pide dos reformas el mismo
+día.
+
+
+================================================================
+4. LO QUE ESCRIBE POST /leads, CAMPO A CAMPO
+================================================================
+
+clientes       nombre, email, telefono  <- del formulario
+               created_at = now()
+               (si el email ya existe, no se escribe nada: se reutiliza)
+
+leads          cliente_id            <- el id anterior
+               canal                 = 'formulario_web' (constante de N0)
+               mensaje_original      = NULL (ver D3)
+               fotos_urls            = lista JSON de rutas, [] si no hay
+               datos_estructurados   = JSON con los 4 datos crudos
+               created_at            = now()
+
+oportunidades  lead_id               <- el id anterior
+               tipo_reforma          <- dato estructurado (D3)
+               prioridad             = NULL  (lo rellena el agente)
+               confianza_ia          = NULL  (lo rellena el agente)
+               datos_completos       = false EXPLÍCITO
+               estado                = 'nueva' EXPLÍCITO
+               created_at, updated_at = now()
+
+datos_completos y estado se escriben a mano aunque la tabla tenga esos
+mismos valores por defecto. Es intencional: deja la intención visible en
+el código en vez de esconderla en el esquema, y evita que un cambio
+futuro del DEFAULT altere el comportamiento del endpoint sin que nadie
+lo note.
+
+
+================================================================
+5. LIMITACIONES CONOCIDAS DE ESTE BLOQUE
+================================================================
+
+- Idempotencia: ver D7. Un reintento de n8n duplica lead y oportunidad.
+- Manejo de excepciones: la tabla de excepciones de la Adenda todavía no
+  está implementada. Hoy, un error no controlado de services/ sale como
+  un 500 genérico de FastAPI. Los 4xx de validación sí funcionan como
+  manda la Adenda (fallan rápido, sin tocar la base de datos).
+- reglas_negocio.max_fotos_lead existe (valor 5), pero el límite real lo
+  aplica hoy la constante MAX_FOTOS_LEAD de app/schemas/common.py. Falta
+  que services/ lea la tabla. Aviso al implementarlo: la columna valor
+  es NUMERIC(10,2), así que vuelve como Decimal('5.00') y hay que
+  convertirlo a int.
+- Concurrencia del Session pooler de Supabase bajo el webhook síncrono:
+  limitación documentada desde la Adenda, todavía sin medir bajo carga.
+- EmailStr rechaza dominios reservados como .invalid y .test, además de
+  los emails mal formados. Conviene tenerlo en cuenta al preparar datos
+  de prueba para el vídeo-demo: usar example.com, que sí acepta.

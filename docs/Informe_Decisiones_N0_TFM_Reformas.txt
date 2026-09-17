@@ -1,0 +1,106 @@
+**Reformas Integrales Amedida**
+
+**Informe de decisiones consolidadas — Nivel N0**
+
+Documento de referencia arquitectónica para la implementación · TFM Máster en Agentes de IA e Hiperautomatización (EBIS)
+
+0. Propósito de este documento
+
+Este informe consolida todas las decisiones arquitectónicas tomadas en sesiones de asesoría posteriores a la aprobación de la Fase 1 (Propuesta_TFM.txt) y a la nota de feedback del tutor. Sustituye a las versiones dispersas de TFM2.txt y TFM_Reformas.txt como documento de referencia para la implementación, e incorpora correcciones exigidas por el feedback del tutor: acotación del RAG, distinción entre Gate HITL y Human Task, y trazabilidad flujo a flujo. No sustituye la memoria final ni el PDD, pero es la base directa sobre la que ambos deben redactarse.
+
+1. Resumen ejecutivo de decisiones
+
+| **Área**                   | **Decisión**                                                                                                                                                             |
+|----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Disparador (trigger)       | Webhook de formulario web estructurado. Patrón de re-disparo para completar datos faltantes (sin chatbot conversacional en N0).                                          |
+| Orquestación               | n8n como orquestador único. El agente se ejecuta dentro del nodo AI Agent de n8n.                                                                                        |
+| Agente ↔ Backend           | n8n AI Agent + nodo MCP Client Tool → servidor MCP propio en Python, que reutiliza una capa services/ común con FastAPI (sin duplicar lógica de cálculo).                |
+| Base de datos              | PostgreSQL/Supabase, 8 tablas en N0 (antes 6): clientes, leads, oportunidades, presupuestos, visitas, logs, reglas_negocio, tarifas_base.                                |
+| Gate HITL                  | 1 punto de aprobación humana bloqueante. Se activa si importe_estimado > umbral O si la reforma incluye cambios estructurales (requiere informe técnico).               |
+| Human Task (no bloqueante) | Aviso a administración para confirmar telefónicamente la cita ya reservada. No es HITL: no bloquea el flujo.                                                             |
+| RAG (N1)                   | Acotado exclusivamente a search_similar_projects() sobre pgvector. Las políticas y reglas de negocio NO usan RAG: se inyectan directamente en el prompt del agente.      |
+| Modelo de preestimación    | 5 factores: tipo_reforma, nivel_acabados, m², cambios_estructurales (flag), margen_empresa_pct. Basado en bandas de precio €/m² de mercado real (fuentes citadas en §3). |
+
+2. Arquitectura N0 — esquema de datos
+
+Las 8 tablas de N0, con su función:
+
+| **Tabla**      | **Función**                                                                                                             | **Nueva en esta sesión** |
+|----------------|-------------------------------------------------------------------------------------------------------------------------|--------------------------|
+| clientes       | Identidad del cliente, deduplicada por email (NOT NULL UNIQUE).                                                         | No                       |
+| leads          | Solicitud inicial recibida vía webhook, con datos brutos.                                                               | No                       |
+| oportunidades  | Estado del funnel comercial (incluye el estado "convertido a cliente").                                                 | No                       |
+| presupuestos   | Preestimación generada, vinculada a oportunidades (no directamente a clientes).                                         | No                       |
+| visitas        | Citas técnicas reservadas.                                                                                              | No                       |
+| logs           | Tabla polimórfica (entity_type + entity_id) de auditoría.                                                               | No                       |
+| reglas_negocio | Parámetros de gobernanza editables sin redeploy: umbral_aprobacion_manual, margen_empresa_pct, recargo_informe_tecnico. | Sí                       |
+| tarifas_base   | Tabla de tarifas de referencia: tipo_reforma × nivel_acabados → precio_m2 (banda de mercado).                           | Sí                       |
+
+*Nota de disciplina de alcance: el recuento sube de 6 a 8 tablas, pero cada adición responde a un requisito verificado (no a scope creep). Sigue muy por debajo de las 9-10 tablas reservadas para N1.*
+
+3. Modelo de cálculo de la preestimación (calculate_estimate)
+
+Los cinco factores de entrada, y su justificación:
+
+| **Factor**                    | **Tipo**                                                         | **Uso en el cálculo**                                                               |
+|-------------------------------|------------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| tipo_reforma                  | Categórico: baño / cocina / integral_vivienda / parcial_acabados | Selecciona la fila de tarifas_base.                                                 |
+| nivel_acabados                | Categórico: básico / medio / alto                                | Selecciona la banda de precio €/m² dentro del tipo de reforma.                      |
+| m²                            | Numérico (input del cliente)                                     | Multiplica el precio_m2 de tarifas_base.                                            |
+| incluye_cambios_estructurales | Booleano                                                         | Añade recargo_informe_tecnico y fuerza el Gate HITL independientemente del importe. |
+| margen_empresa_pct            | Parámetro en reglas_negocio                                      | Se aplica al final sobre el coste total calculado.                                  |
+
+**Bandas de referencia de mercado utilizadas para poblar tarifas_base (España, 2026):**
+
+- Reforma integral de vivienda, calidad media: 600–900 €/m²; calidad básica desde 350 €/m²; calidad alta hasta 1.500 €/m².
+
+- Baño completo: 5.000–8.000 € de media (calidad media); gama alta 8.000–15.000 €.
+
+- Cocina completa: 6.000–12.000 € de media (calidad media); reforma parcial (solo muebles/encimera) 3.500–5.000 €.
+
+- Instalación eléctrica completa: 60–80 €/m²; vivienda de 90 m² entre 3.500 y 6.500 €. Proyecto técnico asociado: 450–800 €.
+
+- Tarifas de mano de obra por gremio (referencia para el desglose N1/N2): oficial 1ª electricista 40–55 €/h, oficial 2ª 30–42 €/h, peón 22–30 €/h.
+
+*Limitación técnica documentada: baño y cocina no escalan linealmente con m² en el mercado real (tienen un componente de coste fijo por sanitarios/electrodomésticos). N0 aplica el modelo €/m² de forma uniforme como simplificación deliberada; se declara explícitamente en el apartado de limitaciones de la memoria (punto 6 del índice estándar del TFM).*
+
+4. RAG — alcance corregido tras feedback del tutor
+
+El tutor señaló como punto prioritario de Fase 2 aclarar la utilidad del RAG. La corrección aplicada separa dos problemas que estaban mezclados bajo una sola etiqueta:
+
+| **Caso de uso**                                                                               | **Mecanismo**                                              | **Nivel** |
+|-----------------------------------------------------------------------------------------------|------------------------------------------------------------|-----------|
+| Reglas de negocio y políticas comerciales (corpus estático, 5-10 documentos)                  | Inyección directa en el prompt del agente. Sin embeddings. | N0/N1     |
+| search_similar_projects() — proyectos históricos similares (corpus creciente, lenguaje libre) | RAG real: embeddings + pgvector.                           | N1        |
+
+*get_project_capacity() (calendario de disponibilidad) también queda etiquetada como N1, no N0, por depender de la tabla de capacidad aún no implementada.*
+
+5. Diagramas de proceso (BPMN)
+
+5.1 AS-IS — Proceso comercial manual actual
+
+Estado actual: sin automatización, sin trazabilidad de estado, tiempo de respuesta de días a semanas.
+
+[Diagrama BPMN — no representable en texto plano; ver el .docx o los PNG originales (bpmn_asis.png / bpmn_tobe.png) para el contenido visual]
+
+*Figura 1. AS-IS — Lead → Presupuesto (proceso manual).*
+
+5.2 TO-BE — Proceso automatizado N0
+
+Arquitectura propuesta: n8n como orquestador, agente con herramientas MCP, cálculo determinista en FastAPI/PostgreSQL, Gate HITL condicional y Human Task no bloqueante.
+
+[Diagrama BPMN — no representable en texto plano; ver el .docx o los PNG originales (bpmn_asis.png / bpmn_tobe.png) para el contenido visual]
+
+*Figura 2. TO-BE — Lead-to-Quote-to-Appointment con agente MCP y Human-in-the-loop.*
+
+6. Pendiente para la siguiente sesión
+
+- Cerrar los valores numéricos exactos de tarifas_base y reglas_negocio (umbral de aprobación, % de margen, recargo de informe técnico).
+
+- Redactar el contrato completo de los 4-5 endpoints de FastAPI (input/output, herramienta responsable, endpoint/trigger, latencia estimada) — punto 2 del feedback del tutor.
+
+- Definir política de reintentos y ruta de escalado por flujo (punto 3 del feedback del tutor).
+
+- Diseñar el servidor MCP en Python (estructura de carpetas compartida con FastAPI vía services/).
+
+- Escribir y verificar check_connection.py, y crear las 2 tablas nuevas (reglas_negocio, tarifas_base) en Supabase.

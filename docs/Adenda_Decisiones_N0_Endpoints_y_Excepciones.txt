@@ -1,0 +1,108 @@
+Reformas Integrales Amedida — Adenda de decisiones N0
+Sesión: cierre de endpoints FastAPI, excepciones, revisión técnica final
+TFM Máster en Agentes de IA e Hiperautomatización (EBIS)
+
+Este documento complementa a Informe_Decisiones_N0_TFM_Reformas.txt. No lo
+sustituye: añade las decisiones cerradas en la sesión de contrato de
+endpoints y revisión técnica final.
+
+1. Contrato final de endpoints FastAPI (patrón híbrido REST + RPC)
+
+| # | Endpoint | Input | Output | Trigger real |
+|---|---|---|---|---|
+| 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales, fotos[] | lead_id, cliente_id, status | Webhook n8n, formulario web |
+| 2 | POST /calculate-estimate | lead_id, tipo_reforma, nivel_acabados, m2, incluye_cambios_estructurales | importe_estimado, motivo_gate, presupuesto_id | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
+| 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
+| 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
+| 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | Producción N0: temporizador n8n llama al endpoint directamente (no pasa por MCP). MCP tool disponible para N1+, no ejercida en N0 |
+
+get_business_rules() y request_missing_information() son MCP tools puras,
+sin endpoint HTTP propio — leen directamente de services/.
+
+Aclaración de diseño (resuelve ambigüedad de "doble invocación"): cada
+endpoint con dualidad MCP/REST expone la MISMA función de services/ por
+dos puertas de entrada distintas, nunca invocadas dos veces para el mismo
+evento. En producción, cada evento real usa una sola puerta:
+calculate-estimate -> MCP (agente); create-followup-task -> REST (timer).
+La puerta alternativa existe para testing, uso administrativo manual o
+capacidades futuras de N1/N2, no se ejerce en el flujo real de N0.
+
+2. Motivos de create_followup_task (dos disparadores)
+
+- sin_respuesta_visita: 48h desde la pre-estimación sin reservar visita.
+- sin_decision_post_visita: N días desde visitas.fecha sin que
+  oportunidades.estado llegue a convertido/descartado. N = 5 días
+  laborables, almacenado en reglas_negocio como
+  dias_espera_decision_post_visita (confirmado e insertado en Supabase).
+
+Ambos casos registran un log en la tabla logs (polimórfica) y generan una
+notificación no bloqueante a administración/atención al cliente para
+seguimiento telefónico. No se crea tabla de tareas nueva.
+
+3. Gate HITL — notificación y reanudación (nodo Wait de n8n)
+
+Canal de notificación a administración: Telegram (nodo nativo n8n),
+elegido por velocidad de respuesta, cero coste de RAM adicional y soporte
+de botones inline de aprobar/rechazar. La respuesta al CLIENTE ya se
+resuelve de forma síncrona en el mismo webhook inicial (mensaje
+diferenciado según motivo_gate, decisión ya cerrada en sesión anterior) —
+la notificación Telegram es exclusivamente el aviso interno a
+administración, no un segundo mensaje al cliente.
+
+Flujo de reanudación: nodo Wait de n8n permanece a la espera de un
+webhook disparado por los botones inline del mensaje de Telegram, que
+invocan POST /gate-decisions directamente. Al recibir la decisión, el
+flujo continúa (oferta de agendar cita si se aprueba).
+
+4. Corrección: reserva de visita no es parte de la respuesta síncrona inicial
+
+"Respuesta directa" (sin gate) y la respuesta tras aprobación del Gate
+pasan a ser: presupuesto + OPCIÓN de agendar cita, no una reserva
+automática. La reserva real (POST /visits) ocurre en una interacción
+posterior separada, cuando el cliente elige franja horaria.
+
+5. Tabla de excepciones y reintentos por endpoint (confirmada)
+
+Política diferenciada: errores de validación (4xx) fallan rápido sin
+reintentar; errores transitorios (5xx, timeout) se reintentan con
+backoff. Detalle completo de reintentos, rutas de escalado y roles
+notificados por endpoint: ver mensaje de sesión "Confirmamos. Haz una
+revisión final..." — pendiente de trasladar al PDD junto con este
+documento.
+
+Ejemplo de fallback en FastAPI (calculate_estimate): si la combinación
+tipo_reforma/nivel_acabados no existe en tarifas_base, no se inventa un
+precio — se registra la incidencia en logs y se devuelve
+status="requiere_revision", importe=None.
+
+Ejemplo de manejo de excepción en n8n: Error Trigger workflow separado,
+capturado tras agotar reintentos, que (1) registra en logs vía FastAPI,
+(2) notifica al rol correspondiente según la tabla de excepciones, (3) si
+el fallo ocurre antes de responder al webhook síncrono, devuelve un
+mensaje de fallback controlado al cliente en vez de dejar la conexión
+sin respuesta.
+
+6. Revisión técnica final — hallazgos y resolución
+
+- RLS habilitado en reglas_negocio y tarifas_base (RESUELTO en sesión,
+  ALTER TABLE ... ENABLE ROW LEVEL SECURITY ejecutado).
+- Ambigüedad MCP/REST en calculate-estimate y create-followup-task
+  (RESUELTO, ver punto 1).
+- Falta de mecanismo de reanudación tras Gate HITL (RESUELTO, ver
+  punto 3, nodo Wait + Telegram).
+- Reserva de visita incorrectamente descrita como parte de la respuesta
+  síncrona inicial (RESUELTO, ver punto 4).
+- Session pooler de Supabase bajo concurrencia alta con webhook síncrono:
+  LIMITACIÓN DOCUMENTADA, no resuelta — a revisar si el tiempo lo
+  permite. Anotar en el apartado de limitaciones de la memoria.
+- Presión de RAM (8GB) con n8n + FastAPI + VS Code + Claude Code
+  simultáneos: nota operativa para el día de grabación del vídeo-demo,
+  no requiere cambio de arquitectura.
+
+7. Pendiente para próxima sesión
+
+- Trasladar el contrato de endpoints y la tabla de excepciones al PDD.
+- Diseñar el servidor MCP en Python (estructura compartida con FastAPI
+  vía services/).
+- Explorar opciones para el riesgo de concurrencia del Session pooler
+  (punto 5 de esta adenda).
