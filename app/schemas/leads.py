@@ -171,6 +171,26 @@ class LeadCreateResponse(BaseModel):
     lead_id: int
     cliente_id: int
 
+    # Identificador de la oportunidad creada EN LA MISMA OPERACIÓN que el
+    # lead, dentro de la misma transacción: o se crean las tres filas
+    # (cliente, lead y oportunidad) o no se crea ninguna.
+    #
+    # Por qué está aquí y no se deduce después: la tabla oportunidades es
+    # obligatoria en el resto de la cadena (presupuestos.oportunidad_id y
+    # visitas.oportunidad_id son NOT NULL y apuntan a ella), pero ningún
+    # endpoint del contrato original decía crearla. Al devolverla aquí,
+    # n8n puede agendar la visita más adelante sin tener que hacer una
+    # consulta extra para averiguar qué oportunidad corresponde al lead.
+    #
+    # Es una AMPLIACIÓN del contrato de la Adenda (que para POST /leads
+    # solo listaba lead_id, cliente_id y status), decidida en D1 y
+    # anotada como tal para la memoria.
+    #
+    # PENDIENTE: este bloque solo amplía el contrato de datos. Quien
+    # rellene este valor de verdad será app/services/leads_service.py en
+    # el bloque siguiente.
+    oportunidad_id: int
+
     # Texto por ahora. Queda pendiente de cerrar (decisión D4) si su
     # valor será el estado real de la oportunidad ('nueva') o una
     # etiqueta propia. Se deja como str para no fijar esa decisión desde

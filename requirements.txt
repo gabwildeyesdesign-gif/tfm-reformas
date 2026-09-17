@@ -4,6 +4,7 @@ anyio==4.15.1
 certifi==2026.6.17
 charset-normalizer==3.4.7
 click==8.5.0
+email-validator==2.3.0
 fastapi==0.141.1
 fastmcp==4.0.3
 h11==0.16.0

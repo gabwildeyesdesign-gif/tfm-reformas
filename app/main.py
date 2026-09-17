@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import psycopg2
 from fastapi import FastAPI, HTTPException
 
+from app.api import leads as leads_api
 from app.db.connection import close_pool, get_db_connection, init_pool
 from app.mcp_server.server import mcp
 
@@ -51,6 +52,14 @@ app = FastAPI(lifespan=combined_lifespan)
 # una URL que empiece por "/mcp" se la pasamos a mcp_app en vez de
 # manejarla nosotros mismos.
 app.mount("/mcp", mcp_app)
+
+# Enganchamos el router de leads a la aplicacion principal. A partir de
+# aqui, POST /leads existe y lo atiende la funcion definida en
+# app/api/leads.py. Es el PRIMER include_router del proyecto: los
+# endpoints /health y /health/db de mas abajo se definieron directamente
+# sobre "app" porque son dos funciones sueltas de infraestructura, no un
+# dominio de negocio con su propio archivo.
+app.include_router(leads_api.router)
 
 
 @app.get("/health")
