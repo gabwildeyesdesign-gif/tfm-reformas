@@ -254,12 +254,16 @@ borradas al terminar.
 3. PUNTOS ABIERTOS AL CERRAR ESTA SESIÓN
 ================================================================
 
-1. ORDEN DE LOS ESTADOS presupuesto_enviado / visita_agendada. Hay dos
-   lecturas incompatibles entre la Adenda y la narrativa de negocio
-   manejada en esta sesión. Detalle completo en
-   TFM_Decisiones_Modelo_Datos_Leads.txt, sección 2. No bloquea
-   POST /leads, que solo escribe 'nueva', pero condiciona el diseño de
-   POST /visits y POST /gate-decisions. ES EL PRIMER PUNTO A CERRAR.
+1. ORDEN DE LOS ESTADOS presupuesto_enviado / visita_agendada.
+   RESUELTO Y CERRADO con posterioridad a esta sesión. El orden
+   canónico es:
+       nueva -> presupuesto_enviado -> visita_agendada -> ganada/perdida
+   Fuente de autoridad: la Propuesta de Fase 1 aprobada por el tutor,
+   que sitúa la pre-estimación antes de la reserva de visita,
+   coincidiendo con la Adenda. Detalle completo, incluido por qué
+   'cualificada' no tiene transición persistida en N0 y por qué ningún
+   endpoint de N0 escribe 'ganada' ni 'perdida', en
+   TFM_Decisiones_Modelo_Datos_Leads.txt, sección 2.
 
 2. 'convertido' y 'descartado' de la Adenda no existen en la base de
    datos; equivalen a 'ganada' y 'perdida'.

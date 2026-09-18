@@ -124,34 +124,76 @@ Significado de cada uno en la narrativa de negocio:
       El cliente rechaza, o se agota el seguimiento sin respuesta.
 
   --------------------------------------------------------------
-  PUNTO ABIERTO — EL ORDEN DE LOS DOS ESTADOS CENTRALES
+  ORDEN DE LOS ESTADOS — RESUELTO Y CERRADO
   --------------------------------------------------------------
-  Existe una contradicción sin resolver entre dos fuentes del propio
-  proyecto, y se deja aquí señalada en vez de elegir en silencio:
+  El orden canónico del proceso comercial en N0 es:
 
-  (a) Orden indicado al redactar este documento:
-        nueva -> cualificada -> visita_agendada -> presupuesto_enviado
-        -> ganada/perdida
-      Lectura: primero se visita la obra, y con lo visto allí se emite
-      el presupuesto. Es el orden natural de una reforma real.
+      nueva -> presupuesto_enviado -> visita_agendada -> ganada/perdida
 
-  (b) Orden que se deduce de la Adenda (puntos 3 y 4):
-        nueva -> cualificada -> presupuesto_enviado -> visita_agendada
-        -> ganada/perdida
-      Lectura: el webhook responde al cliente de forma SÍNCRONA con una
-      pre-estimación, y solo después se le ofrece la OPCIÓN de agendar
-      una visita, que ocurre en una interacción posterior separada. La
-      Adenda es explícita en que la reserva de visita no forma parte de
-      la respuesta síncrona inicial.
+  FUENTE DE AUTORIDAD: la Propuesta de Fase 1, ya aprobada por el
+  tutor, que describe el flujo como:
 
-  Las dos lecturas son defendibles y probablemente conviven: (b)
-  describe la PRE-estimación automática y (a) el presupuesto CERRADO
-  tras la visita. Si es así, el modelo actual tiene un hueco: un único
-  estado presupuesto_enviado no puede representar dos momentos
-  distintos del proceso.
+      recepción del lead -> cualificación -> análisis de imágenes ->
+      pre-estimación -> aprobación humana -> reserva de visita ->
+      seguimiento
 
-  Esto NO bloquea POST /leads, que solo escribe 'nueva'. Debe resolverse
-  antes de implementar POST /visits y POST /gate-decisions.
+  La pre-estimación va ANTES que la reserva de visita. Esto coincide
+  con lo que ya decía la Adenda en sus puntos 3 y 4: el webhook
+  responde al cliente de forma síncrona con la pre-estimación, y solo
+  después se le ofrece la OPCIÓN de agendar una visita, en una
+  interacción posterior separada. La reserva de visita nunca formó
+  parte de la respuesta síncrona inicial.
+
+  Queda descartada la lectura contraria (visitar primero y presupuestar
+  con lo visto allí). Es el orden natural de una reforma tradicional,
+  pero NO es el proceso que automatiza este sistema: la propuesta de
+  valor del proyecto es precisamente dar una cifra al cliente en
+  segundos, sin esperar a que un técnico se desplace.
+
+  POR QUÉ 'cualificada' NO TIENE UNA TRANSICIÓN PERSISTIDA PROPIA EN N0
+
+  El estado 'cualificada' existe en el CHECK de la columna y tiene
+  sentido conceptual: es el momento en que el agente confirma que los
+  datos bastan para calcular. Pero en N0 NO se escribe en la base de
+  datos como un paso intermedio, y eso es deliberado.
+
+  Motivo: cualificación, análisis de imágenes y pre-estimación ocurren
+  dentro del MISMO ciclo síncrono, entre que entra el webhook y que se
+  responde al cliente. No hay ningún observador externo entre medias —
+  ni una persona esperando, ni un temporizador, ni otro sistema
+  consultando. Un estado solo aporta valor si alguien puede leerlo
+  mientras dura; un estado que nace y muere dentro de la misma llamada,
+  sin que nadie lo consulte jamás, es una escritura a la base de datos
+  que no informa a nadie.
+
+  La oportunidad, por tanto, pasa de 'nueva' a 'presupuesto_enviado' en
+  una sola transición observable. El detalle de lo ocurrido dentro de
+  ese ciclo (confianza del agente, si los datos estaban completos)
+  queda igualmente registrado, pero en las columnas confianza_ia y
+  datos_completos, no en el estado.
+
+  El valor 'cualificada' se conserva en el CHECK para N1+, donde sí
+  podría haber una pausa observable — por ejemplo, si la tool MCP
+  request_missing_information deja el lead esperando a que el cliente
+  complete datos que faltan. Ahí el estado sí tendría un lector.
+
+  --------------------------------------------------------------
+  NINGÚN ENDPOINT DE N0 ESCRIBE 'ganada' NI 'perdida'
+  --------------------------------------------------------------
+  Es una decisión de ALCANCE, no una funcionalidad pendiente ni un
+  olvido.
+
+  El desenlace de una oportunidad depende de la visita técnica y de la
+  negociación posterior con el cliente: variables humanas que ocurren
+  fuera del sistema y que ningún endpoint de N0 puede observar. El
+  automatismo de N0 llega hasta reservar la visita y disparar el
+  seguimiento; a partir de ahí, quien cierra el trato es una persona.
+
+  En consecuencia, en N0 esos dos estados solo se alcanzarían por una
+  actualización manual desde administración. Están en el CHECK porque
+  el modelo de datos describe el ciclo de vida COMPLETO del negocio, no
+  solo la parte automatizada — pero conviene no presentarlos como algo
+  que el sistema hace.
 
   --------------------------------------------------------------
   CORRECCIÓN DE NOMENCLATURA
@@ -401,7 +443,56 @@ lo note.
 
 
 ================================================================
-5. LIMITACIONES CONOCIDAS DE ESTE BLOQUE
+5. REGISTRO DE VALORES DE entity_type EN LA TABLA logs
+================================================================
+
+La tabla logs es POLIMÓRFICA: una sola tabla guarda eventos de
+cualquier entidad del sistema. Cada fila dice a qué tipo de entidad se
+refiere (entity_type) y a cuál en concreto (entity_id).
+
+La ventaja es no tener que crear una tabla de log por cada entidad. El
+inconveniente es que entity_type es texto libre: la base de datos NO
+tiene ningún CHECK que limite sus valores, así que nada impide que un
+día aparezca 'sistema', otro 'Sistema' y otro 'system', y que las
+consultas de la memoria dejen de cuadrar sin que nadie se entere.
+
+Este registro existe para evitar exactamente eso. Antes de escribir un
+entity_type nuevo, mirar aquí; si no está, añadirlo aquí también.
+
+  VALORES EN USO
+  --------------------------------------------------------------
+  'sistema'   Errores no controlados capturados por el manejador
+              global de app/main.py. Se usa con entity_id = 0 y
+              accion = 'error_no_controlado'.
+
+              El 0 es un valor centinela: significa "este evento no
+              pertenece a ninguna entidad de negocio concreta". Un
+              fallo no controlado puede ocurrir antes de que exista
+              ningún cliente, lead u oportunidad, pero entity_id es
+              NOT NULL y hay que poner algo. Se eligió 0 porque las
+              secuencias SERIAL de Postgres empiezan en 1, así que
+              ningún registro real puede tener ese id y no hay riesgo
+              de confundirlo con una entidad de verdad.
+
+  LISTA PENDIENTE DE CRECER
+  --------------------------------------------------------------
+  Por ahora solo hay un valor porque solo hay un endpoint implementado
+  y un único punto que escribe en logs. La lista crecerá conforme se
+  añadan los demás endpoints: es previsible que aparezcan valores como
+  'lead', 'oportunidad', 'presupuesto' o 'visita' cuando se registren
+  eventos de negocio (una decisión del Gate HITL, una tarea de
+  seguimiento disparada por temporizador), y ahí entity_id sí apuntará
+  a una fila real de la tabla correspondiente.
+
+  Cuando la lista se estabilice, conviene valorar añadir un CHECK a la
+  columna, igual que se hizo con oportunidades.tipo_reforma tras
+  descubrir el riesgo de 'baño' vs 'bano'. Mientras los valores sigan
+  apareciendo, un CHECK obligaría a un ALTER TABLE por cada endpoint
+  nuevo; es una decisión de cuándo, no de si.
+
+
+================================================================
+6. LIMITACIONES CONOCIDAS DE ESTE BLOQUE
 ================================================================
 
 - Idempotencia: ver D7. Un reintento de n8n duplica lead y oportunidad.

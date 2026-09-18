@@ -110,3 +110,20 @@ rápida, no sustituye esa documentación. Contiene:
   scaffolding.
 - TFM_Decisiones_Modelo_Datos_Leads.txt — modelo de datos de leads y
   decisiones D1 a D7.
+
+## Esquema de la base de datos: cuál de los dos .sql manda
+
+docs/schema_actual.sql es la ÚNICA fuente fiable del esquema actual. Lo
+genera scripts/dump_schema.py leyendo information_schema de la base de
+datos real, y está verificado por ejecución real: el SQL generado se
+ejecutó contra un esquema de prueba y recreó las 8 tablas con sus 15
+restricciones PK/UNIQUE/FK y sus 7 CHECK. Se regenera ejecutando:
+
+    .\venv\Scripts\python.exe scripts\dump_schema.py
+
+docs/schema_n0_v2.sql es HISTÓRICO. Se escribió a mano y divergió de la
+realidad sin que nadie lo notara: le faltan la columna
+presupuestos.motivo_gate, las tablas reglas_negocio y tarifas_base
+enteras, y el CHECK chk_oportunidades_tipo_reforma. NO debe consultarse
+para nada del desarrollo actual. Se conserva solo como registro de cómo
+se diseñó el esquema al principio.
