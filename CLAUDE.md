@@ -82,6 +82,18 @@ SOLO REST.
 
 ## Estado actual / pendiente
 
+> **PENDIENTE DE REVISIÓN COMPLETA.** La rama `feat/n0-schemas-leads`
+> tiene 9 commits por delante de `main` y **no se ha integrado**: está
+> esperando la revisión completa de Gabi antes del merge. Todo el
+> trabajo está subido a GitHub y verificado con ejecución real, pero
+> `main` sigue en `90bca98` a propósito. **No hacer merge a `main` sin
+> su confirmación explícita.**
+>
+> Revisión: https://github.com/gabwildeyesdesign-gif/tfm-reformas/compare/main...feat/n0-schemas-leads
+>
+> Cuando lo apruebe:
+> `git checkout main && git merge --ff-only feat/n0-schemas-leads && git push`
+
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
 esquemas Pydantic de leads, get_transactional_connection() (commit /
