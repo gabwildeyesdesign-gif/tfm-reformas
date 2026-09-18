@@ -1,0 +1,252 @@
+"""
+Verificacion real de los modelos Pydantic de app/schemas/.
+
+No comprueba que el archivo "se guarde sin error": construye modelos con
+datos validos e invalidos y confirma que Pydantic acepta lo que debe
+aceptar y RECHAZA lo que debe rechazar.
+"""
+
+import sys
+from pathlib import Path
+
+# La raiz del repo calculada a partir de la ubicacion de este archivo,
+# para poder hacer "import app.schemas..." desde fuera del proyecto.
+# Este script vive en scripts/, pero el paquete "app" esta en la raiz del
+# repositorio. Al ejecutar "python scripts/<archivo>.py", Python solo anade
+# la carpeta del archivo (scripts/) a sys.path, asi que "import app.algo"
+# fallaria con ModuleNotFoundError. Se calcula la raiz a partir de la
+# ubicacion de este mismo archivo, en vez de escribir una ruta absoluta,
+# para que funcione en cualquier maquina y desde cualquier directorio.
+# Misma tecnica que scripts/check_graceful_shutdown.py.
+RAIZ_REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RAIZ_REPO))
+
+from pydantic import ValidationError
+
+from app.schemas.common import MAX_FOTOS_LEAD, NivelAcabados, TipoReforma
+from app.schemas.leads import (
+    LeadCreate,
+    LeadCreateResponse,
+    LeadPhotoUploadResponse,
+    PhotoUploadSlot,
+)
+
+ok = 0
+fallos = []
+
+
+def debe_aceptar(titulo, modelo, datos, comprobacion=None):
+    """Construye el modelo y espera que NO lance error."""
+    global ok
+    try:
+        objeto = modelo(**datos)
+    except ValidationError as e:
+        fallos.append(f"{titulo}: deberia ACEPTARSE y fue rechazado -> {e}")
+        print(f"  [FALLO] {titulo}")
+        return
+    if comprobacion is not None:
+        resultado = comprobacion(objeto)
+        if resultado is not True:
+            fallos.append(f"{titulo}: aceptado pero {resultado}")
+            print(f"  [FALLO] {titulo} -> {resultado}")
+            return
+    ok += 1
+    print(f"  [OK]    {titulo}")
+
+
+def debe_rechazar(titulo, modelo, datos, texto_esperado=None):
+    """Construye el modelo y espera que SI lance error."""
+    global ok
+    try:
+        modelo(**datos)
+    except ValidationError as e:
+        mensaje = str(e).replace("\n", " ")
+        if texto_esperado and texto_esperado not in mensaje:
+            fallos.append(f"{titulo}: rechazado, pero sin '{texto_esperado}' -> {mensaje}")
+            print(f"  [FALLO] {titulo} (motivo inesperado)")
+            return
+        ok += 1
+        # Primera linea util del error, para ver el motivo real.
+        motivo = mensaje.split("[type=")[0].strip()[-110:]
+        print(f"  [OK]    {titulo}\n            -> {motivo}")
+        return
+    fallos.append(f"{titulo}: deberia RECHAZARSE y fue aceptado")
+    print(f"  [FALLO] {titulo} FUE ACEPTADO")
+
+
+LEAD_VALIDO = {
+    "nombre": "Gabriela Gomez",
+    "email": "gabi@example.com",
+    "telefono": "+34600111222",
+    "tipo_reforma": "bano",
+    "m2": 8.5,
+    "nivel_acabados": "medio",
+    "incluye_cambios_estructurales": False,
+    "fotos": ["leads-temp/tok123/foto1.jpg", "leads-temp/tok123/foto2.jpg"],
+    "lead_token": "tok123",
+}
+
+
+def sin_clave(*claves):
+    """Copia del lead valido quitando las claves indicadas."""
+    copia = dict(LEAD_VALIDO)
+    for c in claves:
+        copia.pop(c)
+    return copia
+
+
+def con(**cambios):
+    """Copia del lead valido cambiando/anadiendo lo que se indique."""
+    copia = dict(LEAD_VALIDO)
+    copia.update(cambios)
+    return copia
+
+
+print("\n=== A. LO QUE DEBE ACEPTARSE ===")
+debe_aceptar(
+    "Lead completo con 2 fotos",
+    LeadCreate,
+    LEAD_VALIDO,
+    lambda o: True if o.tipo_reforma is TipoReforma.BANO else f"tipo_reforma={o.tipo_reforma}",
+)
+debe_aceptar(
+    "Lead SIN fotos (campo ausente) -> fotos = []",
+    LeadCreate,
+    sin_clave("fotos"),
+    lambda o: True if o.fotos == [] else f"fotos={o.fotos}",
+)
+debe_aceptar(
+    "Lead con fotos = [] explicita",
+    LeadCreate,
+    con(fotos=[]),
+    lambda o: True if o.fotos == [] else f"fotos={o.fotos}",
+)
+debe_aceptar(
+    "Lead con exactamente MAX_FOTOS_LEAD fotos",
+    LeadCreate,
+    con(fotos=[f"leads-temp/tok123/f{i}.jpg" for i in range(MAX_FOTOS_LEAD)]),
+    lambda o: True if len(o.fotos) == MAX_FOTOS_LEAD else f"len={len(o.fotos)}",
+)
+debe_aceptar(
+    'm2 como texto "45.5" -> Pydantic lo convierte a float',
+    LeadCreate,
+    con(m2="45.5"),
+    lambda o: True if o.m2 == 45.5 and isinstance(o.m2, float) else f"m2={o.m2!r}",
+)
+debe_aceptar(
+    "Los 4 tipos y 3 niveles reales de tarifas_base se aceptan",
+    LeadCreate,
+    con(tipo_reforma="integral_vivienda", nivel_acabados="alto"),
+    lambda o: True if o.nivel_acabados is NivelAcabados.ALTO else "enum mal",
+)
+debe_aceptar(
+    "PhotoUploadSlot valido",
+    PhotoUploadSlot,
+    {"path": "leads-temp/tok123/f1.jpg", "signed_upload_url": "https://x/y", "expires_in": 3600},
+)
+debe_aceptar(
+    "LeadPhotoUploadResponse sin slots -> lista vacia",
+    LeadPhotoUploadResponse,
+    {"lead_token": "tok123"},
+    lambda o: True if o.photo_slots == [] else f"slots={o.photo_slots}",
+)
+debe_aceptar(
+    "LeadCreateResponse con los 3 ids enteros + status",
+    LeadCreateResponse,
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1, "status": "nueva"},
+    lambda o: True if o.oportunidad_id == 1 else f"oportunidad_id={o.oportunidad_id}",
+)
+
+print("\n=== B. LO QUE DEBE RECHAZARSE ===")
+debe_rechazar("m2 = 0", LeadCreate, con(m2=0), "greater_than")
+debe_rechazar("m2 negativo (-5)", LeadCreate, con(m2=-5), "greater_than")
+debe_rechazar('tipo_reforma = "bano" CON ENIE ("bano" mal escrito)', LeadCreate, con(tipo_reforma="ba\u00f1o"), "enum")
+debe_rechazar('nivel_acabados = "basico" CON TILDE', LeadCreate, con(nivel_acabados="b\u00e1sico"), "enum")
+debe_rechazar('tipo_reforma inventado ("tejado")', LeadCreate, con(tipo_reforma="tejado"), "enum")
+debe_rechazar("email sin arroba", LeadCreate, con(email="gabi.example.com"))
+debe_rechazar("email vacio", LeadCreate, con(email=""))
+debe_rechazar("email de mas de 150 caracteres", LeadCreate, con(email="a" * 145 + "@example.com"))
+debe_rechazar("nombre vacio", LeadCreate, con(nombre=""), "at least 1")
+debe_rechazar("nombre de mas de 150 caracteres", LeadCreate, con(nombre="x" * 151), "at most 150")
+debe_rechazar("telefono de mas de 30 caracteres", LeadCreate, con(telefono="9" * 31), "at most 30")
+debe_rechazar(
+    f"{MAX_FOTOS_LEAD + 1} fotos (una mas del maximo)",
+    LeadCreate,
+    con(fotos=[f"f{i}.jpg" for i in range(MAX_FOTOS_LEAD + 1)]),
+    "too_long",
+)
+debe_rechazar("falta incluye_cambios_estructurales", LeadCreate, sin_clave("incluye_cambios_estructurales"), "missing")
+debe_rechazar("falta lead_token", LeadCreate, sin_clave("lead_token"), "missing")
+debe_rechazar("lead_token vacio", LeadCreate, con(lead_token=""), "at least 1")
+debe_rechazar('campo de mas: "telefono_movil" (extra=forbid)', LeadCreate, con(telefono_movil="600"), "extra_forbidden")
+debe_rechazar("m2 no numerico ('mucho')", LeadCreate, con(m2="mucho"))
+debe_rechazar(
+    "PhotoUploadSlot con expires_in = 0",
+    PhotoUploadSlot,
+    {"path": "p", "signed_upload_url": "u", "expires_in": 0},
+    "greater_than",
+)
+debe_rechazar(
+    f"LeadPhotoUploadResponse con {MAX_FOTOS_LEAD + 1} slots",
+    LeadPhotoUploadResponse,
+    {
+        "lead_token": "tok",
+        "photo_slots": [
+            {"path": "p", "signed_upload_url": "u", "expires_in": 60}
+            for _ in range(MAX_FOTOS_LEAD + 1)
+        ],
+    },
+    "too_long",
+)
+debe_rechazar(
+    "LeadCreateResponse con lead_id no entero",
+    LeadCreateResponse,
+    {"lead_id": "no-soy-un-numero", "cliente_id": 1, "oportunidad_id": 1, "status": "nueva"},
+)
+
+# --- PASO 4: casos nuevos para oportunidad_id (ampliacion del contrato D1) ---
+debe_rechazar(
+    "LeadCreateResponse SIN oportunidad_id (campo obligatorio)",
+    LeadCreateResponse,
+    {"lead_id": 1, "cliente_id": 1, "status": "nueva"},
+    "missing",
+)
+debe_rechazar(
+    "LeadCreateResponse con oportunidad_id = None",
+    LeadCreateResponse,
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": None, "status": "nueva"},
+)
+debe_rechazar(
+    "LeadCreateResponse con oportunidad_id no entero",
+    LeadCreateResponse,
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": "abc", "status": "nueva"},
+)
+
+print("\n=== C. COMPROBACIONES DE COMPORTAMIENTO ===")
+a = LeadCreate(**sin_clave("fotos"))
+b = LeadCreate(**sin_clave("fotos"))
+a.fotos.append("intrusa.jpg")
+if b.fotos == []:
+    ok += 1
+    print("  [OK]    default_factory: cada lead tiene su PROPIA lista (b.fotos sigue vacia)")
+else:
+    fallos.append("default_factory compartido entre instancias")
+    print(f"  [FALLO] listas compartidas -> b.fotos={b.fotos}")
+
+lead = LeadCreate(**LEAD_VALIDO)
+serializado = lead.model_dump(mode="json")
+if serializado["tipo_reforma"] == "bano" and serializado["nivel_acabados"] == "medio":
+    ok += 1
+    print("  [OK]    Al serializar a JSON los enums salen como texto plano:")
+    print(f"            tipo_reforma={serializado['tipo_reforma']!r} nivel_acabados={serializado['nivel_acabados']!r}")
+else:
+    fallos.append(f"serializacion de enums inesperada: {serializado}")
+    print(f"  [FALLO] serializacion -> {serializado}")
+
+print("\n" + "=" * 60)
+print(f"RESULTADO: {ok} comprobaciones correctas, {len(fallos)} fallos")
+if fallos:
+    for f in fallos:
+        print(" - " + f)
+    sys.exit(1)
+print("Todas las comprobaciones han pasado.")
