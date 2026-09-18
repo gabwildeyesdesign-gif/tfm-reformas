@@ -1,10 +1,18 @@
+import sys
 from contextlib import asynccontextmanager
 
 import psycopg2
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from psycopg2.extras import Json
 
 from app.api import leads as leads_api
-from app.db.connection import close_pool, get_db_connection, init_pool
+from app.db.connection import (
+    close_pool,
+    get_db_connection,
+    get_transactional_connection,
+    init_pool,
+)
 from app.mcp_server.server import mcp
 
 # Convertimos el servidor MCP en una aplicacion ASGI montable dentro de
@@ -60,6 +68,129 @@ app.mount("/mcp", mcp_app)
 # sobre "app" porque son dos funciones sueltas de infraestructura, no un
 # dominio de negocio con su propio archivo.
 app.include_router(leads_api.router)
+
+
+# Valores con los que se registra un error que NO pertenece a ninguna
+# entidad concreta del negocio. La tabla logs es polimorfica: cada fila
+# dice a que tipo de entidad se refiere (entity_type) y a cual en
+# concreto (entity_id). Pero un fallo no controlado puede ocurrir antes
+# de que exista ninguna entidad, y entity_id es NOT NULL, asi que hace
+# falta un valor centinela. Se usa 0 porque las secuencias SERIAL de
+# Postgres empiezan en 1: ningun registro real puede tener id 0, asi que
+# no hay riesgo de confundirlo con una entidad de verdad.
+LOG_ENTITY_TYPE_SISTEMA = "sistema"
+LOG_ENTITY_ID_SIN_ENTIDAD = 0
+
+
+@app.exception_handler(Exception)
+def manejador_error_no_controlado(request: Request, exc: Exception):
+    """
+    Red de seguridad para CUALQUIER error no controlado de CUALQUIER
+    endpoint.
+
+    Un decorador @app.exception_handler(Exception) le dice a FastAPI:
+    "si un endpoint lanza una excepcion que nadie ha capturado, en vez
+    de responder tu error generico, llama a esta funcion".
+
+    Importante: esto NO afecta a los errores de validacion. Los 422 que
+    genera Pydantic y los HTTPException que lanzamos a proposito tienen
+    sus propios manejadores dentro de FastAPI y siguen funcionando
+    exactamente igual. Aqui solo cae lo IMPREVISTO: un fallo de red
+    contra Postgres, un error de programacion en services/, una division
+    por cero.
+
+    Hace dos cosas:
+
+      1. Deja rastro. Escribe una fila en la tabla logs con el mensaje
+         real de la excepcion, para que el fallo siga existiendo despues
+         de que el servidor se apague. Sin esto, el unico rastro seria
+         la consola, que se pierde.
+
+      2. Responde sin filtrar informacion. Devuelve un mensaje generico
+         con codigo 500. NUNCA envia el traceback al cliente: un
+         traceback revela rutas de archivos, nombres de tablas y
+         estructura interna del sistema — informacion util para alguien
+         que quisiera atacarlo.
+
+    Es una funcion sincrona normal (def, no async def) a proposito:
+    Starlette despacha los manejadores sincronos a su pool de hilos, que
+    es donde debe ocurrir una escritura bloqueante con psycopg2. Si
+    fuera async def, el INSERT bloquearia el bucle de eventos y frenaria
+    todas las demas peticiones mientras dura.
+    """
+    # Se guarda el tipo de excepcion ademas del mensaje: "division by
+    # zero" a secas es mucho menos util que saber que fue un
+    # ZeroDivisionError. Y la ruta y el metodo, para saber que peticion
+    # lo provoco.
+    detalle = {
+        "tipo": type(exc).__name__,
+        "mensaje": str(exc),
+        "ruta": request.url.path,
+        "metodo": request.method,
+    }
+
+    # TODO el registro va dentro de su propio try/except. Motivo: si la
+    # base de datos es justamente lo que esta fallando, el INSERT de
+    # aqui tambien fallaria, y esa segunda excepcion se lanzaria DESDE
+    # el manejador de excepciones — dejando al cliente sin ninguna
+    # respuesta y ocultando el error original. Registrar es deseable;
+    # responder es obligatorio.
+    try:
+        with get_transactional_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO logs (entity_type, entity_id, accion, detalle)
+                VALUES (%s, %s, %s, %s);
+                """,
+                (
+                    LOG_ENTITY_TYPE_SISTEMA,
+                    LOG_ENTITY_ID_SIN_ENTIDAD,
+                    "error_no_controlado",
+                    Json(detalle),
+                ),
+            )
+            cursor.close()
+    except Exception as error_registro:
+        # Si el registro en la base de datos falla, NO se relanza la
+        # excepcion: lo importante es que el cliente reciba igualmente su
+        # 500. Pero tampoco puede quedarse en silencio.
+        #
+        # El caso que esto cubre es el peor posible: si Postgres esta
+        # caido, el error original no se puede guardar en logs
+        # (precisamente porque la base de datos es lo que falla) y, sin
+        # esta salida por consola, desapareceria sin dejar rastro en
+        # ningun sitio. El fallo se volveria invisible justo cuando mas
+        # falta hace verlo.
+        #
+        # Se escribe en stderr y no en stdout porque es el canal
+        # convencional para errores: uvicorn, Docker, systemd y los
+        # servicios de logs lo recogen por separado de la salida normal,
+        # asi que un error no queda sepultado entre las lineas de acceso
+        # HTTP.
+        #
+        # flush=True fuerza a que el mensaje salga en el momento, sin
+        # esperar a que se llene el bufer de salida. Sin esto, si el
+        # proceso muriera justo despues, el mensaje se perderia dentro
+        # de ese bufer sin llegar nunca a escribirse.
+        print(
+            "[ERROR] No se pudo registrar en la tabla logs un error no controlado.\n"
+            f"        Error original    : {detalle['tipo']}: {detalle['mensaje']}\n"
+            f"        Peticion          : {detalle['metodo']} {detalle['ruta']}\n"
+            f"        Fallo al registrar: "
+            f"{type(error_registro).__name__}: {error_registro}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    # JSONResponse construye la respuesta HTTP a mano. Se usa en vez de
+    # un simple "return {...}" porque los manejadores de excepciones no
+    # pasan por la maquinaria normal de FastAPI que convierte un
+    # diccionario en respuesta.
+    return JSONResponse(
+        status_code=500,
+        content={"status": "error", "detail": "Error interno"},
+    )
 
 
 @app.get("/health")
