@@ -17,8 +17,9 @@ entre las dos puertas.
 # relacionados en un archivo aparte para no tener main.py con cincuenta
 # funciones dentro. Luego se engancha a la aplicación principal con
 # app.include_router().
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.api.security import verificar_webhook_secret
 from app.schemas.leads import LeadCreate, LeadCreateResponse
 from app.services.leads_service import create_lead
 
@@ -40,7 +41,20 @@ router = APIRouter(tags=["leads"])
 # status_code=201 es el código HTTP de "Created", la semántica correcta
 # cuando una petición crea un recurso nuevo. Por defecto FastAPI
 # devolvería 200 (OK genérico).
-@router.post("/leads", response_model=LeadCreateResponse, status_code=201)
+#
+# dependencies=[Depends(verificar_webhook_secret)] le dice a FastAPI que
+# ejecute esa comprobación ANTES de la función del endpoint. Si el
+# secreto de la cabecera X-Webhook-Secret falta o no coincide, la
+# dependencia lanza un 401 y post_leads no llega a ejecutarse (ni se
+# valida el cuerpo, ni se toca la base de datos). Va en el decorador y
+# no como parámetro de la función porque post_leads no necesita el
+# valor del secreto para nada, solo que la comprobación haya pasado.
+@router.post(
+    "/leads",
+    response_model=LeadCreateResponse,
+    status_code=201,
+    dependencies=[Depends(verificar_webhook_secret)],
+)
 def post_leads(data: LeadCreate) -> LeadCreateResponse:
     """
     Alta de un lead nuevo. Disparado por el webhook de n8n desde el

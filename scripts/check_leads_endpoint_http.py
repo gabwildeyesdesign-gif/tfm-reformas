@@ -33,7 +33,15 @@ import requests
 import uvicorn
 from psycopg2.extras import RealDictCursor
 
-from app.config import DATABASE_URL
+from app.config import DATABASE_URL, WEBHOOK_SECRET
+
+# Desde la Fase 1 (autenticacion del webhook), POST /leads exige la
+# cabecera X-Webhook-Secret; sin ella responde 401 antes de validar el
+# cuerpo. Este script prueba la logica del alta, no la autenticacion
+# (eso lo cubre check_webhook_auth_http.py), asi que manda siempre el
+# secreto correcto. Se lee del mismo .env que usa el servidor, para no
+# escribir el secreto en el codigo.
+CABECERAS_AUTH = {"X-Webhook-Secret": WEBHOOK_SECRET}
 
 PUERTO = 8010
 BASE = f"http://127.0.0.1:{PUERTO}"
@@ -136,7 +144,7 @@ try:
         "lead_token": "tokHTTP",
     }
     print(f"  Enviando POST {BASE}/leads")
-    resp = requests.post(f"{BASE}/leads", json=cuerpo, timeout=20)
+    resp = requests.post(f"{BASE}/leads", json=cuerpo, headers=CABECERAS_AUTH, timeout=20)
     print(f"  <- HTTP {resp.status_code}")
     print(f"  <- Cabecera content-type: {resp.headers.get('content-type')}")
     print(f"  <- Cuerpo: {resp.text}")
@@ -188,7 +196,9 @@ try:
     cuerpo_malo["email"] = EMAIL_MALO
     cuerpo_malo["lead_token"] = "tokMALO"
     print(f"  Enviando POST con email = {EMAIL_MALO!r}")
-    resp2 = requests.post(f"{BASE}/leads", json=cuerpo_malo, timeout=20)
+    resp2 = requests.post(
+        f"{BASE}/leads", json=cuerpo_malo, headers=CABECERAS_AUTH, timeout=20
+    )
     print(f"  <- HTTP {resp2.status_code}")
     print(f"  <- Cuerpo: {resp2.text}")
 
@@ -211,7 +221,9 @@ try:
     cuerpo_enie = dict(cuerpo)
     cuerpo_enie["email"] = "otro-" + EMAIL_OK
     cuerpo_enie["tipo_reforma"] = "ba\u00f1o"
-    resp3 = requests.post(f"{BASE}/leads", json=cuerpo_enie, timeout=20)
+    resp3 = requests.post(
+        f"{BASE}/leads", json=cuerpo_enie, headers=CABECERAS_AUTH, timeout=20
+    )
     print(f"  <- HTTP {resp3.status_code}")
     print(f"  <- Cuerpo: {resp3.text[:300]}")
     comprobar("Codigo HTTP 422", resp3.status_code == 422, f"({resp3.status_code})")

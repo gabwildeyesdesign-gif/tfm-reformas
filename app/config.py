@@ -13,6 +13,19 @@ load_dotenv()
 # la variable en varios sitios del código.
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# Secreto compartido con n8n para autenticar las llamadas al webhook
+# POST /leads. n8n lo envía en la cabecera X-Webhook-Secret y FastAPI lo
+# compara con este valor.
+#
+# Aquí es una lectura simple, igual que DATABASE_URL, y a propósito NO
+# se comprueba que exista. La comprobación de "obligatorio y no vacío"
+# vive en app/api/security.py, que es el único archivo que lo usa. Si
+# se hiciera aquí, cualquier script que importe app.config (por ejemplo,
+# los de scripts/ que solo necesitan DATABASE_URL) se negaría a
+# ejecutarse sin un secreto que no le sirve para nada. Así solo falla al
+# arrancar quien de verdad necesita autenticar webhooks: el servidor.
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+
 # Número mínimo de conexiones que el pool mantiene siempre abiertas, listas
 # para usar sin esperar a crear una nueva. os.getenv devuelve siempre texto
 # (str) aunque el valor parezca un número, así que hay que convertirlo con

@@ -16,6 +16,13 @@ endpoints y revisión técnica final.
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | Producción N0: temporizador n8n llama al endpoint directamente (no pasa por MCP). MCP tool disponible para N1+, no ejercida en N0 |
 
+Requisito de autenticación de POST /leads (añadido en la sesión de
+autenticación del webhook): además del cuerpo, toda petición debe traer la
+cabecera HTTP X-Webhook-Secret con el valor de la variable de entorno
+WEBHOOK_SECRET (secreto compartido con n8n, credencial "Header Auth").
+Sin ella, o con un valor incorrecto, responde 401 antes de validar el
+cuerpo. Ver 5.1.
+
 get_business_rules() y request_missing_information() son MCP tools puras,
 sin endpoint HTTP propio — leen directamente de services/.
 
@@ -69,6 +76,26 @@ backoff. Detalle completo de reintentos, rutas de escalado y roles
 notificados por endpoint: ver mensaje de sesión "Confirmamos. Haz una
 revisión final..." — pendiente de trasladar al PDD junto con este
 documento.
+
+5.1 POST /leads — autenticación del webhook (añadido)
+
+NOTA: esta adenda no contiene todavía la tabla completa de excepciones
+por endpoint (sigue en el mensaje de sesión citado arriba, pendiente de
+trasladar al PDD). Esta subsección recoge solo la fila de la
+autenticación, añadida en el mismo bloque de trabajo que el código para
+que el contrato no quede desactualizado. Las demás filas de POST /leads
+se completarán al trasladar la tabla.
+
+| Endpoint | Código | Causa | Reintento en n8n | Acción |
+|---|---|---|---|---|
+| POST /leads | 401 No autorizado | Cabecera X-Webhook-Secret ausente, vacía o con valor distinto de WEBHOOK_SECRET | NO (4xx: fallo rápido; reintentar con el mismo secreto daría siempre 401) | Revisar la credencial "Header Auth" del nodo HTTP de n8n frente al .env del backend. No se escribe nada en la base de datos (ni en logs) |
+
+Detalles del 401: la respuesta es idéntica haya faltado la cabecera o
+sea incorrecta (cuerpo {"detail": "No autorizado"} y cabecera
+WWW-Authenticate: APIKey), para no dar pistas a quien pruebe valores. El
+secreto se compara en tiempo constante (secrets.compare_digest).
+Implementación: app/api/security.py. Verificación:
+scripts/check_webhook_auth_http.py.
 
 Ejemplo de fallback en FastAPI (calculate_estimate): si la combinación
 tipo_reforma/nivel_acabados no existe en tarifas_base, no se inventa un

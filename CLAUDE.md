@@ -75,10 +75,34 @@ SOLO REST.
 - El lifespan de FastAPI y el de fastmcp deben combinarse
   (combined_lifespan anidado), nunca uno reemplazar al otro — FastAPI
   solo acepta un lifespan.
-- DB_POOL_MIN y DB_POOL_MAX NO están en .env: el .env solo contiene
-  DATABASE_URL. Los valores 2 y 10 son los por defecto escritos en
-  app/config.py. Para cambiarlos sin tocar código, hay que añadir
-  primero esas variables al .env.
+- DB_POOL_MIN y DB_POOL_MAX NO están en .env: el .env contiene
+  DATABASE_URL y WEBHOOK_SECRET. Los valores 2 y 10 son los por defecto
+  escritos en app/config.py. Para cambiarlos sin tocar código, hay que
+  añadir primero esas variables al .env.
+- POST /leads EXIGE la cabecera X-Webhook-Secret con el valor de
+  WEBHOOK_SECRET del .env. Sin ella, o con otro valor, responde 401
+  (antes incluso de validar el cuerpo, así que un 401 no dice nada del
+  JSON). Probarlo a mano en PowerShell (curl.exe, no curl: en Windows
+  PowerShell 5.1 "curl" es un alias de Invoke-WebRequest):
+      curl.exe -X POST http://127.0.0.1:8000/leads -H "Content-Type: application/json" -H "X-Webhook-Secret: <valor del .env>" -d "@cuerpo.json"
+  En /docs, el botón "Authorize" permite pegar el secreto una vez. n8n
+  debe enviarlo con una credencial "Header Auth" en el nodo HTTP.
+- WEBHOOK_SECRET es obligatorio para ARRANCAR el servidor: si falta o
+  solo tiene espacios, uvicorn se detiene al importar
+  app/api/security.py, antes de abrir el puerto. Los scripts que solo
+  importan app.config no lo necesitan. Plantilla en .env.example.
+- En Windows, leer como UTF-8 el stderr de un subproceso de Python
+  revienta con UnicodeDecodeError en cuanto el hijo escribe una tilde
+  o una ñ. Aparece en scripts que lanzan un subproceso (por ejemplo,
+  uvicorn con subprocess.run) y capturan su salida con
+  capture_output=True y encoding="utf-8": al ir a una tubería y no a
+  una consola, el hijo escribe en la codificación del sistema, cp1252,
+  y no en UTF-8 (reproducido de forma aislada: el hijo informa de
+  sys.stderr.encoding = cp1252 y manda "á" como el byte 0xe1, justo el
+  byte del error original en el caso 6 de
+  scripts/check_webhook_auth_http.py). Solución: pasar
+  PYTHONIOENCODING=utf-8 en el entorno del hijo, por ejemplo
+  env=dict(os.environ, PYTHONIOENCODING="utf-8").
 
 ## Estado actual / pendiente
 
