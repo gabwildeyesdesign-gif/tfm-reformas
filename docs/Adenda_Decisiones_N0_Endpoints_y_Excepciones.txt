@@ -10,7 +10,7 @@ endpoints y revisión técnica final.
 
 | # | Endpoint | Input | Output | Trigger real |
 |---|---|---|---|---|
-| 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales, fotos[] | lead_id, cliente_id, status | Webhook n8n, formulario web |
+| 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales, fotos[] (opcional, máx. 5), lead_token | 201: lead_id, cliente_id, oportunidad_id, status | Webhook n8n, formulario web |
 | 2 | POST /calculate-estimate | oportunidad_id | presupuesto_id, importe_min, importe_max, motivo_gate, requiere_aprobacion, status | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
@@ -108,8 +108,8 @@ contrato del endpoint, no el modelo de datos.
 2. Motivos de create_followup_task (dos disparadores)
 
 - sin_respuesta_visita: 48h desde la pre-estimación sin reservar visita.
-- sin_decision_post_visita: N días desde visitas.fecha sin que
-  oportunidades.estado llegue a convertido/descartado. N = 5 días
+- sin_decision_post_visita: N días desde visitas.fecha_propuesta sin que
+  oportunidades.estado llegue a ganada/perdida. N = 5 días
   laborables, almacenado en reglas_negocio como
   dias_espera_decision_post_visita (confirmado e insertado en Supabase).
 
@@ -211,3 +211,40 @@ sin respuesta.
 - Reflejar en TFM_Decisiones_Modelo_Datos_Leads.txt y en el esquema real
   (ALTER TABLE + scripts/dump_schema.py) el nuevo valor de
   oportunidades.estado para la espera del Gate HITL (ver 1.1c).
+
+8. Correcciones de datos (2026-09-19)
+
+Datos de esta adenda que contradecían la base de datos real o el código
+ya implementado. Se corrigen en su sitio; aquí queda constancia de qué
+decía antes y de dónde sale el valor correcto.
+
+Fuente: docs/schema_actual.sql (generado desde la base de datos real)
+
+- Punto 2: "visitas.fecha" -> visitas.fecha_propuesta. La tabla visitas
+  no tiene ninguna columna llamada "fecha".
+- Punto 2: "convertido/descartado" -> ganada/perdida. Esos dos valores
+  no existen en el CHECK oportunidades_estado_check; un UPDATE a
+  'convertido' fallaría. (Misma equivalencia ya documentada en
+  TFM_Decisiones_Modelo_Datos_Leads.txt, "CORRECCIÓN DE NOMENCLATURA".)
+
+Fuente: código de POST /leads (app/schemas/leads.py, app/api/leads.py)
+
+- Fila 1, input: se añaden lead_token (obligatorio en LeadCreate) y la
+  aclaración de que fotos[] es opcional con un máximo de 5
+  (MAX_FOTOS_LEAD).
+- Fila 1, output: se añade oportunidad_id (ampliación decidida en D1,
+  TFM_Decisiones_Modelo_Datos_Leads.txt) y el código de éxito 201.
+
+Detectado pero NO corregido aquí (pendiente de decisión):
+
+- Fila 4 (POST /visits): el input "franja_horaria" no tiene columna en
+  visitas. Se decidirá al diseñar ese endpoint.
+- La descripción de la regla dias_espera_decision_post_visita, guardada
+  en la propia tabla reglas_negocio de Supabase, repite "visitas.fecha"
+  y "convertido/descartado". Es un dato de la base de datos, no de este
+  documento: corregirlo requiere un UPDATE sobre reglas_negocio.
+- Punto 1.1: remite a claude/Decisiones_Verificacion_Tarifas_y_Margen_N0.md,
+  que no está en este repositorio.
+- Punto 1.1(a): nombra dos fuentes para tipo_reforma
+  (leads.datos_estructurados y oportunidades.tipo_reforma) sin decir
+  cuál manda si no coinciden.
