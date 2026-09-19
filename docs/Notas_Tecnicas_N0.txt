@@ -1,0 +1,183 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+NOTAS TÉCNICAS N0
+Decisiones conscientes y riesgos documentados que no requieren cambio
+de código en N0
+
+Documento de contexto de proyecto · Nivel N0
+
+Cada nota recoge una limitación conocida, el motivo de aceptarla hoy y
+la condición que obliga a revisarla. Las afirmaciones sobre el entorno
+están verificadas con ejecución real (2026-09-18), no deducidas.
+
+
+================================================================
+NOTA A — psycopg2-binary EN LUGAR DE psycopg2
+================================================================
+
+HECHO
+
+requirements.txt fija psycopg2-binary==2.9.13, no psycopg2.
+
+  - psycopg2 (paquete fuente) se compila en la máquina donde se
+    instala y usa las librerías del sistema: libpq (el cliente de
+    PostgreSQL) y libssl (OpenSSL). Para compilarlo hacen falta
+    pg_config y un compilador de C.
+  - psycopg2-binary trae esas librerías YA COMPILADAS dentro del
+    paquete. Se instala con un simple pip install, sin compilador.
+
+QUÉ DICE LA DOCUMENTACIÓN OFICIAL (psycopg.org/docs/install.html,
+consultada el 2026-09-18)
+
+  "For production use you are advised to use the source distribution."
+
+Da dos motivos:
+  1. Las librerías incluidas no se actualizan cuando el sistema
+     actualiza las suyas. Un parche de seguridad de OpenSSL en el
+     servidor no llega a psycopg2-binary hasta que se publica una
+     versión nueva del paquete y se reinstala.
+  2. Posibles conflictos con otros módulos que usen libssl, "for
+     instance with the Python ssl module: in some cases, under
+     concurrency, the interaction between the two libraries may result
+     in a segfault" (el proceso muere sin traceback).
+
+POR QUÉ EL MOTIVO 2 NO ES TEÓRICO EN ESTE PROYECTO (verificado)
+
+Al importar app.main en el venv:
+  - el módulo ssl de Python QUEDA CARGADO en el proceso, con
+    OpenSSL 3.0.16 (lo importa indirectamente la cadena de imports de
+    la aplicación; no hace falta usarlo explícitamente para que esté);
+  - psycopg2_binary.libs contiene SU PROPIA copia de libssl-3,
+    libcrypto-3 y libpq (versión de libpq 18.0.4);
+  - la conexión a Supabase va cifrada (SSL) y se usa desde varios
+    hilos a la vez (ThreadedConnectionPool, DB_POOL_MAX=10).
+
+Es decir: dos OpenSSL en el mismo proceso, más concurrencia, más SSL.
+Es exactamente el escenario del aviso. Hasta hoy no se ha observado
+ningún fallo en ninguna ejecución, pero la advertencia habla de casos
+raros bajo concurrencia, que es justo lo que las pruebas actuales no
+someten a carga (ver la limitación pendiente de concurrencia del
+Session pooler).
+
+DECISIÓN
+
+Se mantiene psycopg2-binary en N0, como decisión consciente y no por
+desconocimiento.
+
+Alternativas (Rule of Three):
+
+  A. psycopg2-binary (actual)                              [ELEGIDA]
+     Se instala en Windows sin herramientas de compilación. Contra: los
+     dos riesgos de arriba, que se aceptan en N0.
+  B. psycopg2 desde fuente
+     Contra en esta máquina: exige instalar en Windows las Build Tools
+     de Visual Studio (varios GB de disco y una instalación pesada en
+     una máquina de 8 GB que ya comparte memoria con n8n y VS Code) y
+     los binarios de PostgreSQL para tener pg_config. Todo eso para un
+     entorno de desarrollo local que no es producción.
+  C. Migrar a psycopg 3 (paquete "psycopg")
+     Es el sucesor oficial. Contra: cambia la API (el pool, los
+     cursores y las excepciones son distintos) y obligaría a reescribir
+     y reverificar app/db/connection.py y todos los scripts de
+     verificación. Es un cambio de alcance, no un ajuste de
+     dependencia. Si algún día se hace, conviene hacerlo junto con la
+     migración a async ya documentada
+     (TFM_Decisiones_Arquitectura_MCP_y_DB.txt, sección 7.8), porque
+     psycopg 3 soporta async de forma nativa.
+
+CUÁNDO SE REVISA
+
+  - Si el despliegue sale de "desarrollo local en Windows" hacia un
+    servidor o contenedor Linux: ahí compilar desde fuente es barato
+    (apt install libpq-dev gcc) y la recomendación oficial se puede
+    cumplir sin coste. En ese momento, cambiar psycopg2-binary por
+    psycopg2 en requirements.txt.
+  - Si apareciera algún cierre del proceso sin traceback bajo carga:
+    sería el primer sospechoso.
+
+Coste de cara a la defensa oral: decir "en producción usaría el
+paquete fuente, y en local verifiqué que en el proceso conviven dos
+OpenSSL" es defendible. Decir "no lo sabía" no lo es. Por eso queda
+escrito.
+
+
+================================================================
+NOTA B — NADA IMPIDE SALTARSE EL ORDEN DE ESTADOS DE UNA OPORTUNIDAD
+================================================================
+
+CONTEXTO
+
+El orden canónico de estados de oportunidades.estado está cerrado en
+docs/TFM_Decisiones_Modelo_Datos_Leads.txt, sección 2, epígrafe
+"ORDEN DE LOS ESTADOS — RESUELTO Y CERRADO" (en la revisión
+arquitectónica se le llamó "D8"; en los documentos no tiene esa
+etiqueta):
+
+    nueva -> presupuesto_enviado -> visita_agendada -> ganada/perdida
+
+HECHO VERIFICADO (consulta real a la base de datos, 2026-09-18)
+
+  - No existe NINGÚN trigger en el esquema public
+    (information_schema.triggers vacío).
+  - oportunidades.estado solo tiene el CHECK oportunidades_estado_check,
+    que valida que el valor pertenezca a la lista de 6 permitidos
+    (nueva, cualificada, visita_agendada, presupuesto_enviado, ganada,
+    perdida). No dice nada de transiciones.
+
+Consecuencia: un UPDATE oportunidades SET estado = 'ganada' sobre una
+oportunidad en 'nueva' es aceptado por la base de datos, aunque se
+salte la pre-estimación y la visita.
+
+MATIZ TÉCNICO: UN CHECK NO PUEDE RESOLVER ESTO
+
+Un CHECK, por compuesto que sea, solo ve la fila tal como QUEDA
+después de la escritura. No ve el valor anterior, así que no puede
+expresar "solo se puede pasar a 'ganada' desde 'visita_agendada'". Las
+reglas de transición necesitan comparar el valor viejo (OLD) con el
+nuevo (NEW), y eso solo lo permiten:
+
+  1. Un trigger BEFORE UPDATE en PostgreSQL, que compara OLD.estado con
+     NEW.estado contra una tabla o lista de transiciones permitidas y
+     lanza un error si no está.
+  2. Una guarda en services/: cada UPDATE lleva la condición del estado
+     de origen (UPDATE ... SET estado = 'visita_agendada' WHERE id = %s
+     AND estado = 'presupuesto_enviado') y se comprueba cursor.rowcount;
+     si es 0, la transición no era válida y services/ lo convierte en
+     un error de negocio.
+  3. Aceptarlo como riesgo documentado.
+
+POR QUÉ HOY NO IMPORTA
+
+Hoy solo existe un endpoint que escribe estado: POST /leads, y solo
+hace INSERT con 'nueva'. No hay ningún UPDATE de estado en el código
+(verificado con grep: el único UPDATE de app/ es el ON CONFLICT (email)
+DO UPDATE sobre clientes en leads_service.py), así que no hay ninguna
+transición que se pueda hacer mal.
+
+CUÁNDO HAY QUE DECIDIRLO
+
+Al construir POST /gate-decisions y POST /visits, que serán los
+primeros en ACTUALIZAR el estado. En ese momento hay que elegir de
+forma explícita, igual que se hizo con D7 (idempotencia), entre:
+
+  - proteger con un trigger (opción 1): la regla vive en la base de
+    datos y protege también frente a cualquier otro camino de
+    escritura (n8n con el nodo de Supabase, un UPDATE manual desde el
+    panel). Contra: saca lógica de negocio fuera de services/, en
+    contra de la disciplina de carpetas del proyecto, y es SQL
+    procedural (PL/pgSQL) que hay que probar aparte;
+  - proteger en services/ (opción 2): coherente con "services/ es la
+    única capa con lógica de negocio" y fácil de probar desde Python.
+    Contra: no protege frente a escrituras que no pasen por services/;
+  - aceptarlo como riesgo documentado (opción 3), escrito en el
+    apartado de limitaciones de la memoria.
+
+Dos detalles que la decisión debe tener en cuenta:
+  - 'perdida' probablemente debe alcanzarse desde CUALQUIER estado no
+    final (el cliente puede rechazar en cualquier punto, o agotarse el
+    seguimiento de create_followup_task), así que la regla no es una
+    simple cadena lineal.
+  - 'cualificada' está en el CHECK pero, según el mismo documento, no
+    se persiste como paso intermedio en N0. La tabla de transiciones
+    tendrá que decir si se admite o se ignora.

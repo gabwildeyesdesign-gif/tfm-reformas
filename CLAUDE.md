@@ -149,6 +149,9 @@ rápida, no sustituye esa documentación. Contiene:
 - Decision_RLS_N0.txt — qué protege RLS hoy (cierra la Data API
   pública a anon/authenticated; el backend se lo salta), por qué no hay
   políticas y cuándo pasan a ser obligatorias.
+- Notas_Tecnicas_N0.txt — psycopg2-binary como decisión consciente de
+  desarrollo local, y el orden de estados de oportunidades sin
+  protección en la base de datos (a decidir con gate-decisions/visits).
 
 ## Esquema de la base de datos: cuál de los dos .sql manda
 
