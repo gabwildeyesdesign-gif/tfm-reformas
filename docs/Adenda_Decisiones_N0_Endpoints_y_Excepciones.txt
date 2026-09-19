@@ -11,7 +11,7 @@ endpoints y revisión técnica final.
 | # | Endpoint | Input | Output | Trigger real |
 |---|---|---|---|---|
 | 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales, fotos[] | lead_id, cliente_id, status | Webhook n8n, formulario web |
-| 2 | POST /calculate-estimate | lead_id, tipo_reforma, nivel_acabados, m2, incluye_cambios_estructurales | importe_estimado, motivo_gate, presupuesto_id | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
+| 2 | POST /calculate-estimate | oportunidad_id | presupuesto_id, importe_min, importe_max, motivo_gate, requiere_aprobacion, status | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | Producción N0: temporizador n8n llama al endpoint directamente (no pasa por MCP). MCP tool disponible para N1+, no ejercida en N0 |
@@ -33,6 +33,77 @@ evento. En producción, cada evento real usa una sola puerta:
 calculate-estimate -> MCP (agente); create-followup-task -> REST (timer).
 La puerta alternativa existe para testing, uso administrativo manual o
 capacidades futuras de N1/N2, no se ejerce en el flujo real de N0.
+
+1.1 calculate-estimate — contrato revisado tras verificación de mercado
+(2026-09-19)
+
+Tres correcciones sobre la fila de calculate-estimate en la tabla
+anterior, cerradas tras verificar tarifas_base y margen_empresa_pct
+contra fuentes de mercado real 2026. Detalle numérico completo (bandas
+de mercado por tipo de reforma, cálculo del doble cómputo de margen,
+recalculo del umbral del Gate por m²): documento del proyecto TFM
+claude/Decisiones_Verificacion_Tarifas_y_Margen_N0.md.
+
+(a) INPUT: oportunidad_id — no lead_id, no los cuatro datos de negocio.
+El endpoint NUNCA recibe tipo_reforma, nivel_acabados, m2 ni
+incluye_cambios_estructurales como parámetros: los lee directamente de
+leads.datos_estructurados / oportunidades.tipo_reforma a partir del
+identificador. Motivo: por la puerta MCP el llamador es un LLM, y un
+dato de negocio transcrito o alucinado por el agente no debe poder
+alterar el cálculo de un precio que se le muestra a un cliente real. La
+única forma de hacer eso estructuralmente imposible — no solo
+detectable después — es que el agente no tenga ocasión de proporcionar
+esos datos: invoca la tool y recibe el rango final ya calculado: no
+interviene en ningún paso del cálculo, no ve tarifas_base ni
+reglas_negocio.
+
+Se usa oportunidad_id y no lead_id porque es la FK real de la que
+cuelga presupuestos (presupuestos.oportunidad_id), y porque
+oportunidades.lead_id no tiene UNIQUE (ver TFM_Decisiones_Modelo_Datos_
+Leads.txt, D7): un lead duplicado por un reintento de n8n podría tener
+dos oportunidades, y lead_id no identificaría cuál de las dos usar.
+
+(b) OUTPUT: importe_min e importe_max sustituyen a importe_estimado.
+presupuestos.importe_min/importe_max ya existían en el esquema sin
+fórmula definida; la fórmula queda cerrada así:
+
+    importe_min = (tarifas_base.precio_m2 × m2)
+                  + recargo_informe_tecnico (si incluye_cambios_estructurales)
+    importe_max = importe_min × (1 + margen_empresa_pct / 100)
+
+margen_empresa_pct deja de aplicarse como recargo adicional sobre un
+coste, que era la lectura original de esta Adenda. tarifas_base.precio_m2
+son precios de venta de mercado ya verificados (no costes internos de
+la empresa), y ya incorporan un margen implícito en qué extremo de la
+banda de mercado se eligió al poblar cada fila (extremo competitivo vs.
+extremo de margen). Aplicar margen_empresa_pct como multiplicador
+adicional sobre ese precio duplicaba el margen y sacaba la oferta fuera
+de mercado. El parámetro pasa a definir el ancho del rango de
+negociación que se muestra al cliente (un techo por si aparecen
+complejidades), no un recargo oculto sobre el coste.
+
+presupuestos.duracion_estimada_dias se queda NULL en N0: no hay
+fórmula definida para calcularla y no se ha pedido una. Limitación
+documentada explícitamente, no una omisión silenciosa.
+presupuestos.aprobado_por también queda NULL — lo escribe
+POST /gate-decisions, no calculate-estimate.
+
+(c) GATE evaluado siempre contra importe_max, nunca contra importe_min
+ni una media: es la lectura conservadora (el peor caso de exposición
+económica), coherente con el propósito del Gate de atrapar riesgo antes
+de comprometerse. La combinación de motivo_gate sigue siendo la del
+CHECK real de presupuestos.motivo_gate ('cambios_estructurales',
+'importe_superior_umbral', 'ambos'):
+
+    incluye_cambios_estructurales=true  y importe_max > umbral → 'ambos'
+    incluye_cambios_estructurales=true  y importe_max ≤ umbral → 'cambios_estructurales'
+    incluye_cambios_estructurales=false y importe_max > umbral → 'importe_superior_umbral'
+    incluye_cambios_estructurales=false y importe_max ≤ umbral → sin Gate
+
+El efecto en oportunidades.estado (transición 'presupuesto_enviado' vs.
+un estado de espera del Gate) se cierra y documenta en
+TFM_Decisiones_Modelo_Datos_Leads.txt, no aquí: esta Adenda fija el
+contrato del endpoint, no el modelo de datos.
 
 2. Motivos de create_followup_task (dos disparadores)
 
@@ -100,7 +171,7 @@ scripts/check_webhook_auth_http.py.
 Ejemplo de fallback en FastAPI (calculate_estimate): si la combinación
 tipo_reforma/nivel_acabados no existe en tarifas_base, no se inventa un
 precio — se registra la incidencia en logs y se devuelve
-status="requiere_revision", importe=None.
+status="requiere_revision", importe_min=None, importe_max=None.
 
 Ejemplo de manejo de excepción en n8n: Error Trigger workflow separado,
 capturado tras agotar reintentos, que (1) registra en logs vía FastAPI,
@@ -119,6 +190,10 @@ sin respuesta.
   punto 3, nodo Wait + Telegram).
 - Reserva de visita incorrectamente descrita como parte de la respuesta
   síncrona inicial (RESUELTO, ver punto 4).
+- Contrato de calculate-estimate con doble fuente de verdad para los
+  datos de negocio (input duplicaba lo ya guardado en leads/oportunidades)
+  y margen_empresa_pct aplicado como recargo sobre un precio que ya era
+  de venta (RESUELTO, ver punto 1.1).
 - Session pooler de Supabase bajo concurrencia alta con webhook síncrono:
   LIMITACIÓN DOCUMENTADA, no resuelta — a revisar si el tiempo lo
   permite. Anotar en el apartado de limitaciones de la memoria.
@@ -133,3 +208,6 @@ sin respuesta.
   vía services/).
 - Explorar opciones para el riesgo de concurrencia del Session pooler
   (punto 5 de esta adenda).
+- Reflejar en TFM_Decisiones_Modelo_Datos_Leads.txt y en el esquema real
+  (ALTER TABLE + scripts/dump_schema.py) el nuevo valor de
+  oportunidades.estado para la espera del Gate HITL (ver 1.1c).
