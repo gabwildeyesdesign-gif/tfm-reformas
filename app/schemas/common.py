@@ -68,16 +68,20 @@ class NivelAcabados(str, Enum):
 
 # Número máximo de fotos que se aceptan en un lead.
 #
-# PROVISIONAL — PENDIENTE PARA EL SIGUIENTE BLOQUE:
+# PROVISIONAL — PENDIENTE (limitación documentada en
+# docs/TFM_Decisiones_Modelo_Datos_Leads.txt, apartado 6):
 # este valor debería leerse de la tabla reglas_negocio (clave
 # 'max_fotos_lead'), igual que se hace con el umbral del Gate o el margen
 # de empresa, para poder cambiarlo sin tocar código.
 #
-# VERIFICADO contra Supabase: esa fila NO EXISTE todavía. reglas_negocio
-# solo tiene 4 claves (umbral_aprobacion_manual, margen_empresa_pct,
-# recargo_informe_tecnico, dias_espera_decision_post_visita). Hasta que se
-# inserte, services/ no puede leerla y el valor se queda aquí escrito a
-# mano. Se define como constante compartida (y no como un 5 suelto
-# repetido en dos modelos) para que el día que se sustituya por la
-# lectura real solo haya que cambiar un sitio.
+# VERIFICADO contra Supabase (2026-09-18): la fila YA EXISTE, con clave
+# 'max_fotos_lead' y valor 5.00 (insertada el 2026-09-17). Lo que falta
+# es que services/ la lea; hasta entonces, el límite real lo aplica esta
+# constante, y los dos valores coinciden a mano. Aviso para cuando se
+# implemente la lectura: la columna valor es NUMERIC(10,2), así que
+# vuelve como Decimal('5.00') y hay que convertirla a int.
+#
+# Se define como constante compartida (y no como un 5 suelto repetido
+# en dos modelos) para que el día que se sustituya por la lectura real
+# solo haya que cambiar un sitio.
 MAX_FOTOS_LEAD = 5

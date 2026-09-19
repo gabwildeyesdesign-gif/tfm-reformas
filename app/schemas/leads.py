@@ -118,8 +118,9 @@ class LeadCreate(BaseModel):
     # EmailStr comprueba la FORMA del email (que tenga parte local, @ y
     # dominio con formato válido). No comprueba que el buzón exista de
     # verdad: eso solo se sabe enviando un correo. Necesita el paquete
-    # email-validator instalado; está en el venv, pero PENDIENTE de
-    # añadir a requirements.txt.
+    # email-validator instalado (fijado en requirements.txt como
+    # email-validator==2.3.0): sin él, Pydantic falla al importar este
+    # archivo.
     email: EmailStr = Field(max_length=150)
 
     telefono: str = Field(min_length=1, max_length=30)
@@ -186,13 +187,24 @@ class LeadCreateResponse(BaseModel):
     # solo listaba lead_id, cliente_id y status), decidida en D1 y
     # anotada como tal para la memoria.
     #
-    # PENDIENTE: este bloque solo amplía el contrato de datos. Quien
-    # rellene este valor de verdad será app/services/leads_service.py en
-    # el bloque siguiente.
+    # Lo rellena app/services/leads_service.py con el id que devuelve
+    # el INSERT en oportunidades (RETURNING id), dentro de la misma
+    # transacción que las otras dos filas. Verificado por HTTP real en
+    # scripts/check_leads_endpoint_http.py.
     oportunidad_id: int
 
-    # Texto por ahora. Queda pendiente de cerrar (decisión D4) si su
-    # valor será el estado real de la oportunidad ('nueva') o una
-    # etiqueta propia. Se deja como str para no fijar esa decisión desde
-    # el esquema.
+    # Estado REAL de la oportunidad recién creada: decisión D4, CERRADA
+    # (ver docs/TFM_Decisiones_Modelo_Datos_Leads.txt, apartado D4).
+    # services/ lo obtiene con RETURNING id, estado en el mismo INSERT,
+    # así que el valor devuelto es literalmente el que Postgres acaba de
+    # escribir en la fila, no una copia escrita aparte en Python que
+    # pudiera desincronizarse del dato. En N0 siempre vale 'nueva'.
+    # Se descartó una etiqueta propia ("completo"/"incompleto") porque
+    # por la puerta REST todos los campos son obligatorios, así que ese
+    # caso no puede darse.
+    #
+    # Se mantiene como str (y no como un enum cerrado) porque el valor
+    # viene de la base de datos, que ya lo restringe con su propio CHECK;
+    # repetir la lista aquí crearía una tercera copia de los estados que
+    # habría que mantener sincronizada a mano.
     status: str
