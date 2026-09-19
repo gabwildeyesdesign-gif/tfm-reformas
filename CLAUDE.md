@@ -106,17 +106,18 @@ SOLO REST.
 
 ## Estado actual / pendiente
 
-> **PENDIENTE DE REVISIÓN COMPLETA.** La rama `feat/n0-schemas-leads`
-> tiene 9 commits por delante de `main` y **no se ha integrado**: está
-> esperando la revisión completa de Gabi antes del merge. Todo el
-> trabajo está subido a GitHub y verificado con ejecución real, pero
-> `main` sigue en `90bca98` a propósito. **No hacer merge a `main` sin
-> su confirmación explícita.**
+> **Integrado en `main` el 2026-09-19.** La rama `feat/n0-schemas-leads`
+> (esquemas y POST /leads, autenticación del webhook, RLS, notas
+> técnicas y .gitattributes) se revisó y se fusionó por fast-forward
+> (`git merge --ff-only`, sin merge commit) tras pasar la verificación
+> final: check_webhook_auth_http 15/15, check_leads_endpoint_http 12/12,
+> check_schemas 34/34 y check_rls_estado sin errores.
 >
-> Revisión: https://github.com/gabwildeyesdesign-gif/tfm-reformas/compare/main...feat/n0-schemas-leads
->
-> Cuando lo apruebe:
-> `git checkout main && git merge --ff-only feat/n0-schemas-leads && git push`
+> **Siguiente bloque: POST /calculate-estimate**, en la rama
+> `feat/n0-calculate-estimate`, creada desde `main` y todavía sin
+> trabajo. Se aplica la misma regla que antes: **no hacer merge a
+> `main` sin la confirmación explícita de Gabi**, y siempre con
+> `--ff-only`.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
