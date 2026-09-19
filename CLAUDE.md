@@ -130,6 +130,14 @@ del Session pooler bajo carga, la tabla de excepciones de la Adenda
 (hoy un error no controlado de services/ sale como 500 genérico), y la
 idempotencia frente a reintentos de n8n (D7, limitación asumida en N0).
 
+Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
+(decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
+con TestClient + integración contra un Postgres efímero vía
+testcontainers en Docker, que ya está disponible porque n8n corre en
+Docker localmente) y un workflow mínimo de GitHub Actions. Hasta
+entonces no se escribe ningún test ni se añade ninguna dependencia de
+testing; la verificación sigue siendo con los scripts check_*.py.
+
 ## Para el razonamiento completo de cada decisión
 
 Ver docs/ en este repo — este archivo es un resumen de referencia
@@ -152,6 +160,9 @@ rápida, no sustituye esa documentación. Contiene:
 - Notas_Tecnicas_N0.txt — psycopg2-binary como decisión consciente de
   desarrollo local, y el orden de estados de oportunidades sin
   protección en la base de datos (a decidir con gate-decisions/visits).
+- TFM_Resumen_Sesion_Autenticacion_Webhook_y_Notas_N0.txt — narrativa
+  de la sesión de autenticación del webhook, RLS y notas N0, con las
+  salidas reales de verificación.
 
 ## Esquema de la base de datos: cuál de los dos .sql manda
 

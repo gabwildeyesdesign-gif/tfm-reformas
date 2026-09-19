@@ -1,0 +1,268 @@
+[SUPERADO] PROPUESTA PREVIA A LA FASE 1 — no es el estado final. Lo implementado, con las correcciones de Gabi, está en docs/TFM_Resumen_Sesion_Autenticacion_Webhook_y_Notas_N0.txt
+
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+PLAN DE LA FASE 1: AUTENTICACIÓN DEL WEBHOOK POST /leads
+Secreto compartido en cabecera HTTP, comparado en tiempo constante
+
+Documento de propuesta · Nivel N0 · PENDIENTE DE APROBACIÓN
+
+Este documento recoge el plan propuesto para la Fase 1 ANTES de escribir
+código, para que Gabi lo evalúe. Todavía no se ha tocado ningún archivo
+de código. La elección de la solución (secreto compartido en cabecera,
+comparado con secrets.compare_digest) ya está decidida y no se reabre.
+Lo que sigue son las decisiones de implementación que quedan abiertas
+dentro de esa solución.
+
+Las afirmaciones sobre el comportamiento de FastAPI están comprobadas
+contra el código fuente de la versión instalada en el venv
+(fastapi==0.141.1), no deducidas de la documentación ni de memoria.
+
+
+================================================================
+1. CHOQUES CON LO QUE YA EXISTE (regla: decirlo, no reinterpretar)
+================================================================
+
+1.1  El "patrón de DATABASE_URL" no hace fail fast.
+
+     Hoy app/config.py hace:
+
+         DATABASE_URL = os.getenv("DATABASE_URL")
+
+     Si la variable falta, vale None en silencio y nada falla hasta el
+     primer uso. La petición pide a la vez que WEBHOOK_SECRET "siga el
+     mismo patrón" y que falle claramente al arrancar, y las dos cosas
+     no se pueden cumplir a la vez.
+
+     Propuesta: seguir el patrón en la forma (misma lectura desde .env,
+     mismo archivo, mismo estilo de comentario) y añadir la comprobación
+     de arranque SOLO para WEBHOOK_SECRET. DATABASE_URL no se toca
+     porque no está pedido; queda como sugerencia (apartado 7).
+
+1.2  No existen ni README ni .env.example.
+
+     Propuesta: crear un .env.example nuevo, sin valores reales, que es
+     el sitio convencional para documentar las variables obligatorias.
+     .gitignore ignora ".env" exactamente, así que .env.example sí se
+     subiría a git (es lo que se quiere).
+
+1.3  La Adenda no contempla ningún 401.
+
+     docs/Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt define el
+     contrato de los 5 endpoints y no menciona autenticación (búsqueda
+     real de "401", "auth", "secret", "cabecera", "header" y "token" en
+     docs/: cero resultados). Si POST /leads empieza a devolver 401, el
+     contrato documentado deja de coincidir con el código.
+
+     Propuesta: no tocar la Adenda en esta fase porque no está pedido.
+     PREGUNTA ABIERTA: ¿se añade una línea a la Adenda con el 401?
+
+1.4  scripts/check_leads_endpoint_http.py se rompe con este cambio.
+
+     Ese script hace POST /leads sin cabecera. Después de la Fase 1
+     recibiría 401 en vez de 201. Para que siga sirviendo de regresión
+     hay que añadirle la cabecera a sus peticiones (un cambio pequeño).
+
+     Propuesta: hacerlo como parte de la fase, porque sin ello una
+     verificación que ya existía dejaría de funcionar.
+     PREGUNTA ABIERTA: confirmar que se puede tocar ese script.
+
+1.5  Efecto fuera del repositorio: n8n.
+
+     En cuanto esto se aplique, el webhook de n8n que llama a POST
+     /leads recibirá 401 hasta que su nodo HTTP tenga configurada una
+     credencial de tipo "Header Auth" con nombre X-Webhook-Secret y el
+     mismo valor que WEBHOOK_SECRET del .env. Esta configuración la
+     tiene que hacer Gabi en n8n; no se puede hacer desde el repositorio.
+
+
+================================================================
+2. DECISIÓN A — DÓNDE SE COMPRUEBA EL SECRETO AL ARRANCAR
+================================================================
+
+A1. raise en app/config.py, en el momento de importarse   [RECOMENDADA]
+
+    Contras en este contexto:
+    - Cualquier script que importe app.config exigirá también
+      WEBHOOK_SECRET, aunque no lo use. Hoy son app/db/connection.py
+      y 5 scripts: check_create_lead_service.py,
+      check_exception_handler.py, check_leads_endpoint_http.py,
+      check_pool_transaction_state.py y
+      check_transactional_connection.py. En la práctica no molesta,
+      porque todos leen el mismo .env.
+    - En la Fase 5, los tests tendrán que definir la variable ANTES de
+      importar "app" (una línea en conftest.py).
+
+A2. Comprobar dentro de combined_lifespan (app/main.py)
+
+    Contras:
+    - La regla queda repartida: config.py guarda un posible None y la
+      comprobación vive en main.py.
+    - TestClient solo ejecuta el lifespan si se usa con "with". Un test
+      escrito sin "with" pasaría con el secreto ausente, que es
+      justamente el fallo silencioso que se quiere evitar.
+
+A3. pydantic-settings
+
+    Contras:
+    - Añade una dependencia nueva y un segundo estilo de configuración
+      para una sola variable. Es demasiado para N0.
+
+Motivo de recomendar A1: es la opción que falla antes. uvicorn ni
+siquiera llega a abrir el puerto, y el mensaje de error dice qué
+variable falta y cómo generarla. Detalle: una cadena vacía o solo con
+espacios contará como ausente, porque un secreto vacío equivale a no
+tener secreto.
+
+
+================================================================
+3. DECISIÓN B — CÓMO SE LEE LA CABECERA
+================================================================
+
+B1. fastapi.security.APIKeyHeader(name="X-Webhook-Secret",
+    auto_error=False)                                     [RECOMENDADA]
+
+    Contras:
+    - Es una clase menos conocida que Header(): hay que saber que
+      existe.
+
+B2. fastapi.Header(alias="X-Webhook-Secret")
+
+    Contras:
+    - Funciona, pero /docs no la muestra como un esquema de seguridad,
+      así que probar a mano desde el navegador es más incómodo.
+
+B3. Middleware global
+
+    Contras:
+    - Protegería TODAS las rutas, incluidas /health, /health/db y /mcp,
+      y eso no es lo pedido. Descartada.
+
+Motivo de recomendar B1: en /docs aparece el botón "Authorize", donde
+se pega el secreto una vez y se puede probar POST /leads desde el
+navegador.
+
+Hecho verificado en el código fuente de fastapi 0.141.1
+(fastapi/security/api_key.py): si falta la cabecera, APIKeyHeader ya
+responde 401 con la cabecera WWW-Authenticate: APIKey. En versiones
+antiguas de FastAPI respondía 403, y por eso se ha comprobado en vez de
+suponerlo.
+
+Aun así, se usará auto_error=False y el 401 lo lanzará nuestro propio
+código. Así "falta la cabecera" y "la cabecera es incorrecta" dan
+exactamente la misma respuesta, y un atacante no puede distinguir los
+dos casos.
+
+
+================================================================
+4. DETALLE DE SEGURIDAD: compare_digest Y LOS CARACTERES NO ASCII
+================================================================
+
+Por qué compare_digest y no ==: "==" entre cadenas deja de comparar en
+el primer carácter distinto, así que tarda un poco más cuanto más
+prefijo acierta el atacante. Midiendo esos tiempos con muchas peticiones
+se puede reconstruir el secreto carácter a carácter (ataque de tiempo).
+compare_digest tarda lo mismo acierte lo que acierte.
+
+La trampa: secrets.compare_digest con dos str lanza TypeError si alguno
+contiene caracteres no ASCII. Starlette decodifica las cabeceras como
+latin-1, así que cualquiera podría enviar "X-Webhook-Secret: ñ". Ese
+TypeError no lo captura nadie y acabaría en el manejador global de
+app/main.py. Resultado:
+
+  - respuesta 500 en vez de 401;
+  - una fila nueva en la tabla logs por cada petición, lo que permitiría
+    a cualquiera llenar la tabla desde fuera.
+
+Solución propuesta: convertir los dos valores a bytes UTF-8 antes de
+compararlos. compare_digest con bytes acepta cualquier contenido.
+Quedará explicado en un comentario dentro del código.
+
+
+================================================================
+5. ARCHIVOS QUE SE TOCARÍAN
+================================================================
+
+1. app/api/security.py  (NUEVO)
+   La dependencia verificar_webhook_secret. Vive en la capa de
+   adaptador (app/api/) porque importa fastapi, y services/ nunca debe
+   hacerlo.
+   Nombres descartados: dependencies.py (demasiado genérico) y auth.py
+   (sugiere usuarios y login, y aquí no hay).
+
+2. app/config.py
+   WEBHOOK_SECRET más la comprobación de arranque (decisión A1).
+
+3. app/api/leads.py
+   dependencies=[Depends(verificar_webhook_secret)] en el decorador.
+   Va en el decorador y no como parámetro de la función porque la
+   función no necesita el valor del secreto, solo que la comprobación
+   se haga antes.
+
+4. .env  (NO se sube a git)
+   Se le añade un WEBHOOK_SECRET real generado con
+   secrets.token_urlsafe(32), sin mostrar el valor en el chat.
+
+5. .env.example  (NUEVO)
+   Las dos variables (DATABASE_URL y WEBHOOK_SECRET) con valores de
+   ejemplo que no son reales, y el comando para generar el secreto.
+
+6. scripts/check_webhook_auth_http.py  (NUEVO)
+   Verificación por HTTP real, con el mismo esqueleto que
+   check_leads_endpoint_http.py.
+
+7. scripts/check_leads_endpoint_http.py
+   Añadirle la cabecera (choque 1.4).
+
+8. CLAUDE.md
+   Un gotcha con la cabecera obligatoria y un ejemplo de curl.
+
+
+================================================================
+6. VERIFICACIÓN POR EJECUCIÓN REAL
+================================================================
+
+6.1  scripts/check_webhook_auth_http.py arranca uvicorn SIN --reload
+     (uvicorn.Server en un hilo, como el script existente) y hace
+     peticiones HTTP reales con requests:
+
+       - sin cabecera                    -> 401
+       - cabecera con valor incorrecto   -> 401
+       - cabecera con carácter "ñ"       -> 401 (no 500), y no se añade
+                                            ninguna fila a logs
+       - cabecera correcta               -> 201, y se crean las 3 filas
+                                            (se limpian al final)
+       - ninguna petición rechazada crea filas en ninguna tabla
+
+6.2  Fail fast: arrancar uvicorn con WEBHOOK_SECRET vacío en el entorno
+     (load_dotenv no sobrescribe una variable que ya esté definida) y
+     mostrar que el servidor se niega a arrancar, con el mensaje de
+     error real.
+
+6.3  Regresión: volver a ejecutar scripts/check_leads_endpoint_http.py,
+     ya con la cabecera, y comprobar que sigue pasando entero.
+
+Todo quedará en el árbol de trabajo, SIN commit, hasta que Gabi lo
+revise.
+
+
+================================================================
+7. SUGERENCIAS NO INCLUIDAS EN LA FASE 1
+================================================================
+
+- Aplicar el mismo fail fast a DATABASE_URL (hoy, si falta, vale None
+  en silencio).
+- Exigir una longitud mínima al secreto al arrancar (por ejemplo, 32
+  caracteres), para que no se pueda configurar uno trivial.
+- Actualizar la Adenda con el 401 de POST /leads (pregunta 1.3).
+
+
+================================================================
+8. LO QUE SE PIDE CONFIRMAR ANTES DE EMPEZAR
+================================================================
+
+  [ ] Decisión A: A1 (raise en app/config.py al importarse)
+  [ ] Decisión B: B1 (APIKeyHeader con auto_error=False)
+  [ ] 1.3: NO tocar la Adenda en esta fase (o sí, si se prefiere)
+  [ ] 1.4: SÍ tocar scripts/check_leads_endpoint_http.py

@@ -1,0 +1,788 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+RESUMEN DE SESIÓN: AUTENTICACIÓN DEL WEBHOOK Y NOTAS N0
+Fases 1 a 4 de la revisión arquitectónica (la Fase 5 queda anotada, no
+implementada)
+
+Documento de contexto de proyecto · Nivel N0 · 2026-09-18
+
+Rama: feat/n0-schemas-leads. NADA de esta sesión está commiteado ni
+fusionado: todo queda en el árbol de trabajo para revisión de Gabi.
+
+Las salidas de verificación de este documento están pegadas TAL CUAL,
+insertadas automáticamente desde los archivos donde se capturaron, no
+reescritas a mano. El valor de WEBHOOK_SECRET no aparece en ninguna
+(comprobado con grep antes de insertarlas).
+
+
+================================================================
+ARCHIVOS TOCADOS EN LA SESIÓN
+================================================================
+
+Nuevos:
+  app/api/security.py
+  .env.example
+  scripts/check_webhook_auth_http.py
+  scripts/check_rls_estado.py
+  docs/Plan_Fase1_Autenticacion_Webhook.txt   (propuesta previa a la Fase 1)
+  docs/Decision_RLS_N0.txt
+  docs/Notas_Tecnicas_N0.txt
+  docs/TFM_Resumen_Sesion_Autenticacion_Webhook_y_Notas_N0.txt  (este)
+
+Modificados:
+  app/config.py
+  app/api/leads.py
+  app/schemas/leads.py
+  app/schemas/common.py
+  scripts/check_leads_endpoint_http.py
+  docs/Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt
+  CLAUDE.md
+
+Fuera de git:
+  .env  — se añadió WEBHOOK_SECRET=<43 caracteres de
+          secrets.token_urlsafe(32)>. El valor no se mostró en la sesión.
+
+
+================================================================
+FASE 1 — AUTENTICACIÓN DEL WEBHOOK POST /leads
+================================================================
+
+QUÉ SE IMPLEMENTÓ
+
+- app/config.py: WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET"), lectura
+  simple sin raise, igual que DATABASE_URL (corrección de Gabi a la
+  decisión A del plan).
+- app/api/security.py:
+    · Comprobación a nivel de módulo: si WEBHOOK_SECRET es None o solo
+      espacios, RuntimeError al importar. Solo afecta al servidor
+      (main.py -> api/leads.py -> api/security.py); los scripts que
+      solo importan app.config no se ven afectados.
+    · APIKeyHeader(name="X-Webhook-Secret", auto_error=False).
+    · Dependencia verificar_webhook_secret: 401 si falta o si no
+      coincide, con respuesta idéntica en ambos casos; comparación con
+      secrets.compare_digest sobre bytes UTF-8.
+- app/api/leads.py: dependencies=[Depends(verificar_webhook_secret)] en
+  el decorador de POST /leads.
+- .env.example con DATABASE_URL, WEBHOOK_SECRET (y cómo generarlo) y
+  los opcionales DB_POOL_MIN/MAX comentados.
+- scripts/check_leads_endpoint_http.py: ahora envía la cabecera.
+- Adenda: requisito de cabecera bajo la tabla de contrato y nueva
+  subsección 5.1 con la fila del 401.
+- CLAUDE.md: dos gotchas (cabecera obligatoria con ejemplo de curl.exe;
+  WEBHOOK_SECRET obligatorio para arrancar).
+
+DECISIONES TOMADAS SOBRE LA MARCHA (no estaban en el encargo)
+
+1. La Adenda NO tenía tabla de excepciones por endpoint. Su sección 5
+   solo recoge la política general y remite a "un mensaje de sesión"
+   pendiente de trasladar al PDD. En vez de inventar las demás filas,
+   se creó la subsección 5.1 con una tabla que contiene SOLO la fila
+   del 401 y una nota que dice que la tabla completa sigue pendiente.
+   También se añadió un párrafo bajo la tabla de contrato (sección 1)
+   que menciona la cabecera obligatoria, porque es parte de la entrada
+   del endpoint.
+2. La dependencia es async def (el resto del proyecto usa def). Motivo:
+   no hace E/S bloqueante, así que no necesita ocupar un hilo del pool
+   de FastAPI en cada petición. Explicado en un comentario.
+3. Se usó Security(...) en lugar de Depends(...) para inyectar
+   APIKeyHeader dentro de la dependencia, para que /docs muestre el
+   botón "Authorize". En el endpoint se usa Depends, como pedía el
+   encargo.
+4. Mensaje del 401: {"detail": "No autorizado"} (en español, como el
+   resto de mensajes propios del proyecto) con WWW-Authenticate: APIKey
+   (exigido por RFC 9110 en toda respuesta 401).
+5. El script de verificación incluye comprobaciones extra, además de
+   los 5 casos pedidos:
+     - /health sigue abierto sin cabecera;
+     - sin cabecera y con cuerpo inválido -> 401 (demuestra que la
+       autenticación va ANTES que la validación, que el comentario de
+       leads.py afirma);
+     - caso 6: fail fast real (uvicorn en subproceso con
+       WEBHOOK_SECRET="   ");
+     - caso 7: con el secreto vacío, importar app.config sigue
+       funcionando (demuestra el motivo de la corrección de Gabi).
+6. Primera ejecución del script: los casos 1-5 pasaron, pero el caso 6
+   falló por un error DEL PROPIO SCRIPT, no de la funcionalidad. En
+   Windows, el subproceso escribía su stderr en cp1252 y el script lo
+   leía como UTF-8 (UnicodeDecodeError). Se corrigió pasando
+   PYTHONIOENCODING=utf-8 al subproceso (documentado en un comentario
+   del script) y se volvió a ejecutar el script ENTERO. La salida de
+   abajo es la de esa segunda ejecución.
+
+VERIFICACIÓN — scripts/check_webhook_auth_http.py (salida real)
+
+    ==============================================================================
+    ARRANQUE DEL SERVIDOR (uvicorn.Server, sin --reload)
+    ==============================================================================
+      Servidor arriba en 6.46s
+      GET /health (sin cabecera) -> 200 {'status': 'ok'}
+        [OK]    /health sigue accesible sin cabecera  
+
+      Filas al inicio (clientes, leads, oportunidades, logs): (0, 0, 0, 0)
+
+    ==============================================================================
+    CASO 1 - SIN cabecera X-Webhook-Secret
+    ==============================================================================
+      <- HTTP 401
+      <- WWW-Authenticate: APIKey
+      <- Cuerpo: {"detail":"No autorizado"}
+        [OK]    HTTP 401  (401)
+        [OK]    Incluye WWW-Authenticate (exigido por RFC 9110 en un 401)  
+
+    ==============================================================================
+    CASO 2 - Cabecera con valor INCORRECTO
+    ==============================================================================
+      <- HTTP 401
+      <- WWW-Authenticate: APIKey
+      <- Cuerpo: {"detail":"No autorizado"}
+        [OK]    HTTP 401  (401)
+        [OK]    Respuesta IDENTICA a la del caso 1 (no se distingue falta/incorrecta)  
+
+      Extra: sin cabecera + cuerpo invalido -> HTTP 401 {"detail":"No autorizado"}
+        [OK]    La autenticacion se evalua antes que la validacion del cuerpo (401, no 422)  (401)
+
+    ==============================================================================
+    CASO 3 - Cabecera con caracter NO ASCII ('ñ')
+    ==============================================================================
+      <- HTTP 401
+      <- WWW-Authenticate: APIKey
+      <- Cuerpo: {"detail":"No autorizado"}
+        [OK]    HTTP 401 (y no 500)  (401)
+        [OK]    No se escribio ninguna fila en logs  (0 -> 0)
+
+    ==============================================================================
+    CASO 5 - Las peticiones rechazadas no escribieron NADA
+    ==============================================================================
+      Filas tras los rechazos: (0, 0, 0, 0)
+        [OK]    Ninguna tabla cambio tras las 4 peticiones rechazadas  ((0, 0, 0, 0) -> (0, 0, 0, 0))
+
+    ==============================================================================
+    CASO 4 - Cabecera CORRECTA
+    ==============================================================================
+      <- HTTP 201
+      <- Cuerpo: {"lead_id":21,"cliente_id":23,"oportunidad_id":30,"status":"nueva"}
+        [OK]    HTTP 201 Created  (201)
+      Filas despues: (1, 1, 1, 0)
+        [OK]    Se creo exactamente 1 cliente, 1 lead y 1 oportunidad (y 0 logs)  ((0, 0, 0, 0) -> (1, 1, 1, 0))
+
+    ==============================================================================
+    APAGADO DEL SERVIDOR
+    ==============================================================================
+      Apagado en 0.166s   hilo vivo: False
+      Limpieza hecha. Filas (clientes, leads, oportunidades, logs): (0, 0, 0, 0)
+
+    ==============================================================================
+    CASO 6 - FAIL FAST: uvicorn con WEBHOOK_SECRET vacio
+    ==============================================================================
+      Proceso terminado en 0.70s con codigo de salida 1
+      Ultimas lineas de stderr:
+        |   File "C:\Proyectos\tfm-reformas\app\api\security.py", line 66, in <module>
+        |     raise RuntimeError(
+        | RuntimeError: WEBHOOK_SECRET no está definido (o está vacío) en el .env. Es obligatorio: autentica las llamadas de n8n a POST /leads. Genera uno con:  python -c "import secrets; print(secrets.token_urlsafe(32))"  y añádelo al .env como WEBHOOK_SECRET=<valor>. Ver .env.example.
+        [OK]    uvicorn termina con error (codigo != 0)  (codigo 1)
+        [OK]    El error nombra WEBHOOK_SECRET  
+        [OK]    Nunca llego a abrir el puerto  
+
+    ==============================================================================
+    CASO 7 - Con WEBHOOK_SECRET vacio, importar app.config NO falla
+    ==============================================================================
+      codigo 0  stdout: import ok; DATABASE_URL definido: True  stderr: ''
+        [OK]    Los scripts que solo usan app.config no necesitan el secreto  
+
+    ==============================================================================
+    RESULTADO: 15 comprobaciones correctas, 0 fallos
+    Todas las comprobaciones han pasado.
+    exit=0
+
+VERIFICACIÓN — regresión: scripts/check_leads_endpoint_http.py con
+la cabecera (salida real)
+
+    ==============================================================================
+    ARRANQUE DEL SERVIDOR (uvicorn.Server, sin --reload)
+    ==============================================================================
+      Servidor arriba en 10.87s
+      GET /health    -> 200 {'status': 'ok'}
+      GET /health/db -> 200 {'status': 'ok', 'clientes_count': 0}
+
+    ==============================================================================
+    PRUEBA 1 - POST /leads con datos VALIDOS (HTTP real)
+    ==============================================================================
+      Filas antes (clientes, leads, oportunidades): (0, 0, 0)
+      Enviando POST http://127.0.0.1:8010/leads
+      <- HTTP 201
+      <- Cabecera content-type: application/json
+      <- Cuerpo: {"lead_id":22,"cliente_id":24,"oportunidad_id":31,"status":"nueva"}
+        [OK]    Codigo HTTP 201 Created  (201)
+        [OK]    La respuesta trae las 4 claves del contrato  (['cliente_id', 'lead_id', 'oportunidad_id', 'status'])
+        [OK]    status == 'nueva'  
+        [OK]    Los 3 ids son enteros  
+
+      Filas despues: (1, 1, 1)
+        [OK]    Se creo exactamente 1 cliente, 1 lead y 1 oportunidad  ((0, 0, 0) -> (1, 1, 1))
+
+      Fila real escrita por la peticion HTTP:
+        email                  = 'http-ok@example.com'
+        canal                  = 'formulario_web'
+        fotos_urls             = ['leads-temp/tokHTTP/f1.jpg']
+        datos_estructurados    = {'m2': 14.0, 'tipo_reforma': 'cocina', 'nivel_acabados': 'alto', 'incluye_cambios_estructurales': True}
+        tipo_reforma           = 'cocina'
+        estado                 = 'nueva'
+        datos_completos        = False
+        [OK]    La fila de la base de datos corresponde al email enviado  
+        [OK]    tipo_reforma llego intacto hasta la columna  
+
+    ==============================================================================
+    PRUEBA 2 - POST /leads con EMAIL INVALIDO (debe dar 422 sin tocar la BD)
+    ==============================================================================
+      Filas antes: (1, 1, 1)
+      Enviando POST con email = 'esto-no-es-un-email'
+      <- HTTP 422
+      <- Cuerpo: {"detail":[{"type":"value_error","loc":["body","email"],"msg":"value is not a valid email address: An email address must have an @-sign.","input":"esto-no-es-un-email","ctx":{"reason":"An email address must have an @-sign."}}]}
+        [OK]    Codigo HTTP 422 Unprocessable Entity  (422)
+        [OK]    El error apunta al campo 'email'  (['body', 'email'])
+
+      Filas despues: (1, 1, 1)
+        [OK]    NO se creo NINGUNA fila (la validacion corta antes de la BD)  ((1, 1, 1) -> (1, 1, 1))
+
+    ==============================================================================
+    PRUEBA 3 - POST /leads con tipo_reforma CON ENIE (422, no llega al CHECK)
+    ==============================================================================
+      <- HTTP 422
+      <- Cuerpo: {"detail":[{"type":"enum","loc":["body","tipo_reforma"],"msg":"Input should be 'bano', 'cocina', 'integral_vivienda' or 'parcial_acabados'","input":"baño","ctx":{"expected":"'bano', 'cocina', 'integral_vivienda' or 'parcial_acabados'"}}]}
+        [OK]    Codigo HTTP 422  (422)
+        [OK]    Tampoco se creo ninguna fila  
+
+    ==============================================================================
+    APAGADO DEL SERVIDOR
+    ==============================================================================
+      Apagado en 0.223s   hilo vivo: False
+
+      Limpieza de filas de prueba:
+      Filas (clientes, leads, oportunidades): (0, 0, 0)
+
+    ==============================================================================
+    RESULTADO: 12 comprobaciones correctas, 0 fallos
+    Todas las comprobaciones han pasado.
+    exit=0
+
+
+================================================================
+FASE 2 — ESTADO REAL DE RLS
+================================================================
+
+QUÉ SE INVESTIGÓ
+
+scripts/check_rls_estado.py consulta la base de datos real: atributos
+del rol actual, propietario y RLS/FORCE de cada tabla, número de
+políticas, GRANT de anon/authenticated, privilegios por defecto para
+tablas nuevas y una prueba empírica con SET LOCAL ROLE anon dentro de
+una transacción que termina siempre en ROLLBACK. Con el resultado se
+escribió docs/Decision_RLS_N0.txt. No se añadió ninguna CREATE POLICY.
+
+RESULTADO
+
+- Hipótesis confirmada: el backend se conecta como "postgres", que es
+  propietario de las 8 tablas (sin FORCE) Y tiene rolbypassrls = true.
+  Se salta RLS por dos caminos independientes. No es superusuario.
+- PREMISA CORREGIDA: el encargo decía que RLS "no bloquea nada ahora
+  mismo". Es cierto para el backend, pero no en general. anon y
+  authenticated tienen GRANT completo sobre las 8 tablas, y RLS es lo
+  ÚNICO que hoy les impide leer y escribir (anon ve 0 de 5 filas y su
+  INSERT falla con 42501). El "segundo consumidor con rol restringido"
+  ya existe: la Data API de Supabase con la anon key. El documento lo
+  explica como "cierre por defecto de la puerta pública".
+
+DECISIONES TOMADAS SOBRE LA MARCHA
+
+1. Se amplió el script más allá de las dos consultas pedidas (FORCE,
+   políticas, GRANT de la API, privilegios por defecto, prueba con SET
+   ROLE), porque sin ellas no se podía afirmar qué protege RLS hoy,
+   que es lo que pedía el documento.
+2. La afirmación del documento de que Supabase vuelve a dar los GRANT
+   a cada tabla nueva se comprobó contra pg_default_acl en vez de darse
+   por sabida, y esa consulta se añadió al script para que sea
+   reproducible. La salida de abajo es la de la ejecución posterior a
+   ese añadido.
+3. El documento ocupa algo más de una página: se priorizó incluir el
+   razonamiento completo (defensa oral) frente a la extensión.
+4. Límite declarado: desde la base de datos no se puede saber si la
+   Data API está activada para public (es una opción del panel de
+   Supabase).
+
+VERIFICACIÓN — scripts/check_rls_estado.py (salida real)
+
+
+    ==============================================================================
+    1. ROL CON EL QUE SE CONECTA EL BACKEND (el de DATABASE_URL)
+    ==============================================================================
+      rolname        = postgres
+      rolsuper       = False
+      rolbypassrls   = True
+      rolcreaterole  = True
+      rolinherit     = True
+
+    ==============================================================================
+    2. TABLAS DE public: PROPIETARIO, RLS ACTIVADO Y RLS FORZADO
+    ==============================================================================
+      tabla            propietario  es_prop  miembro  rls_on  rls_forzado
+      clientes         postgres     True     True     True    False
+      leads            postgres     True     True     True    False
+      logs             postgres     True     True     True    False
+      oportunidades    postgres     True     True     True    False
+      presupuestos     postgres     True     True     True    False
+      reglas_negocio   postgres     True     True     True    False
+      tarifas_base     postgres     True     True     True    False
+      visitas          postgres     True     True     True    False
+
+    ==============================================================================
+    3. POLITICAS RLS EXISTENTES (CREATE POLICY) EN public
+    ==============================================================================
+      Numero de politicas: 0
+
+    ==============================================================================
+    4. ROLES DE LA API PUBLICA DE SUPABASE Y SUS PERMISOS
+    ==============================================================================
+      Roles de la API presentes en la base de datos:
+        anon           rolbypassrls = False
+        authenticated  rolbypassrls = False
+        authenticator  rolbypassrls = False
+        service_role   rolbypassrls = True
+
+      GRANT de anon y authenticated sobre cada tabla (sin contar RLS):
+        tabla            rol            SELECT INSERT UPDATE DELETE
+        clientes         anon           True   True   True   True
+        clientes         authenticated  True   True   True   True
+        leads            anon           True   True   True   True
+        leads            authenticated  True   True   True   True
+        logs             anon           True   True   True   True
+        logs             authenticated  True   True   True   True
+        oportunidades    anon           True   True   True   True
+        oportunidades    authenticated  True   True   True   True
+        presupuestos     anon           True   True   True   True
+        presupuestos     authenticated  True   True   True   True
+        reglas_negocio   anon           True   True   True   True
+        reglas_negocio   authenticated  True   True   True   True
+        tarifas_base     anon           True   True   True   True
+        tarifas_base     authenticated  True   True   True   True
+        visitas          anon           True   True   True   True
+        visitas          authenticated  True   True   True   True
+
+      Privilegios por defecto para TABLAS NUEVAS en public:
+        creadas por postgres        -> {postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}
+        creadas por supabase_admin  -> {postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+
+      Ajustes del rol authenticator (configuracion de PostgREST):
+        session_preload_libraries=supautils, safeupdate
+        statement_timeout=8s
+        lock_timeout=8s
+
+    ==============================================================================
+    5. PRUEBA EMPIRICA: QUE VE Y QUE PUEDE ESCRIBIR EL ROL anon
+    ==============================================================================
+      Como postgres  : SELECT COUNT(*) FROM reglas_negocio -> 5
+      Rol cambiado a: anon
+      Como anon      : SELECT COUNT(*) FROM reglas_negocio -> 0
+      Como anon      : INSERT INTO clientes -> RECHAZADO
+                       SQLSTATE 42501: ERROR:  new row violates row-level security policy for table "clientes"
+      Tras ROLLBACK, rol actual: postgres
+
+    ==============================================================================
+    CONCLUSION (calculada a partir de los datos de arriba)
+    ==============================================================================
+      Tablas en public                      : 8
+      Todas con RLS activado                : True
+      Ninguna con RLS forzado (FORCE)       : True
+      Politicas definidas                   : 0
+      postgres es propietario de todas     : True
+      postgres tiene rolbypassrls          : True
+      postgres es superusuario             : False
+    exit=0
+
+
+================================================================
+FASE 3 — DOCUMENTACIÓN DESACTUALIZADA
+================================================================
+
+QUÉ SE HIZO
+
+grep de "pendiente|PENDIENTE|provisional|PROVISIONAL" en app/: 4
+resultados. Cada uno se contrastó con docs/ y con el estado real:
+
+  1. app/schemas/leads.py, campo status (decisión D4)
+     Decía "Queda pendiente de cerrar (decisión D4)". D4 está CERRADA
+     en TFM_Decisiones_Modelo_Datos_Leads.txt. CORREGIDO: ahora cita D4
+     como resuelta, explica RETURNING id, estado y por qué se descartó
+     una etiqueta propia, y por qué el tipo sigue siendo str.
+
+  2. app/schemas/leads.py, campo email
+     Decía "email-validator ... PENDIENTE de añadir a
+     requirements.txt". requirements.txt ya fija
+     email-validator==2.3.0. CORREGIDO.
+
+  3. app/schemas/leads.py, campo oportunidad_id
+     Decía "PENDIENTE: quien rellene este valor será
+     leads_service.py en el bloque siguiente". leads_service.py ya lo
+     rellena (RETURNING id), y la prueba HTTP de esta sesión devolvió
+     oportunidad_id. CORREGIDO.
+
+  4. app/schemas/common.py, MAX_FOTOS_LEAD
+     MIXTO. "PROVISIONAL" sigue siendo cierto: services/ todavía no lee
+     reglas_negocio.max_fotos_lead (limitación documentada en
+     TFM_Decisiones_Modelo_Datos_Leads.txt, apartado 6). Pero el
+     comentario afirmaba "VERIFICADO: esa fila NO EXISTE todavía,
+     reglas_negocio solo tiene 4 claves", y eso es FALSO hoy: la
+     consulta real devuelve la clave max_fotos_lead = 5.00 (id 5,
+     fecha 2026-09-17). CORREGIDO solo lo falso: se mantiene
+     PROVISIONAL, con referencia al documento y el aviso de
+     Decimal('5.00').
+
+DECISIONES TOMADAS SOBRE LA MARCHA
+
+1. El encargo hablaba del "docstring" del campo status. En el código
+   era un comentario (#), no un docstring. Se corrigió ese comentario.
+2. Dos afirmaciones de los nuevos comentarios se comprobaron antes de
+   escribirlas: que oportunidades.estado tiene su propio CHECK (en
+   schema_actual.sql) y que, sin email-validator, Pydantic falla al
+   construir el modelo (código de pydantic/networks.py:
+   import_email_validator() se llama en __get_pydantic_core_schema__).
+
+VERIFICACIÓN — grep posterior (salida real)
+
+    $ grep -rn -E "pendiente|PENDIENTE|provisional|PROVISIONAL" app --include=*.py   (DESPUES de corregir)
+    app/schemas/common.py:71:# PROVISIONAL — PENDIENTE (limitación documentada en
+
+VERIFICACIÓN — scripts/check_schemas.py tras los cambios (salida real)
+
+
+    === A. LO QUE DEBE ACEPTARSE ===
+      [OK]    Lead completo con 2 fotos
+      [OK]    Lead SIN fotos (campo ausente) -> fotos = []
+      [OK]    Lead con fotos = [] explicita
+      [OK]    Lead con exactamente MAX_FOTOS_LEAD fotos
+      [OK]    m2 como texto "45.5" -> Pydantic lo convierte a float
+      [OK]    Los 4 tipos y 3 niveles reales de tarifas_base se aceptan
+      [OK]    PhotoUploadSlot valido
+      [OK]    LeadPhotoUploadResponse sin slots -> lista vacia
+      [OK]    LeadCreateResponse con los 3 ids enteros + status
+
+    === B. LO QUE DEBE RECHAZARSE ===
+      [OK]    m2 = 0
+                -> 1 validation error for LeadCreate m2   Input should be greater than 0
+      [OK]    m2 negativo (-5)
+                -> 1 validation error for LeadCreate m2   Input should be greater than 0
+      [OK]    tipo_reforma = "bano" CON ENIE ("bano" mal escrito)
+                -> rror for LeadCreate tipo_reforma   Input should be 'bano', 'cocina', 'integral_vivienda' or 'parcial_acabados'
+      [OK]    nivel_acabados = "basico" CON TILDE
+                -> 1 validation error for LeadCreate nivel_acabados   Input should be 'basico', 'medio' or 'alto'
+      [OK]    tipo_reforma inventado ("tejado")
+                -> rror for LeadCreate tipo_reforma   Input should be 'bano', 'cocina', 'integral_vivienda' or 'parcial_acabados'
+      [OK]    email sin arroba
+                -> idation error for LeadCreate email   value is not a valid email address: An email address must have an @-sign.
+      [OK]    email vacio
+                -> idation error for LeadCreate email   value is not a valid email address: An email address must have an @-sign.
+      [OK]    email de mas de 150 caracteres
+                -> 1 validation error for LeadCreate email   Value should have at most 150 items after validation, not 157
+      [OK]    nombre vacio
+                -> 1 validation error for LeadCreate nombre   String should have at least 1 character
+      [OK]    nombre de mas de 150 caracteres
+                -> 1 validation error for LeadCreate nombre   String should have at most 150 characters
+      [OK]    telefono de mas de 30 caracteres
+                -> 1 validation error for LeadCreate telefono   String should have at most 30 characters
+      [OK]    6 fotos (una mas del maximo)
+                -> 1 validation error for LeadCreate fotos   List should have at most 5 items after validation, not 6
+      [OK]    falta incluye_cambios_estructurales
+                -> 1 validation error for LeadCreate incluye_cambios_estructurales   Field required
+      [OK]    falta lead_token
+                -> 1 validation error for LeadCreate lead_token   Field required
+      [OK]    lead_token vacio
+                -> 1 validation error for LeadCreate lead_token   String should have at least 1 character
+      [OK]    campo de mas: "telefono_movil" (extra=forbid)
+                -> 1 validation error for LeadCreate telefono_movil   Extra inputs are not permitted
+      [OK]    m2 no numerico ('mucho')
+                -> 1 validation error for LeadCreate m2   Input should be a valid number, unable to parse string as a number
+      [OK]    PhotoUploadSlot con expires_in = 0
+                -> 1 validation error for PhotoUploadSlot expires_in   Input should be greater than 0
+      [OK]    LeadPhotoUploadResponse con 6 slots
+                -> ation error for LeadPhotoUploadResponse photo_slots   List should have at most 5 items after validation, not 6
+      [OK]    LeadCreateResponse con lead_id no entero
+                -> n error for LeadCreateResponse lead_id   Input should be a valid integer, unable to parse string as an integer
+      [OK]    LeadCreateResponse SIN oportunidad_id (campo obligatorio)
+                -> 1 validation error for LeadCreateResponse oportunidad_id   Field required
+      [OK]    LeadCreateResponse con oportunidad_id = None
+                -> 1 validation error for LeadCreateResponse oportunidad_id   Input should be a valid integer
+      [OK]    LeadCreateResponse con oportunidad_id no entero
+                ->  for LeadCreateResponse oportunidad_id   Input should be a valid integer, unable to parse string as an integer
+
+    === C. COMPROBACIONES DE COMPORTAMIENTO ===
+      [OK]    default_factory: cada lead tiene su PROPIA lista (b.fotos sigue vacia)
+      [OK]    Al serializar a JSON los enums salen como texto plano:
+                tipo_reforma='bano' nivel_acabados='medio'
+
+    ============================================================
+    RESULTADO: 34 comprobaciones correctas, 0 fallos
+    Todas las comprobaciones han pasado.
+    exit=0
+
+Además, check_webhook_auth_http.py y check_leads_endpoint_http.py (Fase
+1) importan estos mismos esquemas en el servidor real.
+
+
+================================================================
+FASE 4 — NOTAS TÉCNICAS (sin cambios de código)
+================================================================
+
+QUÉ SE HIZO
+
+docs/Notas_Tecnicas_N0.txt con dos notas:
+  A. psycopg2-binary frente a psycopg2: decisión consciente para
+     desarrollo local, con alternativas y condición de revisión.
+  B. Nada impide saltarse el orden de estados de oportunidades:
+     opciones a decidir al construir POST /gate-decisions y POST
+     /visits, igual que D7.
+
+DECISIONES Y HALLAZGOS SOBRE LA MARCHA
+
+1. La recomendación oficial se comprobó en la documentación actual de
+   psycopg (psycopg.org/docs/install.html), no de memoria.
+2. Se verificó que el aviso de conflicto de libssl aplica de verdad en
+   este proyecto: en el proceso del servidor conviven el OpenSSL de
+   Python y el libssl-3 incluido en psycopg2_binary.libs, con hilos y
+   SSL hacia Supabase. No se ha observado ningún fallo; se documenta
+   como riesgo real, no teórico.
+3. La etiqueta "D8" NO existe en docs/. El orden de estados está en
+   TFM_Decisiones_Modelo_Datos_Leads.txt, sección 2, "ORDEN DE LOS
+   ESTADOS — RESUELTO Y CERRADO". La nota cita esa sección y aclara
+   que es lo que la revisión llamó D8; no se ha puesto la etiqueta D8
+   en los documentos existentes.
+4. Matiz técnico añadido: un CHECK, compuesto o no, NO puede proteger
+   transiciones, porque solo ve la fila nueva y no el valor anterior.
+   Las opciones reales son un trigger BEFORE UPDATE, una guarda
+   en services/ (UPDATE ... WHERE estado = <origen> y comprobar
+   rowcount) o aceptar el riesgo. Se documentaron las tres.
+5. Se corrigió antes de cerrar una afirmación no demostrada del
+   borrador ("el módulo ssl lo arrastra fastmcp"): la traza de imports
+   no lo demostraba, así que la nota dice solo lo verificado.
+
+VERIFICACIÓN — evidencias reales usadas en las notas
+
+    $ triggers en public (information_schema.triggers)
+      []
+    $ CHECK de oportunidades
+      chk_oportunidades_tipo_reforma -> CHECK ((((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying])::text[])) OR (tipo_reforma IS NULL)))
+      oportunidades_estado_check -> CHECK (((estado)::text = ANY ((ARRAY['nueva'::character varying, 'cualificada'::character varying, 'visita_agendada'::character varying, 'presupuesto_enviado'::character varying, 'ganada'::character varying, 'perdida'::character varying])::text[])))
+      oportunidades_prioridad_check -> CHECK (((prioridad)::text = ANY ((ARRAY['baja'::character varying, 'media'::character varying, 'alta'::character varying])::text[])))
+    $ librerias en el proceso del servidor
+      ssl de Python cargado: True -> OpenSSL 3.0.16 11 Feb 2025
+      libpq que usa psycopg2: 180004
+      psycopg2_binary.libs -> ['libcrypto-3-x64-c1e69c503b8c5d65b13a1737b1a377b0.dll', 'libpq-57aee3db831886809f66008e8c98c08b.dll', 'libssl-3-x64-e8b9c47c1fb3f52edd82b1663f074db2.dll']
+    exit=0
+
+    $ grep -rn -i "update" app --include=*.py
+    app/db/connection.py:95:    ATENCIÓN: esta función NO hace commit(). Cualquier INSERT, UPDATE o
+    app/services/leads_service.py:70:        # ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email es una
+    app/services/leads_service.py:91:            ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+    app/services/leads_service.py:185:                datos_completos, estado, created_at, updated_at
+
+
+================================================================
+FASE 5 — ANOTADA COMO PENDIENTE (no implementada)
+================================================================
+
+Se añadió a CLAUDE.md, en "Estado actual / pendiente", que pytest
+(unitarias mockeadas + integración con Postgres efímero vía
+testcontainers) y el workflow de GitHub Actions quedan pendientes hasta
+después de POST /calculate-estimate. No se ha escrito ningún test ni se
+ha añadido ninguna dependencia.
+
+
+================================================================
+ACCIÓN NECESARIA FUERA DEL REPOSITORIO
+================================================================
+
+n8n: el nodo HTTP que llama a POST /leads necesita una credencial
+"Header Auth" con nombre X-Webhook-Secret y el valor de WEBHOOK_SECRET
+del .env. Hasta entonces, el webhook real recibirá 401.
+
+
+================================================================
+SUGERENCIAS NO IMPLEMENTADAS
+================================================================
+
+Fase 1
+- Aplicar el mismo fail fast a DATABASE_URL (hoy, si falta, vale None
+  en silencio y el fallo aparece al abrir el pool).
+- Exigir una longitud mínima a WEBHOOK_SECRET al arrancar (por
+  ejemplo, 32 caracteres).
+- Trasladar a la Adenda la tabla de excepciones completa (hoy solo
+  está la fila del 401 en la 5.1).
+- El secreto es único y estático: rotarlo obliga a cambiarlo a la vez
+  en n8n y en el .env. Si alguna vez hace falta rotar sin cortar el
+  servicio, admitir temporalmente dos secretos válidos.
+
+Fase 2
+- Comprobar en el panel de Supabase si la Data API está activada para
+  el esquema public; si no se usa, desactivarla cierra la puerta
+  pública también en origen.
+- Defensa en profundidad: REVOKE ALL de anon/authenticated en las 8
+  tablas y ALTER DEFAULT PRIVILEGES para las futuras (alternativa B del
+  documento RLS).
+- En producción, conectar el backend con un rol propio de mínimo
+  privilegio en lugar de "postgres".
+- Añadir a la Adenda, sección 6, una referencia a Decision_RLS_N0.txt
+  (hoy dice "RLS habilitado ... RESUELTO" sin explicar qué protege).
+
+Fase 3
+- Fuera de app/ (en docs/) quedan menciones de "pendiente" que no se
+  revisaron porque el encargo limitaba el grep a app/, por ejemplo la
+  frase de TFM_Decisiones_Modelo_Datos_Leads.txt sobre la tabla de
+  excepciones "todavía no implementada".
+- Implementar la lectura de reglas_negocio.max_fotos_lead en services/
+  (eliminaría el último PROVISIONAL de app/).
+
+Fase 4
+- Si algún día se migra de driver, valorar psycopg 3 junto con la
+  migración a async (sección 7.8 de TFM_Decisiones_Arquitectura_MCP_y_DB).
+
+CLAUDE.md
+- El apartado "Hecho y verificado" y la lista de documentos de "Para el
+  razonamiento completo" no mencionan todavía la autenticación ni los
+  tres documentos nuevos (Decision_RLS_N0, Notas_Tecnicas_N0 y este
+  resumen). No se tocaron porque no estaba pedido; encaja hacerlo en la
+  Fase 6 (cierre).
+- docs/Plan_Fase1_Autenticacion_Webhook.txt era una propuesta previa;
+  decidir si se conserva como registro de la decisión o se borra
+  (este resumen recoge lo que finalmente se hizo, con las dos
+  correcciones de Gabi).
+
+
+================================================================
+CIERRE DE PENDIENTES
+================================================================
+
+Tres pendientes de repositorio que quedaron abiertos tras la revisión
+de las Fases 1 a 4. Sin commit ni merge.
+
+1. Gotcha de codificación en CLAUDE.md
+   Añadido a "Gotchas ya resueltos": en Windows, un subproceso de
+   Python cuyo stderr va a una tubería escribe en cp1252, y leerlo como
+   UTF-8 da UnicodeDecodeError. Solución: PYTHONIOENCODING=utf-8 en el
+   entorno del hijo. Antes de escribirlo se reprodujo de forma aislada:
+   el hijo informa de sys.stderr.encoding = cp1252 y envía "á" como el
+   byte 0xe1 (el mismo byte del error original); con la variable llegan
+   bytes UTF-8 válidos (0xc3 0xa1). Nota: el gotcha de --reload no está
+   en esa lista sino en su propia sección ("REGLA CRÍTICA"); del nuevo
+   gotcha se copió su estructura (qué pasa, cuándo, cómo se confirmó,
+   solución).
+
+2. docs/Plan_Fase1_Autenticacion_Webhook.txt marcado como superado
+   Se añadió una única línea al principio ("[SUPERADO] PROPUESTA PREVIA
+   A LA FASE 1 ...") que remite a este resumen. El resto del documento
+   no se tocó: verificado comparando el sha256 del contenido original
+   con el de todo lo que queda debajo del aviso (idénticos:
+   1bd3762e01c93e4c372890c321ed4128ddaede36bf8be8d76e5a12f01aed6df5).
+
+3. Índice de documentación de CLAUDE.md
+   Añadidas Decision_RLS_N0.txt, Notas_Tecnicas_N0.txt y este resumen,
+   sin prefijo docs/ como las entradas existentes. Verificado que las
+   8 entradas del índice apuntan a archivos que existen.
+
+PENDIENTES FUERA DEL REPOSITORIO (acciones manuales de Gabi)
+
+Estos dos puntos siguen pendientes. No se resuelven con código: son
+configuraciones de servicios externos, que hará Gabi directamente. No
+se han intentado comprobar ni simular.
+
+4. Comprobar en el panel de Supabase si la Data API (PostgREST) está
+   activada para el esquema public (ver Decision_RLS_N0.txt,
+   sección 3: desde la base de datos no se puede saber).
+5. Configurar en el nodo HTTP de n8n que llama a POST /leads una
+   credencial "Header Auth" con nombre X-Webhook-Secret y el valor de
+   WEBHOOK_SECRET del .env. Hasta entonces, el webhook real recibe 401.
+
+CORRECCIÓN HECHA SOBRE LA MARCHA (no estaba en el encargo)
+
+Al cerrar se detectó un error propio de las Fases 1 a 4: cuatro
+archivos editados con Path.write_text() de Python habían pasado de
+finales de línea LF (los del resto del repositorio) a CRLF, porque en
+Windows write_text traduce cada "\n" a "\r\n". Afectaba a
+app/api/leads.py, scripts/check_leads_endpoint_http.py, la Adenda
+(convertida entera) y este resumen (que además tenía los dos estilos
+mezclados). Con core.autocrlf=true, git lo habría normalizado al hacer
+commit (el diff real no cambiaba), pero el árbol de trabajo quedaba
+distinto del resto. Se devolvieron los cuatro a LF con write_bytes, que
+no traduce nada. Verificado:
+  - git ls-files --eol muestra w/lf en todos los modificados;
+  - ningún archivo de docs/, app/ o scripts/ contiene ya un "\r";
+  - git diff --stat idéntico antes y después (7 files, 150 insertions,
+    27 deletions);
+  - check_webhook_auth_http.py (15/15) y check_leads_endpoint_http.py
+    (12/12) vuelven a pasar tras el cambio.
+Lección: para editar archivos desde Python en esta máquina, usar
+write_bytes o write_text(..., newline="\n").
+
+Sugerencia no implementada: el índice de CLAUDE.md tampoco lista
+TFM_Resumen_Sesion_Leads_Endpoint.txt (omisión anterior a esta sesión)
+ni Plan_Fase1_Autenticacion_Webhook.txt. No se añadieron porque no
+estaba pedido.
+
+
+================================================================
+CIERRE DE PENDIENTES 2  (2026-09-19)
+================================================================
+
+Sin commit ni merge. Con esto quedan cerrados todos los pendientes de
+la revisión de autenticación y RLS.
+
+A. Límite de verificación de Decision_RLS_N0.txt: CERRADO
+
+   Gabi confirmó MANUALMENTE en el panel de Supabase (Settings -> Data
+   API -> Exposed schemas) que "public" está entre los esquemas
+   expuestos. No es una consulta SQL ni una salida de
+   scripts/check_rls_estado.py. Cambios en el documento:
+     - Introducción: ahora nombra las dos fuentes (SQL y panel). Antes
+       decía que todo salía del script, y eso habría dejado de ser
+       cierto.
+     - Sección 1 dividida en 1.a "Verificado por SQL contra la base de
+       datos real (2026-09-18)" y 1.b "Confirmado manualmente en el
+       panel de Supabase por Gabi (2026-09-19)".
+     - Sección 3: el párrafo del límite se sustituyó por el hecho
+       cerrado. La Data API expone las 8 tablas, y RLS es la PRIMERA y
+       única barrera entre esa API y los datos (antes se hablaba de
+       "segunda línea de defensa" como posibilidad).
+     - Sección 6: aclara que el script reproduce solo 1.a, y que 1.b se
+       comprueba en el panel.
+   Verificación: grep de "límite" -> ninguna aparición; grep de "si
+   estuviera" / "no se puede saber" -> ninguna; encabezados 1.a y 1.b
+   presentes; 0 bytes CR en el archivo.
+
+B. .gitattributes: AÑADIDO
+
+   Regla general "* text=auto eol=lf" más reglas explícitas
+   "text eol=lf" para *.py, *.txt, *.md, *.sql y .env.example. No se
+   ejecutó ningún renormalizado (el índice ya estaba entero en LF: 41
+   i/lf y 6 i/none, que son los __init__.py vacíos).
+   Hallazgo: core.autocrlf=true viene de la configuración de SISTEMA de
+   Git para Windows. Sin este archivo, el próximo checkout/stash/reset
+   habría convertido los archivos a CRLF. Con él, git escribe siempre
+   LF. Límite honesto: no impide que un editor escriba CRLF en el disco;
+   garantiza que no llegue a un commit.
+   Verificación (ejecución real):
+     - sha256 de los 55 archivos del árbol antes y después: 0 cambios,
+       0 archivos que aparecen o desaparecen;
+     - git diff --stat idéntico (7 files, 150 insertions, 27 deletions);
+     - git status: el único cambio es "?? .gitattributes";
+     - advertencias "LF will be replaced by CRLF": 7 antes, 0 después;
+     - git check-attr: text=set, eol=lf en .py, .txt, .md y .env.example;
+     - normalización probada con git hash-object --path sobre copias
+       CRLF creadas fuera del repositorio, sin tocar el índice: para
+       app/config.py, para un .py que todavía no existe y para un .txt,
+       el blob que git guardaría es idéntico al del contenido LF
+       (p. ej. app/config.py: fea9cc0e... en ambos, frente a
+       c63d874e... del CRLF sin filtrar);
+     - regresión: check_webhook_auth_http.py 15/15 y
+       check_leads_endpoint_http.py 12/12, ambos con código de salida 0.
+
+   Sugerencia no implementada: si algún día se añaden scripts .bat o
+   .cmd, necesitarán una regla "text eol=crlf" (cmd.exe los requiere
+   con CRLF). Hoy no hay ninguno.
