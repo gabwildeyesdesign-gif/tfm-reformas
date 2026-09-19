@@ -786,3 +786,385 @@ B. .gitattributes: AÑADIDO
    Sugerencia no implementada: si algún día se añaden scripts .bat o
    .cmd, necesitarán una regla "text eol=crlf" (cmd.exe los requiere
    con CRLF). Hoy no hay ninguno.
+
+
+
+================================================================
+CIERRE DEL BLOQUE: COMMITS Y MERGE  (2026-09-19)
+================================================================
+
+Con la confirmación explícita de Gabi:
+
+  1. Lo pendiente se repartió en 6 commits lógicos en
+     feat/n0-schemas-leads (CLAUDE.md, que mezclaba cambios de cuatro
+     de ellos, se preparó por partes en el índice; la última versión
+     se comprobó idéntica byte a byte al archivo real). Antes de
+     subirlos: .env no versionado y el valor de WEBHOOK_SECRET ausente
+     de todos los commits. Subidos con git push (257415e..11417fe).
+  2. Verificación final sobre la rama con el árbol limpio (commit
+     11417fe): los 4 scripts, sin ningún fallo (salidas abajo).
+  3. git fetch confirmó que origin/main seguía en 90bca98 y que el
+     fast-forward era posible. Fusión con el comando documentado:
+     git checkout main && git merge --ff-only feat/n0-schemas-leads
+     && git push -> "Fast-forward" 90bca98..11417fe, sin merge commit.
+  4. CLAUDE.md actualizado en main (a843d56): fuera el aviso de
+     revisión pendiente; siguiente bloque POST /calculate-estimate en
+     su propia rama; se conserva la regla de no fusionar sin
+     confirmación.
+  5. Rama feat/n0-calculate-estimate creada desde main y subida con
+     seguimiento (git push -u). Sin trabajo todavía.
+
+Nota: el commit 5 (.gitattributes) no puede contener la corrección
+CRLF -> LF, porque el CRLF nunca llegó al índice ni al historial; solo
+estuvo en el árbol de trabajo. Queda documentada en el mensaje de ese
+commit y en CIERRE DE PENDIENTES.
+
+LISTA FINAL DE COMMITS (git log --oneline, en feat/n0-calculate-estimate)
+
+    a843d56 docs(n0): feat/n0-schemas-leads integrada en main; siguiente bloque calculate-estimate
+    11417fe docs(n0): resumen de la sesion de autenticacion, RLS y notas N0
+    7ecb934 chore(n0): .gitattributes para fijar los finales de linea en LF
+    19ad1d0 docs(n0): notas tecnicas sobre psycopg2-binary y el orden de estados
+    fa0746d docs(n0): corregir comentarios de schemas que decian pendiente algo resuelto
+    a156670 docs(n0): estado real de RLS verificado por SQL y por el panel de Supabase
+    2871809 feat(n0): autenticacion del webhook POST /leads con secreto en cabecera
+    257415e docs(n0): marcar la rama como pendiente de revision completa
+    c514b8b chore(n0): la migracion conserva su nombre original paso2b_insert.py
+    6bec3d0 docs(n0): resolucion firme del orden de estados de oportunidades, registro de entity_type, aclaracion de autoridad entre los dos .sql
+    7bc5b46 test(n0): scripts de verificacion reubicados en scripts/
+    1eb6629 chore(n0): script de volcado de esquema + copia de schema_n0_v2.sql como historico
+    a3459eb feat(n0): manejador de excepciones global con registro en logs
+    1261978 docs: modelo de datos de leads, resumen de sesion y correcciones
+    583963e feat(n0): POST /leads completo (servicio, router y wiring)
+    32f10fb fix(db): commit/rollback automaticos en la capa de conexion
+    0a0e5d2 feat(n0): modelos Pydantic del dominio de leads
+    90bca98 docs: decisiones de arquitectura MCP/DB y resumen de sesion
+    0c0c455 docs: añadir CLAUDE.md con el contexto del proyecto para sesiones nuevas
+    8c12fd3 test: scripts de verificación movidos a scripts/
+    1935532 feat(n0): scaffolding FastAPI + servidor MCP (fastmcp) + pool de Postgres
+    3d07e10 feat: añadir fastapi y uvicorn a las dependencias
+    c570b27 fix: corregir encoding de gitignore (BOM impedia ignorar .env)
+    febddf2 chore: gitignore inicial
+
+git diff --stat main..feat/n0-calculate-estimate
+(vacío: las dos ramas apuntan al mismo commit, a843d56)
+
+    (salida vacía)
+
+VERIFICACIÓN FINAL DEL PASO 4 (salidas reales, pegadas tal cual)
+
+--- scripts/check_webhook_auth_http.py
+
+    ==============================================================================
+    ARRANQUE DEL SERVIDOR (uvicorn.Server, sin --reload)
+    ==============================================================================
+      Servidor arriba en 7.01s
+      GET /health (sin cabecera) -> 200 {'status': 'ok'}
+        [OK]    /health sigue accesible sin cabecera  
+
+      Filas al inicio (clientes, leads, oportunidades, logs): (0, 0, 0, 0)
+
+    ==============================================================================
+    CASO 1 - SIN cabecera X-Webhook-Secret
+    ==============================================================================
+      <- HTTP 401
+      <- WWW-Authenticate: APIKey
+      <- Cuerpo: {"detail":"No autorizado"}
+        [OK]    HTTP 401  (401)
+        [OK]    Incluye WWW-Authenticate (exigido por RFC 9110 en un 401)  
+
+    ==============================================================================
+    CASO 2 - Cabecera con valor INCORRECTO
+    ==============================================================================
+      <- HTTP 401
+      <- WWW-Authenticate: APIKey
+      <- Cuerpo: {"detail":"No autorizado"}
+        [OK]    HTTP 401  (401)
+        [OK]    Respuesta IDENTICA a la del caso 1 (no se distingue falta/incorrecta)  
+
+      Extra: sin cabecera + cuerpo invalido -> HTTP 401 {"detail":"No autorizado"}
+        [OK]    La autenticacion se evalua antes que la validacion del cuerpo (401, no 422)  (401)
+
+    ==============================================================================
+    CASO 3 - Cabecera con caracter NO ASCII ('ñ')
+    ==============================================================================
+      <- HTTP 401
+      <- WWW-Authenticate: APIKey
+      <- Cuerpo: {"detail":"No autorizado"}
+        [OK]    HTTP 401 (y no 500)  (401)
+        [OK]    No se escribio ninguna fila en logs  (0 -> 0)
+
+    ==============================================================================
+    CASO 5 - Las peticiones rechazadas no escribieron NADA
+    ==============================================================================
+      Filas tras los rechazos: (0, 0, 0, 0)
+        [OK]    Ninguna tabla cambio tras las 4 peticiones rechazadas  ((0, 0, 0, 0) -> (0, 0, 0, 0))
+
+    ==============================================================================
+    CASO 4 - Cabecera CORRECTA
+    ==============================================================================
+      <- HTTP 201
+      <- Cuerpo: {"lead_id":27,"cliente_id":31,"oportunidad_id":36,"status":"nueva"}
+        [OK]    HTTP 201 Created  (201)
+      Filas despues: (1, 1, 1, 0)
+        [OK]    Se creo exactamente 1 cliente, 1 lead y 1 oportunidad (y 0 logs)  ((0, 0, 0, 0) -> (1, 1, 1, 0))
+
+    ==============================================================================
+    APAGADO DEL SERVIDOR
+    ==============================================================================
+      Apagado en 0.134s   hilo vivo: False
+      Limpieza hecha. Filas (clientes, leads, oportunidades, logs): (0, 0, 0, 0)
+
+    ==============================================================================
+    CASO 6 - FAIL FAST: uvicorn con WEBHOOK_SECRET vacio
+    ==============================================================================
+      Proceso terminado en 0.93s con codigo de salida 1
+      Ultimas lineas de stderr:
+        |   File "C:\Proyectos\tfm-reformas\app\api\security.py", line 66, in <module>
+        |     raise RuntimeError(
+        | RuntimeError: WEBHOOK_SECRET no está definido (o está vacío) en el .env. Es obligatorio: autentica las llamadas de n8n a POST /leads. Genera uno con:  python -c "import secrets; print(secrets.token_urlsafe(32))"  y añádelo al .env como WEBHOOK_SECRET=<valor>. Ver .env.example.
+        [OK]    uvicorn termina con error (codigo != 0)  (codigo 1)
+        [OK]    El error nombra WEBHOOK_SECRET  
+        [OK]    Nunca llego a abrir el puerto  
+
+    ==============================================================================
+    CASO 7 - Con WEBHOOK_SECRET vacio, importar app.config NO falla
+    ==============================================================================
+      codigo 0  stdout: import ok; DATABASE_URL definido: True  stderr: ''
+        [OK]    Los scripts que solo usan app.config no necesitan el secreto  
+
+    ==============================================================================
+    RESULTADO: 15 comprobaciones correctas, 0 fallos
+    Todas las comprobaciones han pasado.
+    exit=0
+
+--- scripts/check_leads_endpoint_http.py
+
+    ==============================================================================
+    ARRANQUE DEL SERVIDOR (uvicorn.Server, sin --reload)
+    ==============================================================================
+      Servidor arriba en 2.55s
+      GET /health    -> 200 {'status': 'ok'}
+      GET /health/db -> 200 {'status': 'ok', 'clientes_count': 0}
+
+    ==============================================================================
+    PRUEBA 1 - POST /leads con datos VALIDOS (HTTP real)
+    ==============================================================================
+      Filas antes (clientes, leads, oportunidades): (0, 0, 0)
+      Enviando POST http://127.0.0.1:8010/leads
+      <- HTTP 201
+      <- Cabecera content-type: application/json
+      <- Cuerpo: {"lead_id":28,"cliente_id":32,"oportunidad_id":37,"status":"nueva"}
+        [OK]    Codigo HTTP 201 Created  (201)
+        [OK]    La respuesta trae las 4 claves del contrato  (['cliente_id', 'lead_id', 'oportunidad_id', 'status'])
+        [OK]    status == 'nueva'  
+        [OK]    Los 3 ids son enteros  
+
+      Filas despues: (1, 1, 1)
+        [OK]    Se creo exactamente 1 cliente, 1 lead y 1 oportunidad  ((0, 0, 0) -> (1, 1, 1))
+
+      Fila real escrita por la peticion HTTP:
+        email                  = 'http-ok@example.com'
+        canal                  = 'formulario_web'
+        fotos_urls             = ['leads-temp/tokHTTP/f1.jpg']
+        datos_estructurados    = {'m2': 14.0, 'tipo_reforma': 'cocina', 'nivel_acabados': 'alto', 'incluye_cambios_estructurales': True}
+        tipo_reforma           = 'cocina'
+        estado                 = 'nueva'
+        datos_completos        = False
+        [OK]    La fila de la base de datos corresponde al email enviado  
+        [OK]    tipo_reforma llego intacto hasta la columna  
+
+    ==============================================================================
+    PRUEBA 2 - POST /leads con EMAIL INVALIDO (debe dar 422 sin tocar la BD)
+    ==============================================================================
+      Filas antes: (1, 1, 1)
+      Enviando POST con email = 'esto-no-es-un-email'
+      <- HTTP 422
+      <- Cuerpo: {"detail":[{"type":"value_error","loc":["body","email"],"msg":"value is not a valid email address: An email address must have an @-sign.","input":"esto-no-es-un-email","ctx":{"reason":"An email address must have an @-sign."}}]}
+        [OK]    Codigo HTTP 422 Unprocessable Entity  (422)
+        [OK]    El error apunta al campo 'email'  (['body', 'email'])
+
+      Filas despues: (1, 1, 1)
+        [OK]    NO se creo NINGUNA fila (la validacion corta antes de la BD)  ((1, 1, 1) -> (1, 1, 1))
+
+    ==============================================================================
+    PRUEBA 3 - POST /leads con tipo_reforma CON ENIE (422, no llega al CHECK)
+    ==============================================================================
+      <- HTTP 422
+      <- Cuerpo: {"detail":[{"type":"enum","loc":["body","tipo_reforma"],"msg":"Input should be 'bano', 'cocina', 'integral_vivienda' or 'parcial_acabados'","input":"baño","ctx":{"expected":"'bano', 'cocina', 'integral_vivienda' or 'parcial_acabados'"}}]}
+        [OK]    Codigo HTTP 422  (422)
+        [OK]    Tampoco se creo ninguna fila  
+
+    ==============================================================================
+    APAGADO DEL SERVIDOR
+    ==============================================================================
+      Apagado en 0.165s   hilo vivo: False
+
+      Limpieza de filas de prueba:
+      Filas (clientes, leads, oportunidades): (0, 0, 0)
+
+    ==============================================================================
+    RESULTADO: 12 comprobaciones correctas, 0 fallos
+    Todas las comprobaciones han pasado.
+    exit=0
+
+--- scripts/check_schemas.py
+
+
+    === A. LO QUE DEBE ACEPTARSE ===
+      [OK]    Lead completo con 2 fotos
+      [OK]    Lead SIN fotos (campo ausente) -> fotos = []
+      [OK]    Lead con fotos = [] explicita
+      [OK]    Lead con exactamente MAX_FOTOS_LEAD fotos
+      [OK]    m2 como texto "45.5" -> Pydantic lo convierte a float
+      [OK]    Los 4 tipos y 3 niveles reales de tarifas_base se aceptan
+      [OK]    PhotoUploadSlot valido
+      [OK]    LeadPhotoUploadResponse sin slots -> lista vacia
+      [OK]    LeadCreateResponse con los 3 ids enteros + status
+
+    === B. LO QUE DEBE RECHAZARSE ===
+      [OK]    m2 = 0
+                -> 1 validation error for LeadCreate m2   Input should be greater than 0
+      [OK]    m2 negativo (-5)
+                -> 1 validation error for LeadCreate m2   Input should be greater than 0
+      [OK]    tipo_reforma = "bano" CON ENIE ("bano" mal escrito)
+                -> rror for LeadCreate tipo_reforma   Input should be 'bano', 'cocina', 'integral_vivienda' or 'parcial_acabados'
+      [OK]    nivel_acabados = "basico" CON TILDE
+                -> 1 validation error for LeadCreate nivel_acabados   Input should be 'basico', 'medio' or 'alto'
+      [OK]    tipo_reforma inventado ("tejado")
+                -> rror for LeadCreate tipo_reforma   Input should be 'bano', 'cocina', 'integral_vivienda' or 'parcial_acabados'
+      [OK]    email sin arroba
+                -> idation error for LeadCreate email   value is not a valid email address: An email address must have an @-sign.
+      [OK]    email vacio
+                -> idation error for LeadCreate email   value is not a valid email address: An email address must have an @-sign.
+      [OK]    email de mas de 150 caracteres
+                -> 1 validation error for LeadCreate email   Value should have at most 150 items after validation, not 157
+      [OK]    nombre vacio
+                -> 1 validation error for LeadCreate nombre   String should have at least 1 character
+      [OK]    nombre de mas de 150 caracteres
+                -> 1 validation error for LeadCreate nombre   String should have at most 150 characters
+      [OK]    telefono de mas de 30 caracteres
+                -> 1 validation error for LeadCreate telefono   String should have at most 30 characters
+      [OK]    6 fotos (una mas del maximo)
+                -> 1 validation error for LeadCreate fotos   List should have at most 5 items after validation, not 6
+      [OK]    falta incluye_cambios_estructurales
+                -> 1 validation error for LeadCreate incluye_cambios_estructurales   Field required
+      [OK]    falta lead_token
+                -> 1 validation error for LeadCreate lead_token   Field required
+      [OK]    lead_token vacio
+                -> 1 validation error for LeadCreate lead_token   String should have at least 1 character
+      [OK]    campo de mas: "telefono_movil" (extra=forbid)
+                -> 1 validation error for LeadCreate telefono_movil   Extra inputs are not permitted
+      [OK]    m2 no numerico ('mucho')
+                -> 1 validation error for LeadCreate m2   Input should be a valid number, unable to parse string as a number
+      [OK]    PhotoUploadSlot con expires_in = 0
+                -> 1 validation error for PhotoUploadSlot expires_in   Input should be greater than 0
+      [OK]    LeadPhotoUploadResponse con 6 slots
+                -> ation error for LeadPhotoUploadResponse photo_slots   List should have at most 5 items after validation, not 6
+      [OK]    LeadCreateResponse con lead_id no entero
+                -> n error for LeadCreateResponse lead_id   Input should be a valid integer, unable to parse string as an integer
+      [OK]    LeadCreateResponse SIN oportunidad_id (campo obligatorio)
+                -> 1 validation error for LeadCreateResponse oportunidad_id   Field required
+      [OK]    LeadCreateResponse con oportunidad_id = None
+                -> 1 validation error for LeadCreateResponse oportunidad_id   Input should be a valid integer
+      [OK]    LeadCreateResponse con oportunidad_id no entero
+                ->  for LeadCreateResponse oportunidad_id   Input should be a valid integer, unable to parse string as an integer
+
+    === C. COMPROBACIONES DE COMPORTAMIENTO ===
+      [OK]    default_factory: cada lead tiene su PROPIA lista (b.fotos sigue vacia)
+      [OK]    Al serializar a JSON los enums salen como texto plano:
+                tipo_reforma='bano' nivel_acabados='medio'
+
+    ============================================================
+    RESULTADO: 34 comprobaciones correctas, 0 fallos
+    Todas las comprobaciones han pasado.
+    exit=0
+
+--- scripts/check_rls_estado.py
+
+
+    ==============================================================================
+    1. ROL CON EL QUE SE CONECTA EL BACKEND (el de DATABASE_URL)
+    ==============================================================================
+      rolname        = postgres
+      rolsuper       = False
+      rolbypassrls   = True
+      rolcreaterole  = True
+      rolinherit     = True
+
+    ==============================================================================
+    2. TABLAS DE public: PROPIETARIO, RLS ACTIVADO Y RLS FORZADO
+    ==============================================================================
+      tabla            propietario  es_prop  miembro  rls_on  rls_forzado
+      clientes         postgres     True     True     True    False
+      leads            postgres     True     True     True    False
+      logs             postgres     True     True     True    False
+      oportunidades    postgres     True     True     True    False
+      presupuestos     postgres     True     True     True    False
+      reglas_negocio   postgres     True     True     True    False
+      tarifas_base     postgres     True     True     True    False
+      visitas          postgres     True     True     True    False
+
+    ==============================================================================
+    3. POLITICAS RLS EXISTENTES (CREATE POLICY) EN public
+    ==============================================================================
+      Numero de politicas: 0
+
+    ==============================================================================
+    4. ROLES DE LA API PUBLICA DE SUPABASE Y SUS PERMISOS
+    ==============================================================================
+      Roles de la API presentes en la base de datos:
+        anon           rolbypassrls = False
+        authenticated  rolbypassrls = False
+        authenticator  rolbypassrls = False
+        service_role   rolbypassrls = True
+
+      GRANT de anon y authenticated sobre cada tabla (sin contar RLS):
+        tabla            rol            SELECT INSERT UPDATE DELETE
+        clientes         anon           True   True   True   True
+        clientes         authenticated  True   True   True   True
+        leads            anon           True   True   True   True
+        leads            authenticated  True   True   True   True
+        logs             anon           True   True   True   True
+        logs             authenticated  True   True   True   True
+        oportunidades    anon           True   True   True   True
+        oportunidades    authenticated  True   True   True   True
+        presupuestos     anon           True   True   True   True
+        presupuestos     authenticated  True   True   True   True
+        reglas_negocio   anon           True   True   True   True
+        reglas_negocio   authenticated  True   True   True   True
+        tarifas_base     anon           True   True   True   True
+        tarifas_base     authenticated  True   True   True   True
+        visitas          anon           True   True   True   True
+        visitas          authenticated  True   True   True   True
+
+      Privilegios por defecto para TABLAS NUEVAS en public:
+        creadas por postgres        -> {postgres=arwdDxtm/postgres,anon=arwdDxtm/postgres,authenticated=arwdDxtm/postgres,service_role=arwdDxtm/postgres}
+        creadas por supabase_admin  -> {postgres=arwdDxtm/supabase_admin,anon=arwdDxtm/supabase_admin,authenticated=arwdDxtm/supabase_admin,service_role=arwdDxtm/supabase_admin}
+
+      Ajustes del rol authenticator (configuracion de PostgREST):
+        session_preload_libraries=supautils, safeupdate
+        statement_timeout=8s
+        lock_timeout=8s
+
+    ==============================================================================
+    5. PRUEBA EMPIRICA: QUE VE Y QUE PUEDE ESCRIBIR EL ROL anon
+    ==============================================================================
+      Como postgres  : SELECT COUNT(*) FROM reglas_negocio -> 5
+      Rol cambiado a: anon
+      Como anon      : SELECT COUNT(*) FROM reglas_negocio -> 0
+      Como anon      : INSERT INTO clientes -> RECHAZADO
+                       SQLSTATE 42501: ERROR:  new row violates row-level security policy for table "clientes"
+      Tras ROLLBACK, rol actual: postgres
+
+    ==============================================================================
+    CONCLUSION (calculada a partir de los datos de arriba)
+    ==============================================================================
+      Tablas en public                      : 8
+      Todas con RLS activado                : True
+      Ninguna con RLS forzado (FORCE)       : True
+      Politicas definidas                   : 0
+      postgres es propietario de todas     : True
+      postgres tiene rolbypassrls          : True
+      postgres es superusuario             : False
+    exit=0
