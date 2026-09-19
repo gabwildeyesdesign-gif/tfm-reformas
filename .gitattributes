@@ -1,0 +1,46 @@
+# =====================================================================
+# Finales de línea del repositorio: SIEMPRE LF
+# =====================================================================
+# Por qué existe este archivo: en esta máquina Windows, Git para Windows
+# trae core.autocrlf=true en su configuración de SISTEMA
+# (C:/Program Files/Git/etc/gitconfig). Sin reglas propias, cada
+# checkout, stash o reset reescribiría los archivos con CRLF (git lo
+# avisaba: "LF will be replaced by CRLF the next time Git touches it").
+# Además, en la sesión de autenticación del webhook, varias ediciones
+# hechas con Path.write_text() de Python convirtieron archivos de LF a
+# CRLF, y uno quedó con los dos formatos mezclados.
+#
+# Las reglas de este archivo tienen PRIORIDAD sobre core.autocrlf y
+# hacen dos cosas:
+#   1. Al hacer git add / commit, cualquier CRLF se convierte a LF antes
+#      de guardarse. Ningún CRLF puede llegar al repositorio.
+#   2. Al hacer checkout, git escribe siempre LF en el disco.
+#
+# Lo que NO puede hacer: impedir que un editor o un script escriba CRLF
+# en el disco. Ese archivo quedará en CRLF en la carpeta hasta el
+# siguiente checkout, pero lo que se commitee saldrá en LF igualmente.
+#
+# Este archivo NO renormaliza el historial ya commiteado (no se ejecutó
+# "git add --renormalize ."): solo actúa a partir de ahora. El índice ya
+# estaba entero en LF, así que no había nada que renormalizar.
+
+# Regla general: git detecta por sí mismo qué archivos son texto
+# ("auto": trata como binario lo que tenga un byte NUL al principio) y a
+# todos los de texto les fija LF.
+* text=auto eol=lf
+
+# Reglas explícitas para los tipos que forman el proyecto. "text" (sin
+# "auto") le dice a git que son texto SIEMPRE, sin pasar por la
+# heurística de detección: así un .txt con algún byte raro nunca podría
+# acabar tratado como binario y quedarse sin normalizar. También sirven
+# de documentación: estos son los tipos que importan, y en los que ya
+# se coló CRLF una vez (.py y .txt).
+*.py          text eol=lf
+*.txt         text eol=lf
+*.md          text eol=lf
+*.sql         text eol=lf
+
+# .env.example no tiene una extensión que git reconozca como texto, así
+# que se nombra explícitamente. (El .env real está en .gitignore y git
+# nunca lo ve, así que esta regla no le afecta.)
+.env.example  text eol=lf
