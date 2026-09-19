@@ -1,0 +1,202 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+DECISIÓN: ROW LEVEL SECURITY (RLS) EN N0
+Qué protege hoy, por qué está activado sin políticas, y cuándo dejan de
+ser opcionales
+
+Documento de contexto de proyecto · Nivel N0
+
+Los hechos de este documento salen de DOS fuentes, que se mantienen
+separadas a propósito (apartado 1) para que se sepa de dónde viene cada
+afirmación:
+
+  - Consultas SQL contra la base de datos real de Supabase, con la
+    ejecución de scripts/check_rls_estado.py (2026-09-18). La salida
+    completa está en
+    docs/TFM_Resumen_Sesion_Autenticacion_Webhook_y_Notas_N0.txt.
+  - Una confirmación MANUAL de Gabi en el panel de Supabase
+    (2026-09-19), para el único dato que no se puede consultar desde
+    Postgres: qué esquemas expone la Data API.
+
+Ninguna afirmación sale de la documentación de Supabase sin haberse
+contrastado con una de estas dos fuentes.
+
+
+================================================================
+1. HECHOS VERIFICADOS
+================================================================
+
+1.a  VERIFICADO POR SQL CONTRA LA BASE DE DATOS REAL
+     (scripts/check_rls_estado.py, 2026-09-18)
+
+- Las 8 tablas de public tienen RLS ACTIVADO (relrowsecurity = true) y
+  ninguna lo tiene FORZADO (relforcerowsecurity = false).
+- Hay 0 políticas (pg_policies vacío para public).
+- El backend se conecta como el rol "postgres", que:
+    · es PROPIETARIO de las 8 tablas;
+    · tiene rolbypassrls = true;
+    · NO es superusuario (rolsuper = false; en Supabase nadie lo es).
+- Los roles de la API pública de Supabase, anon y authenticated, tienen
+  GRANT completo (SELECT, INSERT, UPDATE, DELETE) sobre las 8 tablas,
+  que es la configuración por defecto de Supabase para el esquema
+  public. Ninguno de los dos tiene rolbypassrls.
+- Prueba empírica (SET LOCAL ROLE anon, dentro de una transacción que
+  termina siempre en ROLLBACK):
+    · como postgres, SELECT COUNT(*) FROM reglas_negocio -> 5
+    · como anon,     SELECT COUNT(*) FROM reglas_negocio -> 0
+    · como anon,     INSERT INTO clientes -> rechazado, SQLSTATE 42501
+      "new row violates row-level security policy for table clientes"
+
+1.b  CONFIRMADO MANUALMENTE EN EL PANEL DE SUPABASE POR GABI
+     (2026-09-19)
+
+     Esto NO es una consulta a la base de datos ni una salida de
+     scripts/check_rls_estado.py. Es una comprobación visual en el
+     dashboard, necesaria porque esta configuración vive en el servicio
+     PostgREST de Supabase y no en Postgres, así que ninguna consulta
+     SQL puede verla.
+
+- En Settings -> Data API -> Exposed schemas, la lista de esquemas
+  expuestos incluye "public". La Data API (PostgREST) expone, por
+  tanto, las 8 tablas de ese esquema.
+
+
+================================================================
+2. POR QUÉ EL BACKEND NO SE VE AFECTADO
+================================================================
+
+En PostgreSQL, las políticas RLS no se aplican a un rol que cumpla
+CUALQUIERA de estas condiciones:
+
+  a) es el propietario de la tabla y la tabla no tiene FORCE ROW LEVEL
+     SECURITY;
+  b) tiene el atributo BYPASSRLS.
+
+"postgres" cumple las dos, así que la ausencia de políticas no le
+afecta: ve y escribe todas las filas. Esto confirma la hipótesis de
+partida: si RLS se aplicara al backend, cada INSERT de POST /leads
+habría fallado con el mismo 42501 que recibe anon.
+
+Consecuencia importante: aunque se activara FORCE en las tablas (lo que
+anula la condición a), el backend seguiría saltándose RLS por la
+condición b. Para que RLS afectase al backend habría que conectarse con
+otro rol sin BYPASSRLS y sin la propiedad de las tablas.
+
+
+================================================================
+3. QUÉ PROTEGE RLS HOY (corrige una premisa inicial)
+================================================================
+
+La hipótesis inicial era "RLS está activado pero no bloquea nada". Es
+cierto para el backend, pero FALSO en general.
+
+Supabase ofrece de fábrica un segundo camino hacia las mismas tablas:
+la Data API (PostgREST), una API REST generada automáticamente. Quien
+llama con la "anon key" actúa como el rol anon, y quien lleva un JWT de
+usuario actúa como authenticated. La anon key no es secreta por diseño:
+Supabase la pensó para ir incrustada en un frontend público.
+
+Esos dos roles tienen GRANT completo sobre las 8 tablas. Lo ÚNICO que
+hoy les impide leer clientes (nombres, emails y teléfonos: datos
+personales), escribir leads falsos o borrar presupuestos es que RLS
+está activado y no hay ninguna política que les dé permiso. RLS
+activado sin políticas significa "denegar todo a quien no se lo salte".
+
+Es decir, en esta arquitectura RLS funciona hoy como un CIERRE POR
+DEFECTO de la puerta pública de Supabase, no como un control fino por
+filas. Desactivarlo (por ejemplo, para "arreglar" un error de permisos
+sin entenderlo) expondría toda la base de datos a cualquiera que tenga
+la URL del proyecto y la anon key.
+
+La puerta pública está abierta de verdad: la Data API expone el
+esquema public ("public" figura en Exposed schemas, confirmado
+manualmente por Gabi en el panel de Supabase el 2026-09-19; ver 1.b).
+Las 8 tablas del proyecto son alcanzables por PostgREST para cualquiera
+que tenga la URL del proyecto y la anon key.
+
+Por tanto, RLS no es aquí una segunda línea de defensa: es la PRIMERA y
+la única que hoy se interpone entre la Data API pública y los datos. Esa
+es la razón concreta por la que debe permanecer activado en todas las
+tablas, incluidas las que se creen en el futuro.
+
+
+================================================================
+4. POR QUÉ ESTÁ ACTIVADO SIN POLÍTICAS (y por qué es correcto en N0)
+================================================================
+
+En N0 hay un único consumidor legítimo de los datos: el backend FastAPI
+(y, a través de él, n8n y el agente MCP). Ningún cliente habla con
+Supabase directamente. Por eso no hace falta ninguna política que
+PERMITA algo a anon o authenticated: la respuesta correcta para ellos
+es "nada", y eso es exactamente lo que da RLS sin políticas.
+
+Escribir políticas ahora sería código sin consumidor: no habría forma
+de probarlas contra un caso de uso real, y aumentaría la superficie que
+hay que mantener y defender.
+
+Alternativas consideradas (Rule of Three):
+
+  A. RLS activado sin políticas (estado actual)            [ELEGIDA]
+     Cierra la puerta pública con cero código. Contra: quien lea el
+     esquema sin este documento puede pensar que RLS "no hace nada" o
+     que falta trabajo.
+  B. Revocar los GRANT de anon/authenticated (REVOKE ALL ... FROM anon)
+     Cierre equivalente y más explícito. Contra: Supabase vuelve a dar
+     esos GRANT por defecto a cada tabla NUEVA que se cree (verificado:
+     pg_default_acl de public concede "arwdDxtm", es decir, todos los
+     permisos de tabla, a anon y authenticated para las tablas que
+     creen postgres o supabase_admin), así que
+     cada migración futura tendría que repetir el REVOKE; con RLS, la
+     protección depende de un ENABLE por tabla que ya forma parte del
+     patrón del proyecto.
+  C. Escribir políticas "deny all" explícitas
+     Mismo efecto que A, con más código y sin ganancia real: la
+     ausencia de políticas ya equivale a denegar.
+
+B podría complementar a A como defensa en profundidad; queda anotado
+como sugerencia, no se aplica en N0.
+
+
+================================================================
+5. CUÁNDO LAS POLÍTICAS DEJAN DE SER OPCIONALES
+================================================================
+
+Las políticas pasan a ser obligatorias en cuanto exista un consumidor
+LEGÍTIMO que acceda a las tablas con un rol que no se salta RLS. Los
+casos realistas en este proyecto son:
+
+  1. Un frontend (portal de clientes, panel de administración) que lea
+     de Supabase directamente con supabase-js y la anon key o un JWT
+     de usuario. Haría falta, como mínimo, una política del tipo "un
+     cliente solo ve sus propias oportunidades" (auth.uid() = ...).
+  2. n8n usando el nodo nativo de Supabase en vez de llamar a FastAPI.
+     Si lo hace con la service_role key, se salta RLS
+     (service_role tiene rolbypassrls = true, verificado) y también
+     toda la lógica de services/: rompería la regla de "una sola capa
+     con lógica de negocio", un problema mayor que RLS. Si lo hace con
+     la anon key, no podría hacer nada hasta que existieran políticas.
+  3. Que el backend pase a conectarse con un rol propio de mínimo
+     privilegio (sin BYPASSRLS y sin ser propietario), práctica
+     recomendable en producción. Entonces el propio backend
+     necesitaría políticas que le permitan operar.
+
+Mientras no se dé ninguno de estos casos, RLS sin políticas es la
+configuración correcta, y cualquier tabla nueva debe crearse con
+ENABLE ROW LEVEL SECURITY, igual que las 8 actuales.
+
+
+================================================================
+6. CÓMO REPRODUCIR ESTA VERIFICACIÓN
+================================================================
+
+    .\venv\Scripts\python.exe scripts\check_rls_estado.py
+
+Es de solo lectura en efecto: la única escritura (el INSERT de la
+prueba como anon) se hace dentro de una transacción que termina en
+ROLLBACK pase lo que pase.
+
+El script reproduce SOLO los hechos del apartado 1.a. El de 1.b (qué
+esquemas expone la Data API) no se puede comprobar por SQL: se
+reproduce abriendo el panel de Supabase en Settings -> Data API ->
+Exposed schemas.

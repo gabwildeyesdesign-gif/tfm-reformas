@@ -146,6 +146,9 @@ rápida, no sustituye esa documentación. Contiene:
   scaffolding.
 - TFM_Decisiones_Modelo_Datos_Leads.txt — modelo de datos de leads y
   decisiones D1 a D7.
+- Decision_RLS_N0.txt — qué protege RLS hoy (cierra la Data API
+  pública a anon/authenticated; el backend se lo salta), por qué no hay
+  políticas y cuándo pasan a ser obligatorias.
 
 ## Esquema de la base de datos: cuál de los dos .sql manda
 
