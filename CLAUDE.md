@@ -141,9 +141,19 @@ SOLO REST.
 > final: check_webhook_auth_http 15/15, check_leads_endpoint_http 12/12,
 > check_schemas 34/34 y check_rls_estado sin errores.
 >
-> **Siguiente bloque: POST /calculate-estimate**, en la rama
-> `feat/n0-calculate-estimate`, creada desde `main` y todavía sin
-> trabajo. Se aplica la misma regla que antes: **no hacer merge a
+> **Integrado en `main` el 2026-09-20.** La rama
+> `feat/n0-calculate-estimate` (POST /calculate-estimate por REST y como
+> tool MCP, autenticación de /mcp, migraciones paso3 a paso6, umbral del
+> Gate por categoría y tope de m2) se fusionó por fast-forward
+> (`git merge --ff-only`, sin merge commit) tras pasar la verificación
+> final sobre `main`: check_schemas 37/37, check_webhook_auth_http 15/15,
+> check_leads_endpoint_http 12/12, check_estimate_service 107/107,
+> check_calculate_estimate_http 21/21, check_mcp_calculate_estimate
+> 19/19, check_migracion_m2_leads 23/23, check_exception_handler 32/32 y
+> check_rls_estado sin errores.
+>
+> **Siguiente bloque: POST /gate-decisions**, todavía sin empezar y sin
+> rama creada. Se aplica la misma regla de siempre: **no hacer merge a
 > `main` sin la confirmación explícita de Gabi**, y siempre con
 > `--ff-only`.
 
@@ -154,16 +164,15 @@ rollback automáticos), CHECK en oportunidades.tipo_reforma, y POST
 /leads completo de punta a punta (HTTP real: 201 con datos válidos, 422
 sin tocar la base de datos con datos inválidos).
 
-POST /calculate-estimate (REST + tool MCP) implementado y verificado el
-2026-09-19 en la rama feat/n0-calculate-estimate, SIN commitear a la
-espera de la revisión de Gabi: migración paso3 (estado
+POST /calculate-estimate (REST + tool MCP) implementado, verificado e
+INTEGRADO EN main: migración paso3 (estado
 'pendiente_aprobacion' + UNIQUE presupuestos.oportunidad_id, D8),
 check_migracion 14/14, check_estimate_service 83/83,
 check_calculate_estimate_http 20/20, check_mcp_calculate_estimate 19/19.
 Detalle completo: docs/EndPoint_Calculate_estimate_final.txt.
 
-Umbral del Gate por categoria (D9) implementado y verificado el
-2026-09-20, tambien SIN commitear: migracion paso4 (tabla umbrales_gate),
+Umbral del Gate por categoria (D9) implementado, verificado e integrado
+el 2026-09-20: migracion paso4 (tabla umbrales_gate),
 check_migracion_umbrales_gate 17/17, check_estimate_service 107/107,
 check_calculate_estimate_http 21/21, check_mcp_calculate_estimate 19/19.
 Detalle: docs/Umbral_Gate_por_Categoria_D9_final.txt. El umbral de
@@ -172,9 +181,16 @@ hay ningun umbral provisional. Defecto operativo abierto, anotado en
 D10: nada impide tecnicamente un parcial_acabados de superficie grande
 (70 m2 en nivel medio dan 22.540 EUR), que activaria el Gate.
 
-AVISO: scripts/check_exception_handler.py falla 22/28 también en main
-(no envía X-Webhook-Secret desde que /leads exige autenticación). Fallo
-anterior a este bloque, pendiente de arreglar.
+Tope de superficie (2026-09-20): m2 acotado a 0 < m2 <= 500 con defensa
+doble (Decimal con le=MAX_M2_LEAD en LeadCreate, y CHECK
+chk_leads_m2_rango sobre la expresion JSONB, migracion paso6).
+check_migracion_m2_leads 23/23. Antes, un lead de 60.000 m2 se aceptaba
+y reventaba al calcular, porque importe_max no cabe en NUMERIC(10,2).
+
+RESUELTO (2026-09-20): scripts/check_exception_handler.py daba 22/28
+porque no enviaba X-Webhook-Secret (el script es anterior a la
+autenticacion del webhook). Corregido: ahora 32/32. La causa no era el
+manejador de excepciones, que funcionaba bien.
 
 Pendiente: gate-decisions, visits, create-followup-task,
 get_business_rules y request_missing_information, la concurrencia
