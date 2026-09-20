@@ -95,6 +95,18 @@ SOLO REST.
   (VerificadorSecretoMCP, compare_digest), NO StaticTokenVerifier de
   fastmcp (comparación no constante, "no usar en producción").
   scripts/check_mcp_connection.py ya envía el token.
+- El precio que se devuelve al cliente lleva IVA INCLUIDO (D14):
+  EstimateResponse trae importe_min_con_iva / importe_max_con_iva, y esas
+  son también las columnas de presupuestos (renombradas en paso7), junto
+  con iva_pct_aplicado. Se guarda el importe YA con IVA para que un
+  presupuesto no cambie de precio si alguien edita
+  reglas_negocio.iva_estandar_pct (21 %). OJO: el Gate se evalua contra el
+  importe SIN IVA, porque el umbral mide riesgo comercial y el IVA no se
+  queda en la empresa; hay un TODO en el servicio con la pregunta abierta.
+- oportunidades.estado admite OCHO valores desde paso7: se añadió
+  'seguimiento_pendiente' (D13). La columna
+  oportunidades.fecha_ultimo_contacto existe pero está NULL en todas las
+  filas: la escribirá el barrido de seguimiento, que aún no existe.
 - El umbral del Gate NO es un valor global: desde D9 (2026-09-20) vive en
   la tabla umbrales_gate, una fila por tipo_reforma (bano y cocina 13.000 €,
   integral_vivienda y parcial_acabados 10.000 €, los cuatro ya cerrados). La fila
@@ -152,9 +164,19 @@ SOLO REST.
 > 19/19, check_migracion_m2_leads 23/23, check_exception_handler 32/32 y
 > check_rls_estado sin errores.
 >
-> **Siguiente bloque: POST /gate-decisions**, todavía sin empezar y sin
-> rama creada. Se aplica la misma regla de siempre: **no hacer merge a
-> `main` sin la confirmación explícita de Gabi**, y siempre con
+> **Integrado en `main` el 2026-09-20 (segundo merge del día).** La rama
+> `feat/n0-iva-y-seguimiento` (D14: el precio mostrado lleva IVA
+> incluido; D13: base de datos preparada para el seguimiento a 48 h) se
+> fusionó por fast-forward tras pasar la verificación final sobre `main`:
+> check_estimate_service 129/129, check_calculate_estimate_http 24/24,
+> check_mcp_calculate_estimate 19/19, check_migracion_iva_y_seguimiento
+> 17/17, y el resto de la suite sin fallos.
+>
+> **Siguiente bloque: el barrido de seguimiento de D13** (el flujo de n8n
+> que consulta oportunidades.fecha_ultimo_contacto y marca
+> 'seguimiento_pendiente'), todavía sin empezar. Después, POST
+> /gate-decisions. Se aplica la misma regla de siempre: **no hacer merge
+> a `main` sin la confirmación explícita de Gabi**, y siempre con
 > `--ff-only`.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
