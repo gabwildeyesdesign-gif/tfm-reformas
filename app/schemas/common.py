@@ -116,3 +116,24 @@ class MotivoGate(str, Enum):
 # en dos modelos) para que el día que se sustituya por la lectura real
 # solo haya que cambiar un sitio.
 MAX_FOTOS_LEAD = 5
+
+# Superficie máxima admitida en un lead, en metros cuadrados.
+#
+# POR QUÉ EXISTE ESTE TOPE. Hasta ahora m2 solo exigía "mayor que cero".
+# Verificado con ejecución real: un lead de 60.000 m² se aceptaba sin
+# problema (201) y el fallo aparecía DESPUÉS, al calcular, porque
+# importe_max no cabía en presupuestos.importe_max, que es NUMERIC(10,2)
+# (máximo 99.999.999,99 €). El cliente recibía un 500 genérico por un
+# dato que se podría haber rechazado en la puerta.
+#
+# POR QUÉ 500 Y NO OTRO NÚMERO. El desbordamiento real empieza en unos
+# 51.151 m² (con la tarifa más cara, bano/alto a 1.700 €/m²), así que 500
+# deja un margen de cien veces. Y sigue siendo holgado para el negocio:
+# el Informe de decisiones trabaja con viviendas de 45 a 150 m².
+#
+# Igual que MAX_FOTOS_LEAD, se define como constante compartida para que
+# el día que se lea de reglas_negocio solo haya que cambiar un sitio. El
+# mismo valor está replicado en el CHECK chk_leads_m2_rango de la base de
+# datos (defensa doble, mismo criterio que D5): si se cambia aquí, hay
+# que cambiarlo también allí.
+MAX_M2_LEAD = 500

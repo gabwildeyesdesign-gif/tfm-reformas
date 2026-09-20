@@ -101,6 +101,13 @@ SOLO REST.
   reglas_negocio.umbral_aprobacion_manual sigue existiendo pero está marcada
   como OBSOLETA y nadie la lee: editarla no tiene ningún efecto.
   El proyecto tiene por tanto 9 tablas, no 8.
+- m2 tiene tope: más de 0 y hasta 500 (MAX_M2_LEAD en app/schemas/common.py,
+  y CHECK chk_leads_m2_rango en leads, defensa doble como en D5). Es Decimal,
+  no float. OJO: el CHECK va sobre la expresión (datos_estructurados ->>
+  'm2')::numeric porque NO existe ninguna columna m2 (D3: el dato vive en el
+  JSONB). Garantiza el RANGO, no la PRESENCIA: si la clave falta, ->> da NULL
+  y un CHECK solo rechaza lo FALSO, así que pasa. La presencia la garantiza
+  Pydantic en el único camino real de escritura, POST /leads.
 - m2 y cualquier número dentro de un JSONB llegan a Python como float si
   se lee el JSONB entero. Para Decimal exacto, extraerlo en SQL:
   (datos_estructurados ->> 'm2')::numeric.

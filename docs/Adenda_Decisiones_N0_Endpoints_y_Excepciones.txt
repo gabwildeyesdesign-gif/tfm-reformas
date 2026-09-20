@@ -10,7 +10,7 @@ endpoints y revisión técnica final.
 
 | # | Endpoint | Input | Output | Trigger real |
 |---|---|---|---|---|
-| 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales, fotos[] (opcional, máx. 5), lead_token | 201: lead_id, cliente_id, oportunidad_id, status | Webhook n8n, formulario web |
+| 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token | 201: lead_id, cliente_id, oportunidad_id, status | Webhook n8n, formulario web |
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min, importe_max, motivo_gate, requiere_aprobacion, status, creado (ver 5.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
@@ -160,6 +160,7 @@ se completarán al trasladar la tabla.
 | Endpoint | Código | Causa | Reintento en n8n | Acción |
 |---|---|---|---|---|
 | POST /leads | 401 No autorizado | Cabecera X-Webhook-Secret ausente, vacía o con valor distinto de WEBHOOK_SECRET | NO (4xx: fallo rápido; reintentar con el mismo secreto daría siempre 401) | Revisar la credencial "Header Auth" del nodo HTTP de n8n frente al .env del backend. No se escribe nada en la base de datos (ni en logs) |
+| POST /leads | 422 Dato inválido | m2 fuera de rango: 0, negativo o mayor que 500 (añadido el 2026-09-20). El error nombra el campo: "Input should be less than or equal to 500" / "Input should be greater than 0" | NO (4xx: el mismo cuerpo daría siempre 422) | Corregir el dato en el formulario. No se escribe nada en la base de datos. Defensa doble: si el dato entrara por otra vía (script, editor SQL de Supabase, nodo Postgres de n8n), lo rechaza el CHECK chk_leads_m2_rango |
 
 Detalles del 401: la respuesta es idéntica haya faltado la cabecera o
 sea incorrecta (cuerpo {"detail": "No autorizado"} y cabecera

@@ -143,7 +143,24 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
                     {
                         "tipo_reforma": data.tipo_reforma.value,
                         "nivel_acabados": data.nivel_acabados.value,
-                        "m2": data.m2,
+                        # float(...) porque el conversor JSON estándar de
+                        # Python no sabe escribir un Decimal: Json() lanzaría
+                        # "Object of type Decimal is not JSON serializable" y
+                        # el alta fallaría entera.
+                        #
+                        # Convertir aquí no perjudica la exactitud donde
+                        # importa: el número vuelve al JSON con su misma
+                        # representación decimal (8.7 -> 8.7), y el cálculo
+                        # del presupuesto NO lee este diccionario;
+                        # estimate_service extrae el dato con
+                        # (datos_estructurados ->> 'm2')::numeric, que lo
+                        # convierte de texto a NUMERIC dentro de Postgres sin
+                        # pasar por float.
+                        #
+                        # Se guarda como número JSON, y no como texto, para no
+                        # cambiar el formato de la evidencia ya escrita en los
+                        # leads anteriores.
+                        "m2": float(data.m2),
                         "incluye_cambios_estructurales": data.incluye_cambios_estructurales,
                     }
                 ),

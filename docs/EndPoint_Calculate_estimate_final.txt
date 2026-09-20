@@ -790,10 +790,12 @@ Añadidas durante la implementación, para ganar eficiencia:
 11. LIMITACIONES CONOCIDAS (lo que NO hace)
 ================================================================
 
-- m2 sin tope: LeadCreate solo exige m2 > 0. A partir de unos 64.000 m²
-  (integral alto), importe_max no cabe en NUMERIC(10,2) y la llamada
-  acaba en 500 (con rollback: no queda nada a medias). Se arregla en
-  POST /leads, fuera de este bloque.
+- m2 sin tope: RESUELTO el 2026-09-20. LeadCreate exige ahora
+  0 < m2 <= 500 (Decimal), y la base de datos lo respalda con el CHECK
+  chk_leads_m2_rango. Antes, un lead de 60.000 m² se aceptaba y la
+  llamada a calculate-estimate acababa en 500 por desbordar
+  NUMERIC(10,2) (con rollback: no quedaba nada a medias). Detalle en
+  docs/Umbral_Gate_por_Categoria_D9_final.txt, sección 10.
 - Un m2 guardado como texto no numérico dentro del JSON (solo posible
   escribiendo a mano en la base de datos) haría fallar ::numeric -> 500.
 - El fallback por regla ausente en reglas_negocio no se ha probado

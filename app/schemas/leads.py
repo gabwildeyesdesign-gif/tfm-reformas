@@ -24,10 +24,21 @@ sistema. Solo describe formas. La validación que sí depende del negocio
 #   por defecto, un límite, o una descripción.
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+# Decimal: el tipo de número decimal EXACTO de la biblioteca estándar. Se
+# usa para m2 por el mismo motivo que en los importes del presupuesto:
+# float guarda los números en binario y muchos decimales corrientes no
+# tienen representación exacta.
+from decimal import Decimal
+
 # Import completo (app.schemas.common) y no relativo (.common): así, al
 # leer cualquier línea de abajo, se ve exactamente de qué archivo del
 # proyecto sale cada nombre, sin tener que deducirlo.
-from app.schemas.common import MAX_FOTOS_LEAD, NivelAcabados, TipoReforma
+from app.schemas.common import (
+    MAX_FOTOS_LEAD,
+    MAX_M2_LEAD,
+    NivelAcabados,
+    TipoReforma,
+)
 
 
 class PhotoUploadSlot(BaseModel):
@@ -130,9 +141,23 @@ class LeadCreate(BaseModel):
     # con un error que lista los valores permitidos.
     tipo_reforma: TipoReforma
 
-    # gt=0 -> estrictamente mayor que cero. Se usa gt y no ge ("greater
-    # or equal") a propósito: una reforma de 0 m2 no existe.
-    m2: float = Field(gt=0, description="Metros cuadrados a reformar")
+    # Decimal y no float, por el mismo motivo que en los importes: float
+    # guarda los números en binario y muchos decimales sencillos no tienen
+    # representación exacta (Decimal(8.7) vale 8.699999999999999289...).
+    # Aquí Pydantic convierte el número del JSON pasando por su texto, así
+    # que 8.7 llega como Decimal('8.7') exacto (comprobado).
+    #
+    # gt es "greater than" (mayor que) y le es "less or equal" (menor o
+    # igual). gt=0 rechaza el 0 y los negativos —una reforma de 0 m² no
+    # existe—, y se usa gt y no ge a propósito. le=MAX_M2_LEAD rechaza una
+    # superficie imposible. El límite es INCLUSIVO: 500 se acepta, 500.01
+    # no. Sin ese tope, un lead de 60.000 m² se aceptaba aquí y reventaba
+    # después al calcular el presupuesto, con un 500 para el cliente.
+    m2: Decimal = Field(
+        gt=0,
+        le=MAX_M2_LEAD,
+        description=f"Metros cuadrados a reformar (más de 0 y hasta {MAX_M2_LEAD})",
+    )
 
     nivel_acabados: NivelAcabados
 

@@ -495,8 +495,51 @@ EL UMBRAL DE parcial_acabados YA ESTÁ CERRADO (actualizado el
   La mejora pendiente es un tope de m² por categoría, o un flujo de
   captura que no ofrezca esta categoría para una vivienda completa.
 
+TOPE DE m2: RESUELTO el 2026-09-20 (era el otro pendiente de este
+bloque).
+
+  m2 queda acotado a "más de 0 y hasta 500", con DEFENSA DOBLE, el mismo
+  criterio de D5 con los enums:
+    - Pydantic: en LeadCreate, m2 pasa de float a Decimal con
+      Field(gt=0, le=MAX_M2_LEAD). La puerta HTTP responde 422 nombrando
+      el campo, en vez del 500 que salía antes al calcular.
+    - Base de datos: CHECK chk_leads_m2_rango en leads
+      (migración paso6_check_m2_leads.py).
+
+  Por qué 500: el desbordamiento real de presupuestos.importe_max
+  (NUMERIC(10,2)) empieza hacia los 51.151 m² con la tarifa más cara, así
+  que 500 deja un margen de cien veces y sigue siendo holgado para el
+  negocio (viviendas de 45 a 150 m² en el Informe).
+
+  CORRECCIÓN DE UNA PREMISA EQUIVOCADA, que conviene dejar escrita: al
+  plantear esta tarea se dio por supuesto que existía una columna m2 con
+  un tipo NUMERIC declarado, y que bastaba con mirar su precisión. NO
+  EXISTE tal columna. Comprobado contra information_schema: la única
+  columna con "m2" en el nombre es tarifas_base.precio_m2, que es un
+  precio, no una superficie. m2 vive DENTRO del JSONB
+  leads.datos_estructurados, por decisión D3. Por eso el CHECK no puede
+  copiarse literalmente de D5 (que es sobre una columna) y se escribe
+  sobre la EXPRESIÓN (datos_estructurados ->> 'm2')::numeric. Y por eso
+  el límite de desbordamiento no lo marcaba m2 —que dentro de un JSON no
+  tiene tipo declarado— sino presupuestos.importe_max.
+
+  LIMITACIÓN CONOCIDA Y ACEPTADA (no es un descuido): el CHECK garantiza
+  el RANGO, no la PRESENCIA. Si la clave 'm2' falta en el JSON, el
+  operador ->> devuelve NULL, la condición se evalúa como "desconocido" y
+  la fila SE ACEPTA, porque en Postgres un CHECK solo rechaza cuando la
+  condición es FALSA. Quien garantiza que m2 esté siempre es Pydantic,
+  porque el campo es obligatorio en LeadCreate y POST /leads es el único
+  camino real de escritura. Un lead escrito a mano sin m2 entraría, y el
+  cálculo lo mandaría a 'requiere_revision' por datos incompletos (camino
+  ya probado). Está verificado como caso D del script, con ese resultado
+  esperado, para que quede constancia de que se conoce y se acepta.
+
+  HALLAZGO durante la verificación: el CHECK protege más de lo previsto.
+  Se evalúa también en los UPDATE, así que con él puesto ya no se puede
+  ni siquiera corromper m2 a un texto por SQL ("abc" hace fallar el cast
+  antes de escribir nada).
+
 Otros pendientes heredados, sin cambios:
-  - m2 no tiene tope en LeadCreate (riesgo de desbordar NUMERIC(10,2)).
   - check_exception_handler.py falla 22/28 también en main, por no
     enviar X-Webhook-Secret. Anterior a estos bloques.
   - La tool MCP no se ha probado todavía desde el nodo real de n8n.

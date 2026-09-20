@@ -23,7 +23,9 @@ sys.path.insert(0, str(RAIZ_REPO))
 
 from pydantic import ValidationError
 
-from app.schemas.common import MAX_FOTOS_LEAD, NivelAcabados, TipoReforma
+from decimal import Decimal
+
+from app.schemas.common import MAX_FOTOS_LEAD, MAX_M2_LEAD, NivelAcabados, TipoReforma
 from app.schemas.leads import (
     LeadCreate,
     LeadCreateResponse,
@@ -127,11 +129,23 @@ debe_aceptar(
     con(fotos=[f"leads-temp/tok123/f{i}.jpg" for i in range(MAX_FOTOS_LEAD)]),
     lambda o: True if len(o.fotos) == MAX_FOTOS_LEAD else f"len={len(o.fotos)}",
 )
+# ACTUALIZADO 2026-09-20: m2 pasa de float a Decimal, con tope le=500.
+# La asercion antigua exigia isinstance(o.m2, float) y empezo a fallar al
+# aplicar el tope. No es un fallo: es el contrato nuevo. Decimal se eligio
+# por lo mismo que en los importes -float guarda en binario y pierde
+# exactitud- y Pydantic convierte pasando por el texto, asi que "45.5"
+# llega como Decimal('45.5') exacto.
 debe_aceptar(
-    'm2 como texto "45.5" -> Pydantic lo convierte a float',
+    'm2 como texto "45.5" -> Pydantic lo convierte a Decimal exacto',
     LeadCreate,
     con(m2="45.5"),
-    lambda o: True if o.m2 == 45.5 and isinstance(o.m2, float) else f"m2={o.m2!r}",
+    lambda o: True if o.m2 == Decimal("45.5") and isinstance(o.m2, Decimal) else f"m2={o.m2!r}",
+)
+debe_aceptar(
+    f"m2 = {MAX_M2_LEAD} exacto (el tope es INCLUSIVO)",
+    LeadCreate,
+    con(m2=MAX_M2_LEAD),
+    lambda o: True if o.m2 == Decimal(MAX_M2_LEAD) else f"m2={o.m2!r}",
 )
 debe_aceptar(
     "Los 4 tipos y 3 niveles reales de tarifas_base se aceptan",
@@ -160,6 +174,14 @@ debe_aceptar(
 print("\n=== B. LO QUE DEBE RECHAZARSE ===")
 debe_rechazar("m2 = 0", LeadCreate, con(m2=0), "greater_than")
 debe_rechazar("m2 negativo (-5)", LeadCreate, con(m2=-5), "greater_than")
+# El tope nuevo (MAX_M2_LEAD). Sin el, un lead de 60.000 m2 se aceptaba
+# aqui y reventaba despues al calcular el presupuesto, porque importe_max
+# no cabe en NUMERIC(10,2). Verificado con ejecucion real antes de poner
+# el tope.
+debe_rechazar(f"m2 = {MAX_M2_LEAD}.01 (un pelo por encima del tope)", LeadCreate,
+              con(m2=float(MAX_M2_LEAD) + 0.01), "less_than_equal")
+debe_rechazar("m2 = 60000 (el caso que provocaba un 500)", LeadCreate,
+              con(m2=60000), "less_than_equal")
 debe_rechazar('tipo_reforma = "bano" CON ENIE ("bano" mal escrito)', LeadCreate, con(tipo_reforma="ba\u00f1o"), "enum")
 debe_rechazar('nivel_acabados = "basico" CON TILDE', LeadCreate, con(nivel_acabados="b\u00e1sico"), "enum")
 debe_rechazar('tipo_reforma inventado ("tejado")', LeadCreate, con(tipo_reforma="tejado"), "enum")

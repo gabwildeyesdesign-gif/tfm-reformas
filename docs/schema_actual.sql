@@ -1,7 +1,7 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-09-19 22:18:10 UTC
+-- Generado por scripts/dump_schema.py el 2026-09-20 11:19:55 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
@@ -37,7 +37,8 @@ CREATE TABLE leads (
     datos_estructurados      JSONB,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT leads_cliente_id_fkey FOREIGN KEY (cliente_id) REFERENCES clientes(id),
-    CONSTRAINT leads_pkey PRIMARY KEY (id)
+    CONSTRAINT leads_pkey PRIMARY KEY (id),
+    CONSTRAINT chk_leads_m2_rango CHECK ((((datos_estructurados ->> 'm2'::text))::numeric > (0)::numeric) AND (((datos_estructurados ->> 'm2'::text))::numeric <= (500)::numeric))
 );
 
 -- ------------------------------------------------------------------------
