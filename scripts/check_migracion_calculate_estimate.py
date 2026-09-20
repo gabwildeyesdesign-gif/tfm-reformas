@@ -307,7 +307,7 @@ try:
     # El presupuesto "ya existente" contra el que chocan A4 y A5.
     cur.execute(
         """
-        INSERT INTO presupuestos (oportunidad_id, importe_min, importe_max,
+        INSERT INTO presupuestos (oportunidad_id, importe_min_con_iva, importe_max_con_iva,
                                   requiere_aprobacion)
         VALUES (%s, 6900.00, 7935.00, false) RETURNING id;
         """,
@@ -369,7 +369,7 @@ try:
     error, _ = ejecutar_en_savepoint(
         cur,
         """
-        INSERT INTO presupuestos (oportunidad_id, importe_min, importe_max,
+        INSERT INTO presupuestos (oportunidad_id, importe_min_con_iva, importe_max_con_iva,
                                   requiere_aprobacion)
         VALUES (%s, 1.00, 2.00, false);
         """,
@@ -389,7 +389,7 @@ try:
     error, filas = ejecutar_en_savepoint(
         cur,
         """
-        INSERT INTO presupuestos (oportunidad_id, importe_min, importe_max,
+        INSERT INTO presupuestos (oportunidad_id, importe_min_con_iva, importe_max_con_iva,
                                   requiere_aprobacion)
         VALUES (%s, 1.00, 2.00, false)
         ON CONFLICT (oportunidad_id) DO NOTHING

@@ -48,6 +48,7 @@ from app.schemas.leads import LeadCreate
 from app.services.estimate_service import (
     EstadoNoPermiteCalculo,
     OportunidadNoEncontrada,
+    aplicar_iva,
     calcular_importes,
     calculate_estimate,
     evaluar_gate,
@@ -82,6 +83,17 @@ REC, MAR = D("600.00"), D("15.00")
 # para bano y cocina, y 10.000 € para integral_vivienda y
 # parcial_acabados (este último, provisional hasta cerrar D10).
 UMB_10, UMB_13 = D("10000.00"), D("13000.00")
+
+# Tipo de IVA vigente (D14). Se escribe aqui como constante de la PRUEBA,
+# no se lee de la base de datos: una prueba que leyera el mismo dato que
+# usa el codigo no verificaria nada, porque los dos se moverian juntos si
+# el dato estuviera mal.
+IVA = D("21")
+
+
+def D_IVA(importe_sin_iva):
+    """El precio con IVA esperado, calculado aparte del codigo probado."""
+    return (importe_sin_iva * (1 + IVA / D("100"))).quantize(D("0.01"))
 
 print("\n  calcular_importes(precio_m2, m2, estructural, recargo 600, margen 15):")
 casos_importes = [
@@ -120,6 +132,29 @@ for importe, estr, umbral, esperado in casos_gate:
     comprobar(f"{importe} estructural={estr} umbral={umbral}",
               obtenido == esperado, f"-> {obtenido}")
 
+# aplicar_iva: se prueba con varios numeros DISTINTOS a proposito. Con un
+# solo caso, un error del tipo "multiplicar por 1,1" o "sumar 21" podria
+# colarse si el numero elegido diera por casualidad el resultado correcto.
+# Los valores esperados estan calculados a mano, no pedidos al codigo:
+#   6900,00 x 1,21 = 8349,00        7935,00 x 1,21 = 9601,35
+#   11500,00 x 1,21 = 13915,00      1,00 x 1,21 = 1,21 (el caso minimo)
+#   8,33 x 1,21 = 10,0793 -> 10,08 al redondear a centimos
+print("\n  aplicar_iva(importe_sin_iva, 21):")
+for base, esperado in [
+    (D("6900.00"), D("8349.00")),
+    (D("7935.00"), D("9601.35")),
+    (D("11500.00"), D("13915.00")),
+    (D("1.00"), D("1.21")),
+    (D("8.33"), D("10.08")),
+]:
+    obtenido = aplicar_iva(base, IVA)
+    comprobar(f"{base} + 21% -> {esperado}", obtenido == esperado, f"-> {obtenido}")
+# Y con un tipo distinto del 21 %, para comprobar que el porcentaje se usa
+# de verdad y no esta escrito a fuego: 6900 x 1,10 = 7590,00.
+comprobar("con un IVA del 10 % el resultado cambia",
+          aplicar_iva(D("6900.00"), D("10")) == D("7590.00"),
+          f"-> {aplicar_iva(D('6900.00'), D('10'))}")
+
 print("\n  ocultar_importes_para_agente:")
 for motivo, debe_ocultar in [
     (MotivoGate.CAMBIOS_ESTRUCTURALES, True),
@@ -128,16 +163,17 @@ for motivo, debe_ocultar in [
     (None, False),
 ]:
     original = EstimateResponse(
-        presupuesto_id=1, oportunidad_id=1, importe_min=D("1.00"), importe_max=D("2.00"),
+        presupuesto_id=1, oportunidad_id=1,
+        importe_min_con_iva=D("1.00"), importe_max_con_iva=D("2.00"),
         motivo_gate=motivo, requiere_aprobacion=motivo is not None,
         status="x", creado=True,
     )
     r = ocultar_importes_para_agente(original)
-    ocultos = r.importe_min is None and r.importe_max is None
+    ocultos = r.importe_min_con_iva is None and r.importe_max_con_iva is None
     comprobar(
         f"motivo={motivo.value if motivo else None}",
-        ocultos == debe_ocultar and original.importe_min == D("1.00"),
-        f"-> ocultos={ocultos} (original intacto: {original.importe_min})",
+        ocultos == debe_ocultar and original.importe_min_con_iva == D("1.00"),
+        f"-> ocultos={ocultos} (original intacto: {original.importe_min_con_iva})",
     )
 
 
@@ -210,8 +246,9 @@ def estado_bd(cur, cn, oportunidad_id):
 def presupuesto_bd(cur, cn, oportunidad_id):
     cur.execute(
         """
-        SELECT id, importe_min, importe_max, motivo_gate, requiere_aprobacion,
-               duracion_estimada_dias, aprobado_por
+        SELECT id, importe_min_con_iva, importe_max_con_iva, motivo_gate,
+               requiere_aprobacion, duracion_estimada_dias, aprobado_por,
+               iva_pct_aplicado
         FROM presupuestos WHERE oportunidad_id = %s;
         """,
         (oportunidad_id,),
@@ -230,18 +267,37 @@ def caso_calculo(titulo, sufijo, tipo, nivel, m2, estr, esp_min, esp_max, esp_mo
     pres = presupuesto_bd(cur, cn, op)
     bd = estado_bd(cur, cn, op)
     comprobar("creado=True", r.creado is True)
-    comprobar("importes esperados", (r.importe_min, r.importe_max) == (esp_min, esp_max),
-              f"({r.importe_min} / {r.importe_max})")
+    # Los valores esperados que recibe esta funcion son SIN IVA (los
+    # calculados a mano con la formula de negocio). El precio que devuelve
+    # el endpoint lleva IVA, asi que aqui se deriva multiplicando por
+    # (1 + 21/100) = 1,21. Se comprueban las DOS cosas por separado:
+    #   - que el endpoint devuelve exactamente ese numero;
+    #   - y que ese numero es, al centimo, el de sin IVA por 1,21.
+    # La segunda comprobacion es la que impide que un fallo de redondeo o
+    # un IVA mal leido pase inadvertido.
+    esp_min_iva = D_IVA(esp_min)
+    esp_max_iva = D_IVA(esp_max)
+    comprobar("importes CON IVA esperados",
+              (r.importe_min_con_iva, r.importe_max_con_iva) == (esp_min_iva, esp_max_iva),
+              f"({r.importe_min_con_iva} / {r.importe_max_con_iva})")
+    comprobar("el con IVA es exactamente el sin IVA x 1,21",
+              (r.importe_min_con_iva, r.importe_max_con_iva)
+              == ((esp_min * D("1.21")).quantize(D("0.01")),
+                  (esp_max * D("1.21")).quantize(D("0.01"))),
+              f"(sin IVA {esp_min} / {esp_max})")
     comprobar("motivo_gate esperado", r.motivo_gate == esp_motivo, f"({r.motivo_gate})")
     comprobar("requiere_aprobacion coherente", r.requiere_aprobacion == (esp_motivo is not None))
     comprobar("status = estado esperado", r.status == esp_estado, f"({r.status})")
     comprobar("fila en presupuestos = respuesta",
               pres is not None and pres[0] == r.presupuesto_id
-              and (pres[1], pres[2]) == (esp_min, esp_max)
+              and (pres[1], pres[2]) == (esp_min_iva, esp_max_iva)
               and pres[3] == (esp_motivo.value if esp_motivo else None)
               and pres[4] == r.requiere_aprobacion,
               f"({pres})")
     comprobar("duracion_estimada_dias y aprobado_por NULL", pres[5] is None and pres[6] is None)
+    # El presupuesto guarda CON QUE tipo de IVA se calculo, para que el
+    # documento quede congelado aunque la regla cambie mas adelante.
+    comprobar("la fila guarda iva_pct_aplicado = 21", pres[7] == D("21.00"), f"({pres[7]})")
     comprobar("estado en la BD = status", bd["estado"] == r.status, f"({bd['estado']})")
     comprobar("datos_completos, confianza_ia y prioridad intactos",
               (bd["datos_completos"], bd["confianza_ia"], bd["prioridad"]) == (False, None, None))
@@ -282,6 +338,18 @@ try:
     # -> 13.000 €, no el antiguo global de 10.000 €. Y queda anotado si
     # ese umbral era provisional (aquí no lo es; solo lo es hoy el de
     # parcial_acabados).
+    # El log de auditoría guarda los CUATRO importes y el tipo de IVA
+    # aplicado. Sin el par sin IVA no se podría explicar después por qué
+    # el Gate saltó o no saltó (se decide con esos), y sin el par con IVA
+    # no se sabría qué cifra vio el cliente. Caso B1: 6900/7935 sin IVA,
+    # que por 1,21 dan 8349,00 y 9601,35.
+    comprobar("el log guarda los cuatro importes y el tipo de IVA",
+              (detalle["importe_min_sin_iva"], detalle["importe_max_sin_iva"],
+               detalle["importe_min_con_iva"], detalle["importe_max_con_iva"],
+               detalle["iva_pct_aplicado"])
+              == ("6900.00", "7935.00", "8349.00", "9601.35", "21.00"),
+              f"({detalle.get('importe_min_sin_iva')} -> {detalle.get('importe_min_con_iva')}, "
+              f"iva={detalle.get('iva_pct_aplicado')})")
     comprobar("log guarda precio_m2, margen, recargo y el umbral de la categoría",
               (detalle["precio_m2"], detalle["margen_empresa_pct"],
                detalle["recargo_informe_tecnico"], detalle["umbral_gate"],
@@ -296,8 +364,8 @@ try:
     comprobar("mismo presupuesto_id", r2.presupuesto_id == r1.presupuesto_id)
     comprobar("creado=False", r2.creado is False)
     comprobar("mismos importes, motivo y status",
-              (r2.importe_min, r2.importe_max, r2.motivo_gate, r2.status)
-              == (r1.importe_min, r1.importe_max, r1.motivo_gate, r1.status))
+              (r2.importe_min_con_iva, r2.importe_max_con_iva, r2.motivo_gate, r2.status)
+              == (r1.importe_min_con_iva, r1.importe_max_con_iva, r1.motivo_gate, r1.status))
     comprobar("sigue habiendo 1 presupuesto y 1 log (nada escrito)",
               (bd["n_presupuestos"], bd["n_logs_calculado"]) == (1, 1))
 
@@ -307,7 +375,7 @@ try:
                            "pendiente_aprobacion")
     oculto = ocultar_importes_para_agente(r3)
     comprobar("versión para el agente sin importes",
-              oculto.importe_min is None and oculto.importe_max is None
+              oculto.importe_min_con_iva is None and oculto.importe_max_con_iva is None
               and oculto.presupuesto_id == r3.presupuesto_id)
 
     caso_calculo("B4 integral medio 80 m², CON estructural -> ambos",
@@ -348,10 +416,27 @@ try:
     # (10 m², nivel medio) daba 11.500 € y activaba el Gate con el umbral
     # antiguo, contradiciendo lo que la propia fila de tarifas_base
     # declara para esa combinación. Con 13.000 €, pasa sin Gate.
-    caso_calculo("B12 cocina medio 10 m² (caso típico de D9) -> sin Gate",
-                 "b12", "cocina", "medio", 10, False,
-                 D("10000.00"), D("11500.00"), None,
-                 "presupuesto_enviado")
+    op12, r12 = caso_calculo("B12 cocina medio 10 m² (caso típico de D9) -> sin Gate",
+                             "b12", "cocina", "medio", 10, False,
+                             D("10000.00"), D("11500.00"), None,
+                             "presupuesto_enviado")
+
+    # B12-IVA: LA PRUEBA DE QUE EL GATE SE DECIDE CON EL IMPORTE SIN IVA.
+    #
+    # Este caso es el que lo demuestra sin ambigüedad, porque los dos
+    # números caen a lados distintos del umbral de cocina (13.000 €):
+    #     sin IVA: 11.500,00  ->  por DEBAJO del umbral
+    #     con IVA: 13.915,00  ->  por ENCIMA del umbral
+    # El resultado real es "sin Gate", así que la comparación se hizo
+    # contra el importe sin IVA. Si algún día alguien cambiara el
+    # servicio para comparar contra el precio con IVA, esta comprobación
+    # fallaría de inmediato, que es justo para lo que está.
+    comprobar("B12 el Gate se decide con el importe SIN IVA, no con el de después",
+              r12.importe_max_con_iva == D("13915.00")
+              and r12.importe_max_con_iva > UMB_13
+              and r12.motivo_gate is None
+              and r12.requiere_aprobacion is False,
+              f"(con IVA {r12.importe_max_con_iva} > umbral {UMB_13} y aun así sin Gate)")
 
     print("\n  B7 oportunidad inexistente")
     try:
@@ -381,7 +466,8 @@ try:
     print(f"    respuesta: {r9.model_dump()}")
     bd = estado_bd(cur, cn, op9)
     comprobar("status requiere_revision, sin importes ni presupuesto_id",
-              (r9.status, r9.importe_min, r9.importe_max, r9.presupuesto_id, r9.creado)
+              (r9.status, r9.importe_min_con_iva, r9.importe_max_con_iva,
+               r9.presupuesto_id, r9.creado)
               == ("requiere_revision", None, None, None, False))
     comprobar("0 presupuestos, estado sigue 'nueva', 1 log de revisión",
               (bd["n_presupuestos"], bd["estado"], bd["n_logs_revision"]) == (0, "nueva", 1))
@@ -430,7 +516,8 @@ try:
     cn_rival = psycopg2.connect(DATABASE_URL)
     cur_rival = cn_rival.cursor()
     cur_rival.execute(
-        """INSERT INTO presupuestos (oportunidad_id, importe_min, importe_max, requiere_aprobacion)
+        """INSERT INTO presupuestos (oportunidad_id, importe_min_con_iva,
+                                     importe_max_con_iva, requiere_aprobacion)
            VALUES (%s, 111.11, 222.22, false) RETURNING id;""",
         (op11,),
     )
@@ -462,7 +549,7 @@ try:
     comprobar("sin error", "error" not in resultado_hilo)
     comprobar("devuelve el presupuesto del rival, creado=False",
               r11 is not None and (r11.presupuesto_id, r11.creado,
-                                   r11.importe_min, r11.status)
+                                   r11.importe_min_con_iva, r11.status)
               == (id_rival, False, D("111.11"), "presupuesto_enviado"))
     bd = estado_bd(cur, cn, op11)
     comprobar("1 presupuesto y ningún log de cálculo (el servicio no escribió)",

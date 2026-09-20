@@ -138,9 +138,9 @@ async def pruebas_con_cliente(ops):
             return r.structured_content
 
         casos = [
-            ("sin Gate -> importes visibles", ops["sin_gate"], ("6900.00", "7935.00"), None),
+            ("sin Gate -> importes visibles", ops["sin_gate"], ("8349.00", "9601.35"), None),
             ("importe_superior_umbral -> importes visibles", ops["umbral"],
-             ("64000.00", "73600.00"), "importe_superior_umbral"),
+             ("77440.00", "89056.00"), "importe_superior_umbral"),
             ("cambios_estructurales -> importes NULL", ops["estr"], (None, None),
              "cambios_estructurales"),
             ("ambos -> importes NULL", ops["ambos"], (None, None), "ambos"),
@@ -150,24 +150,24 @@ async def pruebas_con_cliente(ops):
             sc = await llamar(op)
             print(f"    {sc}")
             comprobar(titulo,
-                      (sc["importe_min"], sc["importe_max"]) == importes
+                      (sc["importe_min_con_iva"], sc["importe_max_con_iva"]) == importes
                       and sc["motivo_gate"] == motivo and sc["presupuesto_id"] is not None
                       and sc["creado"] is True)
 
         # Los importes se ocultan AL AGENTE, pero existen y están guardados.
         cur.execute(
-            "SELECT importe_min, importe_max FROM presupuestos WHERE oportunidad_id = %s;",
+            "SELECT importe_min_con_iva, importe_max_con_iva FROM presupuestos WHERE oportunidad_id = %s;",
             (ops["estr"],),
         )
         guardado = cur.fetchone()
         cn.commit()
         comprobar("los importes ocultados SÍ están guardados en presupuestos",
-                  tuple(str(x) for x in guardado) == ("7500.00", "8625.00"), f"({guardado})")
+                  tuple(str(x) for x in guardado) == ("9075.00", "10436.25"), f"({guardado})")
 
         print("\n  call_tool: segunda llamada (idempotencia)")
         sc = await llamar(ops["sin_gate"])
         comprobar("creado=false y mismos importes",
-                  sc["creado"] is False and sc["importe_min"] == "6900.00")
+                  sc["creado"] is False and sc["importe_min_con_iva"] == "8349.00")
 
         print("\n  call_tool: errores")
         for titulo, args in [

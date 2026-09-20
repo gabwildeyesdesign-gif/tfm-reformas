@@ -11,10 +11,13 @@ obtengan cifras distintas (documento de arquitectura, sección 4.3).
 Contrato: Adenda, punto 1.1. Resumen:
   - Entrada: solo oportunidad_id. Los datos de negocio se leen de la base
     de datos, nunca los aporta quien llama.
-  - importe_min = precio_m2 × m2 (+ recargo_informe_tecnico si hay
-    cambios estructurales)
-    importe_max = importe_min × (1 + margen_empresa_pct / 100)
-  - Gate HITL evaluado contra importe_max, con ">" estricto.
+  - importe_min_sin_iva = precio_m2 × m2 (+ recargo_informe_tecnico si
+    hay cambios estructurales)
+    importe_max_sin_iva = importe_min_sin_iva × (1 + margen_empresa_pct / 100)
+  - importe_*_con_iva  = importe_*_sin_iva × (1 + iva_estandar_pct / 100),
+    redondeado a céntimos (D14). Es lo que se devuelve y lo que se guarda.
+  - Gate HITL evaluado contra importe_max_SIN_iva, con ">" estricto: el
+    umbral mide riesgo comercial, y el IVA no se queda en la empresa.
   - Estado de la oportunidad: 'presupuesto_enviado' sin Gate,
     'pendiente_aprobacion' con Gate (D8).
   - Idempotente: una segunda llamada devuelve el presupuesto que ya
@@ -65,6 +68,13 @@ STATUS_REQUIERE_REVISION = "requiere_revision"
 # Claves de reglas_negocio que usa el cálculo, copiadas de la tabla real.
 CLAVE_MARGEN = "margen_empresa_pct"
 CLAVE_RECARGO = "recargo_informe_tecnico"
+
+# Tipo de IVA que se aplica al precio mostrado al cliente (D14). Se lee de
+# reglas_negocio en CADA cálculo nuevo, exactamente igual que el margen o
+# el recargo, y nunca se escribe el 21 a mano en el código: es un
+# parámetro de negocio que puede cambiar por una reforma fiscal, y debe
+# poder cambiarse sin tocar el código ni reiniciar el servidor.
+CLAVE_IVA = "iva_estandar_pct"
 
 # OJO: el umbral del Gate YA NO se lee de reglas_negocio.
 #
@@ -161,8 +171,11 @@ def calcular_importes(
     margen_empresa_pct: Decimal,
 ) -> tuple[Decimal, Decimal]:
     """
-    Aplica la fórmula de la Adenda 1.1(b) y devuelve (importe_min,
-    importe_max), los dos ya redondeados a céntimos.
+    Aplica la fórmula de la Adenda 1.1(b) y devuelve el par
+    (importe_min_sin_iva, importe_max_sin_iva), los dos ya redondeados a
+    céntimos. SIN IVA: el impuesto lo añade después aplicar_iva (D14).
+    Esta función calcula lo que cobra la empresa por la obra; el IVA es
+    un recargo fiscal posterior que no depende de tarifas ni de margen.
 
     Por qué el margen AMPLÍA el rango y no se suma como beneficio: los
     precio_m2 de tarifas_base ya son precios de VENTA de mercado, con el
@@ -173,8 +186,9 @@ def calcular_importes(
 
     Ejemplo: baño medio (1150.00 €/m²), 6 m², con cambios estructurales
     (recargo 600.00), margen 15.00:
-        importe_min = 1150.00 × 6 + 600.00 = 7500.00
-        importe_max = 7500.00 × (1 + 15.00 / 100) = 8625.00
+        importe_min_sin_iva = 1150.00 × 6 + 600.00 = 7500.00
+        importe_max_sin_iva = 7500.00 × (1 + 15.00 / 100) = 8625.00
+    (con el 21 % de IVA, al cliente se le mostraría 9075.00 - 10436.25)
     """
     # "Expresión condicional" de Python: VALOR_SI_SÍ if CONDICIÓN else
     # VALOR_SI_NO. Es un if/else en una sola línea que produce un valor.
@@ -195,6 +209,37 @@ def calcular_importes(
     # una sola línea, como hace leads_service.py con "oportunidad_id,
     # estado = cursor.fetchone()".
     return importe_min, importe_max
+
+
+def aplicar_iva(importe_sin_iva: Decimal, iva_pct: Decimal) -> Decimal:
+    """
+    Convierte un importe SIN IVA en el precio final CON IVA (D14).
+
+    La cuenta es la de toda la vida: al precio base se le suma el
+    porcentaje de impuesto. Multiplicar por (1 + iva/100) es la forma
+    corta de hacer esas dos cosas a la vez:
+
+        precio_final = base + base × (iva/100)
+                     = base × (1 + iva/100)
+
+    Con el 21 %:  1 + 21/100 = 1,21.  Un importe de 6.900,00 € queda en
+    6.900,00 × 1,21 = 8.349,00 €.
+
+    Por qué se divide entre 100 y no se escribe 0,21 directamente: el
+    valor llega de reglas_negocio como un PORCENTAJE (21), que es como lo
+    entiende una persona que edite la tabla. Convertirlo a proporción es
+    trabajo del código, no de quien administra los datos.
+
+    Por qué CIEN es un Decimal y no el entero 100: para que toda la
+    operación ocurra entre Decimal y no se cuele un float por el camino,
+    que es lo que introduciría errores de céntimos.
+
+    El resultado se redondea a dos decimales igual que los demás
+    importes, porque es el valor que se guarda en una columna
+    NUMERIC(10,2) y el que se le muestra al cliente: el número mostrado,
+    el guardado y el comparable tienen que ser el mismo.
+    """
+    return redondear(importe_sin_iva * (1 + iva_pct / CIEN))
 
 
 def evaluar_gate(
@@ -271,7 +316,9 @@ def ocultar_importes_para_agente(respuesta: EstimateResponse) -> EstimateRespons
     modifica.
     """
     if respuesta.motivo_gate in (MotivoGate.CAMBIOS_ESTRUCTURALES, MotivoGate.AMBOS):
-        return respuesta.model_copy(update={"importe_min": None, "importe_max": None})
+        return respuesta.model_copy(
+            update={"importe_min_con_iva": None, "importe_max_con_iva": None}
+        )
     return respuesta
 
 
@@ -385,8 +432,11 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
                    (l.datos_estructurados ->> 'm2')::numeric,
                    (l.datos_estructurados ->> 'incluye_cambios_estructurales')::boolean,
                    p.id,
-                   p.importe_min,
-                   p.importe_max,
+                   -- D14: las columnas se llaman ahora *_con_iva. Lo que
+                   -- guardan es el precio final que se le enseñó al
+                   -- cliente, con el IVA ya aplicado.
+                   p.importe_min_con_iva,
+                   p.importe_max_con_iva,
                    p.motivo_gate,
                    p.requiere_aprobacion
             FROM oportunidades o
@@ -415,8 +465,8 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
             m2,
             incluye_cambios_estructurales,
             presupuesto_id,
-            importe_min,
-            importe_max,
+            importe_min_con_iva,
+            importe_max_con_iva,
             motivo_gate,
             requiere_aprobacion,
         ) = fila
@@ -432,12 +482,24 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
         # El return sale del with de forma normal, así que el context
         # manager hace commit. No se había escrito nada, así que el
         # commit solo cierra la transacción de lectura.
+        #
+        # ESTA RAMA NO TIENE NINGUNA LÓGICA DE IVA, y es deliberado
+        # (D14). Los importes se devuelven tal como están guardados, sin
+        # leer siquiera reglas_negocio.iva_estandar_pct. Motivo: si aquí
+        # se recalculara el IVA, habría DOS sitios que deciden el precio
+        # —el cálculo nuevo y la relectura— y bastaría con que alguien
+        # cambiara el tipo de IVA en la tabla para que un presupuesto ya
+        # comunicado al cliente devolviera de pronto otra cifra. Con el
+        # importe final guardado, una segunda llamada devuelve
+        # exactamente el mismo número que la primera, para siempre. El
+        # tipo que se aplicó queda archivado en
+        # presupuestos.iva_pct_aplicado por si hace falta justificarlo.
         if presupuesto_id is not None:
             return EstimateResponse(
                 presupuesto_id=presupuesto_id,
                 oportunidad_id=oportunidad_id,
-                importe_min=importe_min,
-                importe_max=importe_max,
+                importe_min_con_iva=importe_min_con_iva,
+                importe_max_con_iva=importe_max_con_iva,
                 # motivo_gate llega de la base de datos como texto
                 # ('ambos') o None; Pydantic lo convierte solo al enum
                 # MotivoGate porque el campo está declarado de ese tipo.
@@ -505,6 +567,10 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
                   WHERE tipo_reforma = %s AND nivel_acabados = %s),
                 (SELECT valor FROM reglas_negocio WHERE clave = %s),
                 (SELECT valor FROM reglas_negocio WHERE clave = %s),
+                -- D14: el tipo de IVA se lee aquí, en la misma consulta
+                -- que el resto de parámetros del cálculo, así que no
+                -- cuesta ningún viaje extra a la base de datos.
+                (SELECT valor FROM reglas_negocio WHERE clave = %s),
                 (SELECT umbral FROM umbrales_gate WHERE tipo_reforma = %s),
                 (SELECT provisional FROM umbrales_gate WHERE tipo_reforma = %s);
             """,
@@ -513,11 +579,12 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
                 nivel_acabados,
                 CLAVE_MARGEN,
                 CLAVE_RECARGO,
+                CLAVE_IVA,
                 tipo_reforma,
                 tipo_reforma,
             ),
         )
-        precio_m2, margen, recargo, umbral, umbral_provisional = cursor.fetchone()
+        precio_m2, margen, recargo, iva_pct, umbral, umbral_provisional = cursor.fetchone()
 
         # Qué falta, en lenguaje de negocio, para dejarlo en el log.
         # Una lista vacía significa que no falta nada.
@@ -558,8 +625,14 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
         #     no da error, da presupuestos mal clasificados en silencio,
         #     que es peor. Mejor un caso a revisión humana, con la causa
         #     escrita en logs.
+        # El IVA entra en esta misma lista: si la regla no estuviera, no
+        # se puede calcular el precio que se le muestra al cliente, y
+        # NUNCA se usa un 21 de reserva. Inventar un tipo impositivo
+        # daría un precio equivocado sin avisar a nadie; mejor un caso a
+        # revisión humana con la causa escrita en el log.
         for clave, valor in zip(
-            (CLAVE_MARGEN, CLAVE_RECARGO, "umbral_gate"), (margen, recargo, umbral)
+            (CLAVE_MARGEN, CLAVE_RECARGO, CLAVE_IVA, "umbral_gate"),
+            (margen, recargo, iva_pct, umbral),
         ):
             if valor is None:
                 faltan.append(clave)
@@ -602,8 +675,8 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
             return EstimateResponse(
                 presupuesto_id=None,
                 oportunidad_id=oportunidad_id,
-                importe_min=None,
-                importe_max=None,
+                importe_min_con_iva=None,
+                importe_max_con_iva=None,
                 motivo_gate=None,
                 requiere_aprobacion=False,
                 status=STATUS_REQUIERE_REVISION,
@@ -613,10 +686,42 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
         # --------------------------------------------------------------
         # PASO 5: el cálculo (funciones puras de arriba)
         # --------------------------------------------------------------
-        importe_min, importe_max = calcular_importes(
+        # Primero, el precio SIN IVA: es la base imponible, lo que la
+        # empresa cobra por la obra. Es también el número con el que se
+        # razona el negocio (tarifas, margen, recargo del informe).
+        importe_min_sin_iva, importe_max_sin_iva = calcular_importes(
             precio_m2, m2, incluye_cambios_estructurales, recargo, margen
         )
-        motivo = evaluar_gate(importe_max, incluye_cambios_estructurales, umbral)
+
+        # Después, el precio que se le enseña al cliente (D14): el mismo
+        # importe con el IVA ya sumado. Se aplica a los DOS extremos del
+        # rango, porque el impuesto no depende de dónde caiga el precio
+        # dentro de la horquilla.
+        importe_min_con_iva = aplicar_iva(importe_min_sin_iva, iva_pct)
+        importe_max_con_iva = aplicar_iva(importe_max_sin_iva, iva_pct)
+
+        # EL GATE SE EVALÚA CONTRA EL IMPORTE SIN IVA, a propósito.
+        #
+        # El umbral de umbrales_gate expresa cuánto riesgo comercial
+        # asume la empresa antes de pedir que una persona revise el
+        # presupuesto. Ese riesgo es el valor de la obra, no el dinero
+        # que se recauda para Hacienda: el IVA no se queda en la empresa,
+        # se ingresa. Comparar contra el precio con IVA haría que el Gate
+        # saltara un 21 % antes, sin que el trabajo comprometido hubiera
+        # crecido ni un euro, y además cambiaría el significado de unos
+        # umbrales que se calibraron (D9) con cifras sin IVA.
+        #
+        # Consecuencia visible, y es la esperada: una cocina típica de
+        # 10 m² da 11.500 € sin IVA y 13.915 € con IVA. Con el umbral de
+        # cocina en 13.000 €, NO activa el Gate, porque se compara el
+        # primer número. Si se comparase el segundo, sí lo activaría.
+        #
+        # TODO: la Adenda deja abierta la pregunta de si el umbral
+        # debería compararse contra el importe CON IVA, que es el que ve
+        # el cliente. No se cambia aquí: cambiarlo sin recalibrar los
+        # umbrales de D9 movería el comportamiento del Gate en las cuatro
+        # categorías a la vez. Queda señalado para decidirlo aparte.
+        motivo = evaluar_gate(importe_max_sin_iva, incluye_cambios_estructurales, umbral)
         requiere_aprobacion = motivo is not None
         nuevo_estado = ESTADO_CON_GATE if requiere_aprobacion else ESTADO_SIN_GATE
 
@@ -663,18 +768,26 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
         cursor.execute(
             """
             INSERT INTO presupuestos (
-                oportunidad_id, importe_min, importe_max,
+                oportunidad_id, importe_min_con_iva, importe_max_con_iva,
+                iva_pct_aplicado,
                 duracion_estimada_dias, requiere_aprobacion, aprobado_por,
                 motivo_gate, created_at, updated_at
             )
-            VALUES (%s, %s, %s, NULL, %s, NULL, %s, now(), now())
+            VALUES (%s, %s, %s, %s, NULL, %s, NULL, %s, now(), now())
             ON CONFLICT (oportunidad_id) DO NOTHING
             RETURNING id;
             """,
             (
                 oportunidad_id,
-                importe_min,
-                importe_max,
+                # Se guarda el precio CON IVA, que es el que se le
+                # comunica al cliente, y junto a él el tipo aplicado. Así
+                # el presupuesto queda congelado: un cambio futuro de
+                # iva_estandar_pct no reescribe retroactivamente lo que
+                # ya se ofreció. El importe sin IVA no se pierde: queda
+                # en el log de auditoría del paso 6c.
+                importe_min_con_iva,
+                importe_max_con_iva,
+                iva_pct,
                 requiere_aprobacion,
                 # .value da el texto del enum ('ambos'). Si no hay Gate,
                 # motivo es None y se guarda NULL. Otra expresión
@@ -694,8 +807,8 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
             # COMMITTED, el de Postgres por defecto).
             cursor.execute(
                 """
-                SELECT p.id, p.importe_min, p.importe_max, p.motivo_gate,
-                       p.requiere_aprobacion, o.estado
+                SELECT p.id, p.importe_min_con_iva, p.importe_max_con_iva,
+                       p.motivo_gate, p.requiere_aprobacion, o.estado
                 FROM presupuestos p
                 JOIN oportunidades o ON o.id = p.oportunidad_id
                 WHERE p.oportunidad_id = %s;
@@ -704,17 +817,21 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
             )
             (
                 presupuesto_id,
-                importe_min,
-                importe_max,
+                importe_min_con_iva,
+                importe_max_con_iva,
                 motivo_gate,
                 requiere_aprobacion,
                 estado,
             ) = cursor.fetchone()
+            # Igual que en el paso 2: se devuelve lo guardado por la
+            # llamada que ganó la carrera, sin recalcular ni volver a
+            # aplicar el IVA. Los importes que esta llamada había
+            # calculado se descartan.
             return EstimateResponse(
                 presupuesto_id=presupuesto_id,
                 oportunidad_id=oportunidad_id,
-                importe_min=importe_min,
-                importe_max=importe_max,
+                importe_min_con_iva=importe_min_con_iva,
+                importe_max_con_iva=importe_max_con_iva,
                 motivo_gate=motivo_gate,
                 requiere_aprobacion=requiere_aprobacion,
                 status=estado,
@@ -799,8 +916,20 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
                         # provisional, en vez de tener que adivinarlo por
                         # la fecha.
                         "umbral_provisional": umbral_provisional,
-                        "importe_min": _texto(importe_min),
-                        "importe_max": _texto(importe_max),
+                        # Se guardan los CUATRO importes. Los que llevan
+                        # IVA son los que vio el cliente; los de sin IVA
+                        # son los que explican el cálculo (tarifa, margen,
+                        # recargo) y con los que se decidió el Gate. Sin
+                        # ambos pares, dentro de un año no se podría
+                        # reconstruir por qué salió esa cifra NI por qué
+                        # el Gate saltó o no saltó.
+                        "importe_min_sin_iva": _texto(importe_min_sin_iva),
+                        "importe_max_sin_iva": _texto(importe_max_sin_iva),
+                        "importe_min_con_iva": _texto(importe_min_con_iva),
+                        "importe_max_con_iva": _texto(importe_max_con_iva),
+                        # El tipo aplicado, para poder rehacer la cuenta
+                        # aunque la regla cambie después.
+                        "iva_pct_aplicado": _texto(iva_pct),
                         "motivo_gate": motivo.value if motivo is not None else None,
                         "estado": estado_final,
                     }
@@ -815,8 +944,10 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
     return EstimateResponse(
         presupuesto_id=presupuesto_id,
         oportunidad_id=oportunidad_id,
-        importe_min=importe_min,
-        importe_max=importe_max,
+        # Al cliente se le devuelve el precio final, con IVA. El desglose
+        # sin IVA se ha quedado en el log de auditoría.
+        importe_min_con_iva=importe_min_con_iva,
+        importe_max_con_iva=importe_max_con_iva,
         motivo_gate=motivo,
         requiere_aprobacion=requiere_aprobacion,
         status=estado_final,

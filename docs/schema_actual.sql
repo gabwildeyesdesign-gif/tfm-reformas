@@ -1,7 +1,7 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-09-20 11:19:55 UTC
+-- Generado por scripts/dump_schema.py el 2026-09-20 20:43:26 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
@@ -67,10 +67,11 @@ CREATE TABLE oportunidades (
     estado                   VARCHAR(30) NOT NULL DEFAULT 'nueva'::character varying,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    fecha_ultimo_contacto    TIMESTAMPTZ,
     CONSTRAINT oportunidades_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES leads(id),
     CONSTRAINT oportunidades_pkey PRIMARY KEY (id),
     CONSTRAINT chk_oportunidades_tipo_reforma CHECK (((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying])::text[])) OR (tipo_reforma IS NULL)),
-    CONSTRAINT oportunidades_estado_check CHECK ((estado)::text = ANY ((ARRAY['nueva'::character varying, 'cualificada'::character varying, 'pendiente_aprobacion'::character varying, 'visita_agendada'::character varying, 'presupuesto_enviado'::character varying, 'ganada'::character varying, 'perdida'::character varying])::text[])),
+    CONSTRAINT oportunidades_estado_check CHECK ((estado)::text = ANY ((ARRAY['nueva'::character varying, 'cualificada'::character varying, 'pendiente_aprobacion'::character varying, 'visita_agendada'::character varying, 'presupuesto_enviado'::character varying, 'seguimiento_pendiente'::character varying, 'ganada'::character varying, 'perdida'::character varying])::text[])),
     CONSTRAINT oportunidades_prioridad_check CHECK ((prioridad)::text = ANY ((ARRAY['baja'::character varying, 'media'::character varying, 'alta'::character varying])::text[]))
 );
 
@@ -80,14 +81,15 @@ CREATE TABLE oportunidades (
 CREATE TABLE presupuestos (
     id                       SERIAL NOT NULL,
     oportunidad_id           INTEGER NOT NULL,
-    importe_min              NUMERIC(10,2),
-    importe_max              NUMERIC(10,2),
+    importe_min_con_iva      NUMERIC(10,2),
+    importe_max_con_iva      NUMERIC(10,2),
     duracion_estimada_dias   INTEGER,
     requiere_aprobacion      BOOLEAN NOT NULL DEFAULT false,
     aprobado_por             VARCHAR(100),
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     motivo_gate              VARCHAR(30),
+    iva_pct_aplicado         NUMERIC(4,2) NOT NULL DEFAULT 21,
     CONSTRAINT presupuestos_oportunidad_id_fkey FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
     CONSTRAINT presupuestos_pkey PRIMARY KEY (id),
     CONSTRAINT presupuestos_oportunidad_id_key UNIQUE (oportunidad_id),
@@ -95,7 +97,7 @@ CREATE TABLE presupuestos (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: reglas_negocio   (5 filas en el momento del volcado)
+-- Tabla: reglas_negocio   (6 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE reglas_negocio (
     id                       SERIAL NOT NULL,

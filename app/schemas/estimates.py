@@ -56,6 +56,12 @@ class EstimateResponse(BaseModel):
     """
     Respuesta de POST /calculate-estimate y de la tool MCP.
 
+    Los importes que salen de aquí llevan el IVA INCLUIDO (D14): son el
+    precio final que se le puede enseñar a un cliente particular tal
+    cual, sin sumarle nada después. El importe sin IVA no se devuelve; se
+    usa dentro del cálculo (el Gate HITL se decide con él) y queda
+    guardado en el log de auditoría.
+
     Tres situaciones posibles, que se distinguen por status:
 
       1. Presupuesto calculado (ahora o en una llamada anterior):
@@ -81,14 +87,31 @@ class EstimateResponse(BaseModel):
     presupuesto_id: int | None
     oportunidad_id: int
 
+    # POR QUÉ SE LLAMAN AHORA *_con_iva (D14)
+    #
+    # Antes se llamaban importe_min e importe_max a secas, y ese nombre
+    # era un defecto real del contrato de la API: no decía si la cifra
+    # llevaba IVA o no. Quien integrara este endpoint (n8n, el agente, o
+    # una persona leyendo /docs) tenía que adivinarlo, y adivinar mal
+    # significa enseñarle al cliente un precio un 21 % por debajo del que
+    # acabará pagando. Un nombre ambiguo en un campo de dinero no es un
+    # detalle de estilo: es una fuente de error con consecuencias
+    # económicas.
+    #
+    # El nombre dice ahora exactamente qué es: el precio final, con el
+    # IVA ya aplicado, que es el único número que tiene sentido mostrarle
+    # a un particular. El desglose sin IVA existe dentro del cálculo y
+    # queda registrado en el log de auditoría, pero no se devuelve: el
+    # cliente no necesita la base imponible para decidir.
+    #
     # Decimal y no float (ver el comentario del import). Al convertir la
     # respuesta a JSON, Pydantic escribe un Decimal como TEXTO: "8625.00"
     # y no 8625.0. Se deja así a propósito (decisión P9 del plan): el
     # texto conserva el valor exacto, con sus dos decimales, y nadie
     # fuera del backend necesita hacer cuentas con él. El Gate ya se
     # decide aquí dentro.
-    importe_min: Decimal | None
-    importe_max: Decimal | None
+    importe_min_con_iva: Decimal | None
+    importe_max_con_iva: Decimal | None
 
     # None cuando no hay Gate. Si lo hay, uno de los tres valores del
     # CHECK real (ver MotivoGate).

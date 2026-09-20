@@ -11,7 +11,7 @@ endpoints y revisión técnica final.
 | # | Endpoint | Input | Output | Trigger real |
 |---|---|---|---|---|
 | 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token | 201: lead_id, cliente_id, oportunidad_id, status | Webhook n8n, formulario web |
-| 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min, importe_max, motivo_gate, requiere_aprobacion, status, creado (ver 5.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
+| 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | Producción N0: temporizador n8n llama al endpoint directamente (no pasa por MCP). MCP tool disponible para N1+, no ejercida en N0 |
@@ -104,6 +104,43 @@ El efecto en oportunidades.estado (transición 'presupuesto_enviado' vs.
 un estado de espera del Gate) se cierra y documenta en
 TFM_Decisiones_Modelo_Datos_Leads.txt, no aquí: esta Adenda fija el
 contrato del endpoint, no el modelo de datos.
+
+1.2 calculate-estimate — el precio se devuelve con IVA incluido (D14,
+2026-09-20)
+
+Corrección de un defecto de ambigüedad del contrato: los campos de salida
+se llamaban importe_min e importe_max, y ese nombre no decía si la cifra
+llevaba IVA. Quien integrara el endpoint tenía que adivinarlo, y adivinar
+mal significa enseñarle al cliente un precio un 21 % por debajo del real.
+
+Pasan a llamarse importe_min_con_iva e importe_max_con_iva, y contienen
+el precio final, con el IVA ya aplicado: el número que se le puede
+comunicar a un particular tal cual. La fórmula completa queda:
+
+    importe_min_sin_iva = (tarifas_base.precio_m2 × m2)
+                          + recargo_informe_tecnico (si aplica)
+    importe_max_sin_iva = importe_min_sin_iva × (1 + margen_empresa_pct / 100)
+    importe_min_con_iva = importe_min_sin_iva × (1 + iva_estandar_pct / 100)
+    importe_max_con_iva = importe_max_sin_iva × (1 + iva_estandar_pct / 100)
+
+iva_estandar_pct vive en reglas_negocio (valor 21) y se lee en cada
+cálculo nuevo, nunca escrito en el código. Se usa el tipo general del
+21 % y no el reducido del 10 % porque la elegibilidad del reducido
+depende de condiciones sobre el cliente y el inmueble que no son
+determinables en la fase de pre-estimación.
+
+El GATE se sigue evaluando contra importe_max_SIN_iva (ver 1.1c): el
+umbral mide riesgo comercial, y el IVA no se queda en la empresa. Queda
+abierta la pregunta de si debería compararse contra el importe con IVA,
+que es el que ve el cliente; cambiarlo obligaría a recalibrar los cuatro
+umbrales de D9, así que se decide aparte.
+
+Lo que se GUARDA en presupuestos es el importe ya con IVA
+(importe_min_con_iva / importe_max_con_iva, columnas renombradas) junto
+con iva_pct_aplicado, el tipo usado. Motivo: un presupuesto es un
+documento comercial y debe quedar fijo en el momento en que se calculó,
+no cambiar de precio si algún día se edita la regla. Por eso la rama que
+atiende una llamada repetida devuelve lo guardado sin recalcular nada.
 
 2. Motivos de create_followup_task (dos disparadores)
 

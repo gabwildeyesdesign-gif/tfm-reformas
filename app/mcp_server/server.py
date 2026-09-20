@@ -177,8 +177,11 @@ def calculate_estimate(
     oportunidad_id: Annotated[int, Field(gt=0, description="Id de la oportunidad del cliente")],
 ) -> EstimateResponse:
     """
-    Calcula el presupuesto orientativo (rango importe_min - importe_max,
-    en euros) de una oportunidad a partir de su identificador.
+    Calcula el presupuesto orientativo de una oportunidad a partir de su
+    identificador. Devuelve un rango en euros
+    (importe_min_con_iva - importe_max_con_iva) con el IVA ya incluido:
+    es el precio final que se le puede comunicar al cliente tal cual, sin
+    sumarle nada.
 
     Solo necesita oportunidad_id. Todos los datos de la reforma (tipo,
     metros, acabados, cambios estructurales) los obtiene el sistema por
@@ -192,7 +195,7 @@ def calculate_estimate(
     - requiere_aprobacion=false: se puede comunicar el rango al cliente.
     - requiere_aprobacion=true: una persona del equipo debe revisarlo
       antes; motivo_gate indica el motivo.
-    - importe_min e importe_max llegan a null cuando la reforma incluye
+    - importe_min_con_iva e importe_max_con_iva llegan a null cuando la reforma incluye
       cambios estructurales (motivo_gate 'cambios_estructurales' o
       'ambos'): la cifra depende de un informe técnico. NO estimes ni
       inventes ningún importe; comunica que un técnico lo revisará.

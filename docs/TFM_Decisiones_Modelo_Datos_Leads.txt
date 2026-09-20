@@ -89,12 +89,13 @@ mismo dato, que podría desincronizarse.
 ================================================================
 
 La columna oportunidades.estado tiene un CHECK que admite exactamente
-siete valores, verificado en la base de datos (eran seis hasta la
-migración paso3 del 2026-09-19, que añadió 'pendiente_aprobacion'; ver
-D8):
+ocho valores, verificado en la base de datos (eran seis hasta la
+migración paso3 del 2026-09-19, que añadió 'pendiente_aprobacion', ver
+D8; y siete hasta paso7 del 2026-09-20, que añadió
+'seguimiento_pendiente', ver D13):
 
     nueva, cualificada, pendiente_aprobacion, visita_agendada,
-    presupuesto_enviado, ganada, perdida
+    presupuesto_enviado, seguimiento_pendiente, ganada, perdida
 
 Significado de cada uno en la narrativa de negocio:
 
@@ -116,6 +117,14 @@ Significado de cada uno en la narrativa de negocio:
       importe o por cambios estructurales). Espera la decisión de una
       persona por Telegram (POST /gate-decisions). El cliente todavía
       NO tiene su cifra definitiva. Lo escribe POST /calculate-estimate.
+
+  seguimiento_pendiente   (nuevo, D13)
+      El cliente recibió su presupuesto y han pasado 48 horas sin que
+      reserve visita ni responda. Lo marcará el barrido periódico de
+      D13, comparando oportunidades.fecha_ultimo_contacto con la hora
+      actual. NINGÚN endpoint de N0 lo escribe todavía: la columna
+      fecha_ultimo_contacto existe desde la migración paso7, pero queda
+      NULL en todas las filas hasta que se implemente el barrido.
 
   visita_agendada
       El cliente ha elegido una franja horaria y existe una fila en

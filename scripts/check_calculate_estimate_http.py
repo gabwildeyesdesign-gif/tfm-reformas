@@ -18,6 +18,7 @@ y al terminar.
 import sys
 import threading
 import time
+from decimal import Decimal
 from pathlib import Path
 
 RAIZ_REPO = Path(__file__).resolve().parents[1]
@@ -189,7 +190,15 @@ try:
     print(f"    {r.status_code} {j}  ({ms_nuevo:.0f} ms)")
     comprobar("200", r.status_code == 200)
     comprobar("importes como texto exacto en el JSON",
-              (j["importe_min"], j["importe_max"]) == ("6900.00", "7935.00"))
+              (j["importe_min_con_iva"], j["importe_max_con_iva"]) == ("8349.00", "9601.35"))
+    # Comprobación explícita de la relación con el precio sin IVA (D14).
+    # Los dos números se escriben aquí a mano: 6900 x 1,21 = 8349,00 y
+    # 7935 x 1,21 = 9601,35. Son DOS valores distintos a propósito, para
+    # que no pueda pasar por casualidad.
+    comprobar("H4 el JSON trae el precio CON IVA = sin IVA x 1,21",
+              (Decimal(j["importe_min_con_iva"]), Decimal(j["importe_max_con_iva"]))
+              == ((Decimal("6900.00") * Decimal("1.21")).quantize(Decimal("0.01")),
+                  (Decimal("7935.00") * Decimal("1.21")).quantize(Decimal("0.01"))))
     comprobar("sin Gate, presupuesto_enviado, creado=true",
               (j["motivo_gate"], j["requiere_aprobacion"], j["status"], j["creado"])
               == (None, False, "presupuesto_enviado", True))
@@ -207,7 +216,14 @@ try:
     j = r.json()
     print(f"    {r.status_code} {j}")
     comprobar("200 con importes visibles",
-              r.status_code == 200 and (j["importe_min"], j["importe_max"]) == ("7500.00", "8625.00"))
+              r.status_code == 200
+              and (j["importe_min_con_iva"], j["importe_max_con_iva"]) == ("9075.00", "10436.25"))
+    # Segundo caso con números distintos del anterior: 7500 x 1,21 =
+    # 9075,00 y 8625 x 1,21 = 10436,25.
+    comprobar("H6 el precio CON IVA vuelve a ser el sin IVA x 1,21",
+              (Decimal(j["importe_min_con_iva"]), Decimal(j["importe_max_con_iva"]))
+              == ((Decimal("7500.00") * Decimal("1.21")).quantize(Decimal("0.01")),
+                  (Decimal("8625.00") * Decimal("1.21")).quantize(Decimal("0.01"))))
     comprobar("motivo cambios_estructurales, pendiente_aprobacion",
               (j["motivo_gate"], j["status"]) == ("cambios_estructurales", "pendiente_aprobacion"))
 
@@ -227,9 +243,18 @@ try:
     print(f"    {r.status_code} {j}")
     comprobar("200, 11500.00 y SIN Gate",
               r.status_code == 200
-              and (j["importe_min"], j["importe_max"]) == ("10000.00", "11500.00")
+              and (j["importe_min_con_iva"], j["importe_max_con_iva"]) == ("12100.00", "13915.00")
               and j["motivo_gate"] is None and j["requiere_aprobacion"] is False
               and j["status"] == "presupuesto_enviado")
+    # El Gate se decide con el importe SIN IVA, y este caso lo demuestra
+    # por HTTP: el precio que se devuelve (13.915,00 € con IVA) SUPERA el
+    # umbral de cocina (13.000 €), y aun así no hay Gate, porque la
+    # comparación se hizo contra los 11.500,00 € sin IVA. Si alguien
+    # cambiara esa decisión, esta comprobación fallaría.
+    comprobar("H6b el Gate ignora el IVA: 13.915 > 13.000 y aun así sin Gate",
+              Decimal(j["importe_max_con_iva"]) > Decimal("13000.00")
+              and j["motivo_gate"] is None,
+              f"(con IVA {j['importe_max_con_iva']}, sin IVA 11500.00)")
 
     print("\n" + "=" * 78)
     print("H7 - Oportunidad 'perdida' sin presupuesto -> 409")
@@ -248,7 +273,7 @@ try:
     j = r.json()
     print(f"    {r.status_code} {j}")
     comprobar("200, requiere_revision, sin importes",
-              r.status_code == 200 and (j["status"], j["importe_min"], j["presupuesto_id"])
+              r.status_code == 200 and (j["status"], j["importe_min_con_iva"], j["presupuesto_id"])
               == ("requiere_revision", None, None))
 
     print("\n" + "=" * 78)
