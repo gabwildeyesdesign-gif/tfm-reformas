@@ -46,7 +46,11 @@ ESPERADO = {
     "bano": (Decimal("13000.00"), False),
     "cocina": (Decimal("13000.00"), False),
     "integral_vivienda": (Decimal("10000.00"), False),
-    "parcial_acabados": (Decimal("10000.00"), True),  # provisional, D10
+    # parcial_acabados nació provisional (paso4) porque 10.000 € era el
+    # valor heredado del umbral global, no una decisión. Gabi la cerró el
+    # 2026-09-20 con esa misma cifra (paso5), así que ya no hay ningún
+    # umbral provisional en el sistema.
+    "parcial_acabados": (Decimal("10000.00"), False),
 }
 
 ok = 0

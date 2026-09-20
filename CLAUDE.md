@@ -97,8 +97,7 @@ SOLO REST.
   scripts/check_mcp_connection.py ya envía el token.
 - El umbral del Gate NO es un valor global: desde D9 (2026-09-20) vive en
   la tabla umbrales_gate, una fila por tipo_reforma (bano y cocina 13.000 €,
-  integral_vivienda y parcial_acabados 10.000 €; el de parcial_acabados es
-  PROVISIONAL hasta cerrar D10). La fila
+  integral_vivienda y parcial_acabados 10.000 €, los cuatro ya cerrados). La fila
   reglas_negocio.umbral_aprobacion_manual sigue existiendo pero está marcada
   como OBSOLETA y nadie la lee: editarla no tiene ningún efecto.
   El proyecto tiene por tanto 9 tablas, no 8.
@@ -160,8 +159,11 @@ Umbral del Gate por categoria (D9) implementado y verificado el
 2026-09-20, tambien SIN commitear: migracion paso4 (tabla umbrales_gate),
 check_migracion_umbrales_gate 17/17, check_estimate_service 107/107,
 check_calculate_estimate_http 21/21, check_mcp_calculate_estimate 19/19.
-Detalle: docs/Umbral_Gate_por_Categoria_D9_final.txt. PENDIENTE: el
-umbral de parcial_acabados (10.000 EUR) es PROVISIONAL hasta cerrar D10.
+Detalle: docs/Umbral_Gate_por_Categoria_D9_final.txt. El umbral de
+parcial_acabados (10.000 EUR) quedo CERRADO el 2026-09-20 (paso5): ya no
+hay ningun umbral provisional. Defecto operativo abierto, anotado en
+D10: nada impide tecnicamente un parcial_acabados de superficie grande
+(70 m2 en nivel medio dan 22.540 EUR), que activaria el Gate.
 
 AVISO: scripts/check_exception_handler.py falla 22/28 también en main
 (no envía X-Webhook-Secret desde que /leads exige autenticación). Fallo

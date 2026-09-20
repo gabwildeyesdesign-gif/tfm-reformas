@@ -61,7 +61,8 @@ DECISIÓN D9: el umbral pasa a depender de tipo_reforma.
   integral_vivienda  10.000 €   (sin cambio: subirlo no tendría efecto,
                                  porque incluso el caso más barato,
                                  45 m² en nivel básico, ya da 25.875 €)
-  parcial_acabados   10.000 €   PROVISIONAL — ver sección 10
+  parcial_acabados   10.000 €   (nació provisional; CERRADO con esta
+                                 misma cifra el 2026-09-20, ver sec. 10)
 
 El razonamiento completo de cada cifra está en D9
 (docs/TFM_Decisiones_Modelo_Datos_Leads.txt). Este documento cubre cómo
@@ -455,30 +456,44 @@ anterior)
 10. LO QUE QUEDA PENDIENTE
 ================================================================
 
-EL UMBRAL DE parcial_acabados SIGUE SIN CERRAR. Es lo más importante de
-esta sección.
+EL UMBRAL DE parcial_acabados YA ESTÁ CERRADO (actualizado el
+2026-09-20, después de escribir la primera versión de este documento).
 
-  Valor actual: 10.000 €, marcado provisional = true en la propia tabla.
-  No es una decisión de negocio: es el valor heredado del umbral global
-  antiguo, conservado para no dejar la categoría sin umbral.
+  Nació provisional en la migración paso4 porque sus 10.000 € eran el
+  valor heredado del umbral global antiguo, no una decisión propia. Gabi
+  lo cerró el 2026-09-20 CON ESA MISMA CIFRA. La razón, escrita en D10:
+  parcial_acabados es por definición una intervención puntual, y bajo esa
+  definición 10.000 € es un techo razonable.
 
-  Por qué no se puede fijar todavía: depende de qué superficie se
-  considera válida dentro de la categoría, cuestión que D10 deja
-  abierta. Con los datos reales, un repintado más suelo de un piso de
-  70 m² en nivel medio da 280 × 70 × 1,15 = 22.540 €, así que la
-  premisa "parcial_acabados son siempre reformas menores" no se
-  sostiene si la categoría admite proyectos a escala de vivienda
-  completa.
+  Qué cambió exactamente: solo el ESTADO de la decisión, no el número.
+  scripts/migraciones_ejecutadas/paso5_cerrar_umbral_parcial_acabados.py
+  pone provisional = false y reescribe la descripción de la fila con el
+  motivo. El cálculo del Gate no se ve afectado en absoluto, porque
+  'provisional' nunca intervino en él: se leía solo para dejar constancia
+  en el log. Salida real de la migración:
 
-  Dónde está marcado, para que no se olvide:
-    - en la tabla: umbrales_gate.provisional = true, y la descripción de
-      la fila explica el motivo;
-    - en el código: comentario en la migración (FILAS) y en
-      estimate_service, que lee y registra esa marca;
-    - en cada log de cálculo de un parcial_acabados:
-      "umbral_provisional": true, lo que permitirá localizar después qué
-      presupuestos se calcularon con el valor provisional;
-    - en CLAUDE.md y en D9/D10.
+      ANTES:   parcial_acabados -> (Decimal('10000.00'), True)
+      Filas actualizadas: 1
+      DESPUÉS: las cuatro categorías con provisional=False
+      Presupuestos calculados con el umbral aún provisional: 0
+
+  Ese último número es el que importa para la trazabilidad: ningún
+  presupuesto real llegó a calcularse mientras el umbral estaba
+  provisional, así que no hay nada que revisar hacia atrás. La consulta
+  que lo dice está en la sección 12, y sigue siendo válida si algún día
+  vuelve a marcarse un umbral como provisional.
+
+  Verificado: check_migracion_umbrales_gate 17/17 con la expectativa
+  actualizada (parcial_acabados -> 10000.00, provisional=False), y la
+  migración es repetible (segunda ejecución: 0 filas actualizadas).
+
+  LO QUE SÍ SIGUE ABIERTO, y conviene no confundirlo con lo anterior: el
+  defecto operativo que anota D10. "Si el alcance crece, deja de ser
+  parcial_acabados" es una definición de negocio, no una restricción
+  técnica. Nada impide hoy crear un lead de parcial_acabados con 70 m²
+  (22.540 € en nivel medio), que con este umbral activaría el Gate HITL.
+  La mejora pendiente es un tope de m² por categoría, o un flujo de
+  captura que no ofrezca esta categoría para una vivienda completa.
 
 Otros pendientes heredados, sin cambios:
   - m2 no tiene tope en LeadCreate (riesgo de desbordar NUMERIC(10,2)).
@@ -493,9 +508,10 @@ Otros pendientes heredados, sin cambios:
 11. SUGERENCIAS DE MEJORA
 ================================================================
 
-1. Cerrar D10 y fijar el umbral de parcial_acabados. Mientras siga
-   provisional, una parte del sistema funciona con un número que nadie
-   ha decidido.
+1. Cerrar el defecto operativo de D10: un tope de m² por categoría (o
+   un flujo de captura que lo impida), para que la definición "si crece,
+   deja de ser parcial_acabados" deje de depender de la buena fe de
+   quien rellena el formulario. El umbral en sí ya está cerrado.
 2. Un script de verificación periódico que compruebe que todas las
    categorías de tarifas_base tienen umbral (la consulta U6 ya existe) y
    que avise de los umbrales provisionales. Serviría para que un DELETE
