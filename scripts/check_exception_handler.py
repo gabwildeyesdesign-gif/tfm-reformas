@@ -49,7 +49,32 @@ from psycopg2.extras import RealDictCursor
 
 import app.api.leads as leads_api
 import app.main as app_main
-from app.config import DATABASE_URL
+from app.config import DATABASE_URL, WEBHOOK_SECRET
+
+# CORRECCIÓN 2026-09-20. Este script se escribió ANTES de que POST /leads
+# exigiera autenticación. Cuando la Fase 1 añadió la cabecera
+# X-Webhook-Secret, las tres llamadas a /leads de este archivo empezaron a
+# recibir 401 en vez de llegar al manejador de excepciones que pretenden
+# probar, y el script pasó a dar 22/28. No era un fallo del manejador: era
+# un contrato de autenticación añadido después de escribir la prueba.
+#
+# Se envía el secreto en todas las peticiones a /leads, con el mismo
+# patrón ya probado en check_webhook_auth_http.py: leerlo del .env (a
+# través de app.config) en vez de escribirlo en el código, para que
+# script y servidor usen siempre el mismo valor.
+#
+# Qué exige cada ruta, comprobado en el código y no supuesto:
+#   POST /leads              -> X-Webhook-Secret (dependencia
+#                               verificar_webhook_secret en api/leads.py)
+#   POST /calculate-estimate -> X-Webhook-Secret (misma dependencia en
+#                               api/estimates.py). Este script no la usa.
+#   GET /health, /health/db  -> abiertos por diseño, sin dependencias.
+#   /mcp                     -> Bearer MCP_SECRET, un secreto DISTINTO,
+#                               verificado por VerificadorSecretoMCP. No
+#                               interviene aquí: este script no toca MCP.
+#   /__prueba_boom           -> ruta temporal que añade este script, sin
+#                               autenticación, para provocar el error.
+CABECERAS_AUTH = {"X-Webhook-Secret": WEBHOOK_SECRET}
 
 PUERTO = 8011
 BASE = f"http://127.0.0.1:{PUERTO}"
@@ -186,7 +211,7 @@ try:
         "fotos": [],
         "lead_token": "tokHANDLER",
     }
-    rb = requests.post(f"{BASE}/leads", json=cuerpo, timeout=20)
+    rb = requests.post(f"{BASE}/leads", json=cuerpo, headers=CABECERAS_AUTH, timeout=20)
     print(f"\n  POST /leads -> HTTP {rb.status_code}")
     print(f"  Cuerpo: {rb.text}")
     comprobar("Codigo HTTP 500", rb.status_code == 500, f"({rb.status_code})")
@@ -224,7 +249,7 @@ try:
     antes_c = len(logs_de_error())
     malo = dict(cuerpo)
     malo["email"] = "no-es-un-email"
-    rc = requests.post(f"{BASE}/leads", json=malo, timeout=20)
+    rc = requests.post(f"{BASE}/leads", json=malo, headers=CABECERAS_AUTH, timeout=20)
     print(f"  POST /leads con email invalido -> HTTP {rc.status_code}")
     comprobar("Sigue siendo 422, no 500", rc.status_code == 422, f"({rc.status_code})")
     comprobar("El detalle de validacion sigue llegando al cliente",
@@ -245,7 +270,7 @@ try:
     comprobar("/health sigue en 200", rh.status_code == 200)
     comprobar("/health/db sigue en 200", rd.status_code == 200)
 
-    rp = requests.post(f"{BASE}/leads", json=cuerpo, timeout=20)
+    rp = requests.post(f"{BASE}/leads", json=cuerpo, headers=CABECERAS_AUTH, timeout=20)
     print(f"  POST /leads real -> {rp.status_code} {rp.text}")
     comprobar("POST /leads vuelve a funcionar (201)", rp.status_code == 201,
               f"({rp.status_code})")
