@@ -1,0 +1,564 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+UMBRAL DEL GATE HITL POR CATEGORÍA (D9) — DOCUMENTO FINAL
+(tabla umbrales_gate, cambio en calculate-estimate y regresión)
+
+Nivel N0 · 2026-09-20 · Rama feat/n0-calculate-estimate
+Estado: implementado y verificado con ejecución real. SIN COMMITEAR.
+Continúa docs/EndPoint_Calculate_estimate_final.txt, que describe el
+endpoint completo; este documento cubre solo lo que D9 cambió.
+
+Escrito, como el anterior, para alguien que está aprendiendo Python y
+SQL: los conceptos nuevos se explican donde aparecen, y los que ya se
+explicaron antes se citan indicando dónde están.
+
+ÍNDICE
+  1. El problema que resuelve D9, con números
+  2. La decisión de esquema: tres opciones y por qué esta
+  3. Qué archivos cambian
+  4. La migración, explicada
+  5. El cambio en el servicio, explicado
+  6. Qué pasa si una categoría se queda sin umbral
+  7. Regresión: qué pruebas cambiaron de resultado y por qué
+  8. Verificación con salida real
+  9. Complicaciones encontradas
+  10. Lo que queda pendiente (el umbral de parcial_acabados, sin cerrar)
+  11. Sugerencias de mejora
+  12. Cómo comprobarlo tú mismo
+  13. Estado de Git y siguientes pasos
+
+
+================================================================
+1. EL PROBLEMA QUE RESUELVE D9, CON NÚMEROS
+================================================================
+
+Hasta ahora el Gate HITL (la revisión humana) se activaba cuando el
+importe máximo del presupuesto superaba UN ÚNICO umbral de 10.000 €,
+igual para las cuatro categorías de reforma.
+
+El problema es que los precios por m² de tarifas_base van de 130 €
+(parcial_acabados/basico) a 1.700 € (bano/alto): más de 13 veces de
+diferencia. Un mismo umbral significa cosas muy distintas según la
+categoría. Con los datos reales:
+
+  cocina / medio, 10 m² (tamaño típico):
+      1.000 × 10 × 1,15 = 11.500 €  -> SUPERABA los 10.000 €
+      ... pese a que la propia ficha de esa tarifa declara que no
+      debería activar el Gate en tamaño típico.
+
+  bano / alto, 6 m² (tamaño típico):
+      1.700 × 6 × 1,15 = 11.730 €   -> activa el Gate, y así se quiere.
+
+Subir el umbral global a 13.000 € arreglaba la cocina pero estropeaba el
+baño de gama alta; dejarlo en 10.000 € mantenía la contradicción. Un
+solo número no puede cumplir dos objetivos de negocio opuestos.
+
+DECISIÓN D9: el umbral pasa a depender de tipo_reforma.
+
+  bano               13.000 €
+  cocina             13.000 €
+  integral_vivienda  10.000 €   (sin cambio: subirlo no tendría efecto,
+                                 porque incluso el caso más barato,
+                                 45 m² en nivel básico, ya da 25.875 €)
+  parcial_acabados   10.000 €   PROVISIONAL — ver sección 10
+
+El razonamiento completo de cada cifra está en D9
+(docs/TFM_Decisiones_Modelo_Datos_Leads.txt). Este documento cubre cómo
+se ha implementado.
+
+
+================================================================
+2. LA DECISIÓN DE ESQUEMA: TRES OPCIONES Y POR QUÉ ESTA
+================================================================
+
+D9 dejaba abierta la forma: "nueva columna en tarifas_base, o una tabla
+de reglas por categoría equivalente". Se evaluaron tres.
+
+(A) COLUMNA NUEVA EN tarifas_base — descartada
+  tarifas_base está identificada por la PAREJA (tipo_reforma,
+  nivel_acabados): 4 categorías × 3 niveles = 12 filas. El umbral no
+  depende del nivel, solo de la categoría, así que el mismo 13.000 €
+  quedaría escrito tres veces para baño y otras tres para cocina.
+  Eso tiene consecuencias concretas, no teóricas:
+    - cambiar el umbral de baño exigiría acertar con TRES UPDATE, y
+      nada impediría que uno se quedara atrás;
+    - si quedaran distintos, el presupuesto pasaría a depender del nivel
+      de acabados, justo lo que D9 dice que no debe influir;
+    - tarifas_base guarda PRECIOS DE MERCADO; el umbral es un parámetro
+      de gobernanza interna, como el margen o el recargo.
+  Un dato repetido en varias filas porque depende solo de una parte de
+  la clave es la señal clásica de que ese dato no vive ahí.
+
+(C) CUATRO CLAVES NUEVAS EN reglas_negocio — descartada
+  Serían 'umbral_aprobacion_manual_bano', '..._cocina', etc. Es la
+  opción más barata: cero cambios de esquema, solo cuatro filas.
+  Contra: la categoría queda escondida DENTRO de un texto. Nada
+  garantiza que existan las cuatro claves ni que estén bien escritas, y
+  una errata como '..._baño' (con eñe) no daría ningún error: el
+  cálculo simplemente no encontraría el umbral y acabaría en
+  'requiere_revision' sin causa visible. Es exactamente el fallo
+  silencioso que motivó el CHECK de D5.
+
+(B) TABLA NUEVA umbrales_gate — ELEGIDA
+  Su clave primaria ES tipo_reforma, que es de lo que depende el dato.
+  La base de datos garantiza entonces por sí sola: un umbral por
+  categoría (ni dos ni ninguno), imposibilidad de que dos filas se
+  contradigan, y —con un CHECK igual al de tarifas_base— que no aparezca
+  una categoría inventada. Además permite marcar el caso provisional en
+  el propio dato (columna provisional), no solo en un comentario.
+
+  Coste asumido y documentado: el proyecto pasa de 8 a 9 tablas. El
+  Informe de decisiones N0 afirmaba "8 tablas"; se ha añadido allí la
+  nota correspondiente. Es la misma clase de ampliación justificada que
+  el salto de 6 a 8 (reglas_negocio y tarifas_base): responde a un
+  requisito verificado, no a scope creep.
+
+
+================================================================
+3. QUÉ ARCHIVOS CAMBIAN
+================================================================
+
+  scripts/migraciones_ejecutadas/paso4_umbrales_gate.py   NUEVO
+      La migración (ya ejecutada).
+  scripts/check_migracion_umbrales_gate.py                NUEVO
+      17 comprobaciones sobre la tabla.
+  app/services/estimate_service.py                        CAMBIADO
+      De dónde sale el umbral, qué se registra en el log, y el
+      razonamiento del caso "sin umbral".
+  scripts/check_estimate_service.py                       CAMBIADO
+      Casos de Gate actualizados y nuevos (ver sección 7).
+  scripts/check_calculate_estimate_http.py                CAMBIADO
+      Caso nuevo H6b: la cocina típica de D9, por HTTP.
+  docs/schema_actual.sql                                  REGENERADO
+  docs/TFM_Decisiones_Modelo_Datos_Leads.txt              CAMBIADO
+      D9 pasa de "implementación pendiente" a implementada, con la
+      forma de esquema elegida y su justificación.
+  docs/Informe_Decisiones_N0_TFM_Reformas.txt             CAMBIADO
+      Nota: 9 tablas, no 8.
+  CLAUDE.md                                               CAMBIADO
+  docs/Umbral_Gate_por_Categoria_D9_final.txt             NUEVO (este)
+
+NO cambian: app/api/estimates.py, app/mcp_server/server.py,
+app/schemas/*, app/main.py. El contrato del endpoint es el mismo: los
+importes, el motivo del Gate y el estado se calculan igual; lo único
+que cambia es el número con el que se compara el importe.
+
+
+================================================================
+4. LA MIGRACIÓN, EXPLICADA
+================================================================
+
+Archivo: scripts/migraciones_ejecutadas/paso4_umbrales_gate.py.
+Hace cuatro cosas, todas dentro de UNA transacción (en Postgres, un
+CREATE TABLE se confirma o se deshace igual que un INSERT), y es
+repetible: ejecutarla dos veces no rompe ni duplica nada.
+
+4.1 La tabla
+    CREATE TABLE IF NOT EXISTS umbrales_gate (
+        tipo_reforma         VARCHAR(30)   PRIMARY KEY,
+        umbral               NUMERIC(10,2) NOT NULL,
+        provisional          BOOLEAN       NOT NULL DEFAULT false,
+        descripcion          TEXT,
+        fecha_actualizacion  DATE          NOT NULL DEFAULT CURRENT_DATE,
+        CONSTRAINT chk_umbrales_gate_tipo_reforma
+            CHECK (tipo_reforma IN ('bano','cocina','integral_vivienda',
+                                    'parcial_acabados')),
+        CONSTRAINT chk_umbrales_gate_umbral_positivo CHECK (umbral > 0)
+    );
+
+  IF NOT EXISTS: si la tabla ya está, no hace nada y no falla. Es lo que
+  hace repetible el script. (Con las restricciones sueltas no existe esa
+  opción, y por eso en paso3 hubo que comprobarlo a mano desde Python;
+  aquí van DENTRO del CREATE TABLE y se resuelve solo.)
+
+  PRIMARY KEY sobre tipo_reforma: una clave primaria significa dos cosas
+  a la vez, "no se repite" y "no puede ser NULL". Es la garantía que se
+  buscaba. Se usa el propio texto como clave y no un id numérico porque
+  el valor ya es único y estable, y así el servicio busca directamente
+  por 'bano' sin traducir nada.
+
+  NUMERIC(10,2): el tipo exacto para dinero, el mismo de
+  reglas_negocio.valor y presupuestos.importe_max, así que se pueden
+  comparar sin conversiones. Nada de float (ver el glosario del
+  documento anterior, sección 2).
+
+  provisional BOOLEAN: marca en el DATO que un umbral todavía no es una
+  decisión cerrada. Se puede consultar con SQL ("¿qué umbrales siguen
+  provisionales?"), cosa que un comentario en el código no permite.
+
+  El CHECK de categorías es la MISMA defensa que
+  chk_oportunidades_tipo_reforma (D5), y por el mismo motivo: la clave
+  primaria impide repetir, pero no impide inventar. Sin él, un INSERT
+  con 'baño' (con eñe) entraría sin protestar y esa fila no la
+  encontraría nunca nadie. Diferencia con el CHECK de oportunidades:
+  allí se admite NULL porque la columna es opcional; aquí no, porque la
+  clave primaria ya lo prohíbe.
+
+  El CHECK de umbral > 0 cubre un error de dedo perfectamente posible al
+  editar en Supabase: un umbral de 0 haría que TODO presupuesto activara
+  el Gate, y nadie lo notaría hasta ver administración desbordada.
+
+4.2 RLS
+  ALTER TABLE umbrales_gate ENABLE ROW LEVEL SECURITY, igual que las
+  otras 8 tablas (Decision_RLS_N0.txt). En Supabase, una tabla sin RLS
+  queda expuesta por la Data API pública a los roles anon y
+  authenticated; con RLS activado y sin políticas, esa puerta queda
+  cerrada. El backend no se ve afectado: se conecta con el usuario dueño
+  de las tablas, que se salta RLS.
+
+4.3 Las cuatro filas
+  INSERT ... ON CONFLICT (tipo_reforma) DO NOTHING, el mismo patrón de
+  paso2b_insert.py. Aquí DO NOTHING es además una decisión de negocio:
+  si alguien ajusta un umbral en Supabase, volver a ejecutar la
+  migración NO debe devolverlo al valor de hoy. El script SIEMBRA los
+  valores la primera vez; a partir de ahí mandan los datos.
+  La descripción de cada fila lleva resumida la justificación de D9, de
+  modo que quien mire la tabla en Supabase vea por qué vale lo que vale
+  sin abrir la documentación.
+
+4.4 El aviso en la regla que queda obsoleta
+  reglas_negocio.umbral_aprobacion_manual ya no la lee nadie. No se
+  borra —su descripción explica por qué en su día se pasó de 8.000 a
+  10.000 €, y eso es historia del proyecto—, pero se le antepone
+  "[OBSOLETA desde D9 ...]" para que nadie la edite creyendo que sigue
+  teniendo efecto. El UPDATE lleva un "AND descripcion NOT LIKE
+  '[OBSOLETA%'" para no volver a añadir el aviso si ya está: así la
+  migración sigue siendo repetible. (|| es el operador de Postgres para
+  pegar dos textos.)
+
+
+================================================================
+5. EL CAMBIO EN EL SERVICIO, EXPLICADO
+================================================================
+
+5.1 Lo que NO cambió, y por qué importa
+  evaluar_gate(importe_max, incluye_cambios_estructurales, umbral) no se
+  ha tocado. Recibe el umbral como PARÁMETRO, así que le da igual de
+  dónde salga. Si esta función hubiera ido a buscarlo por su cuenta a la
+  base de datos, D9 habría obligado a reescribirla y a rehacer sus
+  pruebas. Es el argumento práctico, ya visible, a favor de separar el
+  cálculo puro del acceso a datos.
+
+5.2 De dónde sale ahora el umbral
+  La consulta que ya leía la tarifa y las reglas de negocio en un solo
+  viaje ahora incluye también el umbral:
+
+    SELECT
+        (SELECT precio_m2 FROM tarifas_base
+          WHERE tipo_reforma = %s AND nivel_acabados = %s),
+        (SELECT valor FROM reglas_negocio WHERE clave = %s),   -- margen
+        (SELECT valor FROM reglas_negocio WHERE clave = %s),   -- recargo
+        (SELECT umbral FROM umbrales_gate WHERE tipo_reforma = %s),
+        (SELECT provisional FROM umbrales_gate WHERE tipo_reforma = %s);
+
+  La técnica es la MISMA que ya se usaba: subconsultas escalares (un
+  SELECT entre paréntesis que devuelve un solo valor, o NULL si no
+  encuentra fila). No es un mecanismo nuevo; lo único que cambia es de
+  qué tabla sale el umbral y con qué condición se busca. Por eso el
+  número de viajes a Supabase NO aumenta: sigue siendo una sola consulta
+  para todos los parámetros del cálculo.
+
+  Hay dos subconsultas contra umbrales_gate porque una subconsulta
+  escalar devuelve, por definición, un solo valor, y aquí se quieren dos
+  columnas. Son dos búsquedas por clave primaria en una tabla de 4
+  filas, dentro de la misma consulta: el coste es inapreciable, y lo
+  confirman los tiempos medidos (sección 8).
+
+  'provisional' no interviene en el cálculo: se lee para dejar
+  constancia en el log de que ese presupuesto se decidió con un umbral
+  todavía no definitivo.
+
+5.3 El log de auditoría
+  Antes guardaba "umbral_aprobacion_manual": "10000.00". Ahora guarda:
+      "umbral_gate": "13000.00",
+      "umbral_provisional": false
+  El primero es el umbral CONCRETO que se aplicó (la categoría ya
+  aparece en el mismo log, en "tipo_reforma"). El segundo permite
+  localizar más adelante, con una consulta, qué presupuestos se
+  calcularon con un umbral provisional, en vez de tener que deducirlo
+  por la fecha.
+
+
+================================================================
+6. QUÉ PASA SI UNA CATEGORÍA SE QUEDA SIN UMBRAL
+================================================================
+
+Razonado, no supuesto:
+
+  - Si tipo_reforma es NULL, la subconsulta no encuentra fila y el
+    umbral llega como None. Pero en ese caso precio_m2 también es None,
+    así que la llamada ya iba a 'requiere_revision' por "tarifa". El
+    resultado para el cliente no cambia; lo que mejora es el
+    diagnóstico: el log dice ahora que faltaban las dos cosas.
+  - Si tipo_reforma tiene uno de los 4 valores del CHECK, hoy SIEMPRE
+    hay umbral. No es una suposición: la comprobación U6 del script de
+    verificación lo comprueba contra la base de datos real, con un LEFT
+    JOIN que busca categorías de tarifas_base sin fila en umbrales_gate.
+  - Pero "hoy" no es "siempre": los umbrales son datos editables sin
+    redeploy, y un DELETE en el panel de Supabase dejaría una categoría
+    huérfana. La base de datos no puede impedirlo: una clave foránea
+    obliga a que lo que hay APUNTE a algo existente, no a que exista una
+    fila por cada categoría posible.
+  - En ese caso, el servicio NO usa un valor por defecto. Cae en el
+    fallback ya existente y probado: no escribe presupuesto, deja la
+    oportunidad en 'nueva', registra en logs detalle.faltan =
+    ["umbral_gate"] y responde status='requiere_revision'.
+  - Se descartó heredar los 10.000 € antiguos como respaldo, por el
+    mismo principio que rige todo el fallback: no inventar. Un umbral
+    inventado no da error; da presupuestos mal clasificados en silencio,
+    que es peor que un caso enviado a revisión humana.
+
+
+================================================================
+7. REGRESIÓN: QUÉ PRUEBAS CAMBIARON DE RESULTADO Y POR QUÉ
+================================================================
+
+Se revisaron los TRES scripts que tocan el Gate. Estos son todos los
+casos afectados:
+
+  check_estimate_service.py, B6 — baño medio, 8,7 m²
+      importe_max = 11.505,75 €.
+      ANTES: superaba los 10.000 € -> motivo_gate
+             'importe_superior_umbral', estado 'pendiente_aprobacion'.
+      AHORA: por debajo de los 13.000 € de baño -> sin Gate, estado
+             'presupuesto_enviado'.
+      No es que la prueba se haya relajado: es exactamente el
+      comportamiento que D9 buscaba, verificado contra la base de datos.
+
+  check_estimate_service.py, B9 — tipo_reforma NULL
+      ANTES: detalle.faltan == ["tarifa"].
+      AHORA: ["tarifa", "umbral_gate"], porque el umbral también se
+             busca por categoría. La respuesta al cliente es la misma.
+
+  check_estimate_service.py, aserción del log de B1
+      ANTES: "umbral_aprobacion_manual": "10000.00".
+      AHORA: "umbral_gate": "13000.00" y "umbral_provisional": false.
+
+CASOS NUEVOS añadidos para que no se pierda cobertura:
+
+  B6b — baño medio, 12 m²: 1.150 × 12 = 13.800; × 1,15 = 15.870 € >
+        13.000 -> Gate por importe. Sin este caso, después de D9 no
+        quedaría ninguna prueba de Gate por importe en baño.
+  B12 — cocina medio, 10 m² (el caso de negocio que motivó D9):
+        11.500 € -> SIN Gate. Antes lo habría activado.
+  evaluar_gate: cuatro casos nuevos con umbral 13.000 €, incluidos los
+        límites exactos 13.000,00 (no salta) y 13.000,01 (salta).
+  check_calculate_estimate_http.py, H6b — la misma cocina de 10 m²,
+        pero de extremo a extremo por HTTP.
+
+CASOS REVISADOS QUE NO CAMBIAN:
+  - Todo lo que usa integral_vivienda (B4, B5, y los casos "umbral" y
+    "ambos" del script MCP): su umbral sigue en 10.000 €.
+  - Baño de 6 m² con cambios estructurales (8.625 €): su motivo era y
+    sigue siendo 'cambios_estructurales', porque no llegaba al umbral ni
+    antes ni ahora.
+  - Todos los casos de autenticación, validación, idempotencia,
+    ocultación de importes al agente y carrera: no dependen del umbral.
+
+
+================================================================
+8. VERIFICACIÓN CON SALIDA REAL
+================================================================
+
+8.1 check_migracion_umbrales_gate.py
+  ANTES de migrar: 0/1. "la tabla umbrales_gate existe -> FALLO", y el
+  resto se omite por no tener sentido sin tabla.
+  DESPUÉS: 17/17. Comprueba la clave primaria
+  ("PRIMARY KEY (tipo_reforma)"), los dos CHECK, RLS activado, los
+  cuatro umbrales con su marca provisional, y que la tabla rechaza:
+  'tejado' (CheckViolation), 'baño' con eñe (CheckViolation), una
+  categoría repetida (UniqueViolation) y umbrales 0 y -100
+  (CheckViolation). U6 confirma que ninguna categoría con tarifa se
+  queda sin umbral, y U7 que la regla vieja está marcada como obsoleta.
+  Cada aserción va en su propio SAVEPOINT, igual que en el bloque
+  anterior: sin eso, la primera violación esperada abortaría la
+  transacción y las demás no llegarían a ejecutarse.
+
+8.2 Migración (salida real)
+  ANTES:  ¿existe umbrales_gate? -> NO
+  DESPUÉS:
+      bano                   13000.00  provisional=False
+      cocina                 13000.00  provisional=False
+      integral_vivienda      10000.00  provisional=False
+      parcial_acabados       10000.00  provisional=True
+  Segunda ejecución (idempotencia): sigue habiendo 4 filas y el aviso de
+  obsolescencia afecta a 0 filas, es decir, no se vuelve a añadir.
+
+8.3 check_estimate_service.py — 107/107
+  (antes de D9 eran 83; los 24 nuevos son los casos de la sección 7.)
+  Salida del log de B1, que demuestra el cambio:
+    {'m2': '6.0', 'precio_m2': '1150.00', 'umbral_gate': '13000.00',
+     'umbral_provisional': False, 'margen_empresa_pct': '15.00',
+     'recargo_informe_tecnico': '600.00', 'importe_min': '6900.00',
+     'importe_max': '7935.00', 'motivo_gate': None,
+     'estado': 'presupuesto_enviado', ...}
+
+8.4 check_calculate_estimate_http.py — 21/21 (antes 20)
+  H6b, salida real:
+    200 {'presupuesto_id': 39, 'oportunidad_id': 83,
+         'importe_min': '10000.00', 'importe_max': '11500.00',
+         'motivo_gate': None, 'requiere_aprobacion': False,
+         'status': 'presupuesto_enviado', 'creado': True}
+
+8.5 check_mcp_calculate_estimate.py — 19/19, sin cambios
+  Sus casos de Gate usan integral_vivienda, cuyo umbral no cambia.
+
+8.6 Regresión del resto
+  check_migracion_calculate_estimate 14/14, check_leads_endpoint_http
+  12/12, check_schemas 34/34, check_rls_estado sin errores.
+
+8.7 Esquema regenerado
+  dump_schema.py: 9 tablas, 17 restricciones PK/UNIQUE/FK, 9 CHECK
+  (antes 8 tablas, 16 y 7). El diff de schema_actual.sql muestra
+  únicamente la tabla nueva con sus restricciones y su ENABLE ROW LEVEL
+  SECURITY.
+
+8.8 Base de datos limpia
+  Todos los scripts borran sus datos de prueba al terminar.
+
+
+================================================================
+9. COMPLICACIONES ENCONTRADAS
+================================================================
+
+9.1 El encargo pedía implementar B y luego C, que son incompatibles
+  B (tabla) y C (claves en reglas_negocio) son dos diseños alternativos
+  para el MISMO dato, no dos pasos. Implementar los dos dejaría el
+  umbral de baño escrito en dos sitios, que es justo el problema de
+  divergencia por el que se descartó la opción A. Se ha implementado B
+  completo y la decisión sobre C queda planteada al final, sin asumirla.
+
+9.2 Un fallo de regresión que resultó ser el comportamiento correcto
+  Al ejecutar la verificación del servicio apareció 106/107: el caso B9
+  (tipo_reforma NULL) esperaba detalle.faltan == ["tarifa"] y obtuvo
+  ["tarifa", "umbral_gate"]. No era un error del código: con el umbral
+  buscado por categoría, una categoría ausente deja sin encontrar las
+  dos cosas. Se actualizó la aserción y se documentó el porqué en el
+  propio script.
+
+9.3 Edición de archivos con escapes
+  Un intento de editar el script de verificación con un pequeño programa
+  auxiliar falló al comparar textos que contienen "\n" literal. Se
+  resolvió editando directamente, sin intermediarios. Sin efecto sobre
+  el resultado, pero explica por qué en el historial hay un intento
+  fallido.
+
+9.4 Cosas que despistan y no son fallos (ya vistas en el bloque
+anterior)
+  Los id de las pruebas saltan (las secuencias no retroceden con un
+  rollback); dump_schema.py escribe con finales de línea CRLF en Windows
+  y Git los normaliza al hacer commit.
+
+
+================================================================
+10. LO QUE QUEDA PENDIENTE
+================================================================
+
+EL UMBRAL DE parcial_acabados SIGUE SIN CERRAR. Es lo más importante de
+esta sección.
+
+  Valor actual: 10.000 €, marcado provisional = true en la propia tabla.
+  No es una decisión de negocio: es el valor heredado del umbral global
+  antiguo, conservado para no dejar la categoría sin umbral.
+
+  Por qué no se puede fijar todavía: depende de qué superficie se
+  considera válida dentro de la categoría, cuestión que D10 deja
+  abierta. Con los datos reales, un repintado más suelo de un piso de
+  70 m² en nivel medio da 280 × 70 × 1,15 = 22.540 €, así que la
+  premisa "parcial_acabados son siempre reformas menores" no se
+  sostiene si la categoría admite proyectos a escala de vivienda
+  completa.
+
+  Dónde está marcado, para que no se olvide:
+    - en la tabla: umbrales_gate.provisional = true, y la descripción de
+      la fila explica el motivo;
+    - en el código: comentario en la migración (FILAS) y en
+      estimate_service, que lee y registra esa marca;
+    - en cada log de cálculo de un parcial_acabados:
+      "umbral_provisional": true, lo que permitirá localizar después qué
+      presupuestos se calcularon con el valor provisional;
+    - en CLAUDE.md y en D9/D10.
+
+Otros pendientes heredados, sin cambios:
+  - m2 no tiene tope en LeadCreate (riesgo de desbordar NUMERIC(10,2)).
+  - check_exception_handler.py falla 22/28 también en main, por no
+    enviar X-Webhook-Secret. Anterior a estos bloques.
+  - La tool MCP no se ha probado todavía desde el nodo real de n8n.
+  - Notas_Tecnicas nota B sigue diciendo que gate-decisions y visits
+    serán los primeros en actualizar el estado.
+
+
+================================================================
+11. SUGERENCIAS DE MEJORA
+================================================================
+
+1. Cerrar D10 y fijar el umbral de parcial_acabados. Mientras siga
+   provisional, una parte del sistema funciona con un número que nadie
+   ha decidido.
+2. Un script de verificación periódico que compruebe que todas las
+   categorías de tarifas_base tienen umbral (la consulta U6 ya existe) y
+   que avise de los umbrales provisionales. Serviría para que un DELETE
+   accidental en Supabase se detecte antes de que lo note un cliente.
+3. Cuando se cierre parcial_acabados, revisar también si el umbral de
+   integral_vivienda tiene sentido como número o si conviene documentar
+   explícitamente que, en esa categoría, quien decide es
+   incluye_cambios_estructurales (D9 ya lo razona; hoy el valor está por
+   coherencia, no por efecto).
+4. Para la memoria del TFM: la tabla umbrales_gate es un buen ejemplo
+   defendible de "parámetro de negocio editable sin redeploy" y de
+   normalización con motivo, no por costumbre. Merece un párrafo propio.
+
+
+================================================================
+12. CÓMO COMPROBARLO TÚ MISMO
+================================================================
+
+En PowerShell, desde C:\Proyectos\tfm-reformas:
+
+  .\venv\Scripts\python.exe scripts\check_migracion_umbrales_gate.py
+  .\venv\Scripts\python.exe scripts\check_estimate_service.py
+  $env:PYTHONIOENCODING="utf-8"; .\venv\Scripts\python.exe scripts\check_calculate_estimate_http.py
+
+En el editor SQL de Supabase:
+
+  -- los cuatro umbrales y cuál sigue provisional
+  SELECT tipo_reforma, umbral, provisional, descripcion
+  FROM umbrales_gate ORDER BY tipo_reforma;
+
+  -- presupuestos calculados con un umbral provisional
+  SELECT entity_id, detalle ->> 'tipo_reforma' AS categoria,
+         detalle ->> 'umbral_gate' AS umbral
+  FROM logs
+  WHERE accion = 'presupuesto_calculado'
+    AND (detalle ->> 'umbral_provisional')::boolean IS TRUE;
+
+Para cambiar un umbral sin tocar código (es el objetivo de tenerlo en
+una tabla):
+
+  UPDATE umbrales_gate
+  SET umbral = 14000.00, fecha_actualizacion = CURRENT_DATE
+  WHERE tipo_reforma = 'cocina';
+
+El cambio surte efecto en la siguiente llamada, sin reiniciar el
+servidor: el servicio lee la tabla en cada cálculo.
+
+
+================================================================
+13. ESTADO DE GIT Y SIGUIENTES PASOS
+================================================================
+
+- Rama feat/n0-calculate-estimate. NADA de este bloque está commiteado,
+  igual que el bloque anterior de calculate-estimate.
+- La migración SÍ está aplicada en la base de datos real (los cambios de
+  esquema no dependen de Git).
+- Sigue sin subir a GitHub el commit 6aa0cef (correcciones de la Adenda)
+  y todo el trabajo de los dos últimos bloques.
+- La opción C (cuatro claves por categoría en reglas_negocio, además de
+  esta tabla) queda DESCARTADA por decisión expresa de Gabi el
+  2026-09-20. umbrales_gate es la única fuente del umbral. Motivo:
+  mantener las dos seria tener el mismo dato escrito en dos sitios, que
+  pueden divergir; y la ventaja que C aportaria (editar sin tocar
+  codigo) ya la da esta tabla con un UPDATE normal.
+- Después: revisión, commits por bloques, push, y merge a main solo con
+  confirmación explícita y con --ff-only.

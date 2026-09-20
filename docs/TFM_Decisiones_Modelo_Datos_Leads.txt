@@ -2,7 +2,7 @@ REFORMAS INTEGRALES AMEDIDA — TFM
 MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
 
 DECISIONES DEL MODELO DE DATOS DE LEADS
-Por qué tres tablas, ciclo de vida de una oportunidad, y decisiones D1–D7
+Por qué tres tablas, ciclo de vida de una oportunidad, y decisiones D1–D10
 
 Documento de contexto de proyecto · Nivel N0
 
@@ -89,10 +89,12 @@ mismo dato, que podría desincronizarse.
 ================================================================
 
 La columna oportunidades.estado tiene un CHECK que admite exactamente
-seis valores, verificado en la base de datos:
+siete valores, verificado en la base de datos (eran seis hasta la
+migración paso3 del 2026-09-19, que añadió 'pendiente_aprobacion'; ver
+D8):
 
-    nueva, cualificada, visita_agendada, presupuesto_enviado,
-    ganada, perdida
+    nueva, cualificada, pendiente_aprobacion, visita_agendada,
+    presupuesto_enviado, ganada, perdida
 
 Significado de cada uno en la narrativa de negocio:
 
@@ -109,13 +111,21 @@ Significado de cada uno en la narrativa de negocio:
       información, es aquí donde entra la tool MCP
       request_missing_information.
 
+  pendiente_aprobacion   (nuevo, D8)
+      Se ha calculado el presupuesto y ha activado el Gate HITL (por
+      importe o por cambios estructurales). Espera la decisión de una
+      persona por Telegram (POST /gate-decisions). El cliente todavía
+      NO tiene su cifra definitiva. Lo escribe POST /calculate-estimate.
+
   visita_agendada
       El cliente ha elegido una franja horaria y existe una fila en
       visitas (POST /visits).
 
   presupuesto_enviado
-      Se le ha entregado al cliente un presupuesto, con el Gate HITL ya
-      resuelto si el importe o los cambios estructurales lo activaron.
+      Se le ha entregado al cliente un presupuesto. Lo escribe POST
+      /calculate-estimate cuando NO hay Gate. Cuando lo hay, la
+      oportunidad pasa antes por 'pendiente_aprobacion' y llegará aquí
+      tras la aprobación (POST /gate-decisions, pendiente).
 
   ganada
       El cliente acepta y la reforma se contrata.
@@ -129,6 +139,10 @@ Significado de cada uno en la narrativa de negocio:
   El orden canónico del proceso comercial en N0 es:
 
       nueva -> presupuesto_enviado -> visita_agendada -> ganada/perdida
+
+  con un desvío cuando el presupuesto activa el Gate HITL (D8):
+
+      nueva -> pendiente_aprobacion -> presupuesto_enviado -> ...
 
   FUENTE DE AUTORIDAD: la Propuesta de Fase 1, ya aprobada por el
   tutor, que describe el flujo como:
@@ -207,7 +221,7 @@ Significado de cada uno en la narrativa de negocio:
 
 
 ================================================================
-3. DECISIONES D1 – D7, RESUELTAS
+3. DECISIONES D1 – D10, RESUELTAS
 ================================================================
 
 D1 — ¿QUIÉN CREA LA FILA EN oportunidades?
@@ -412,6 +426,289 @@ tragarse un lead legítimo de un cliente que pide dos reformas el mismo
 día.
 
 
+D8 — ESTADO DE ESPERA DEL GATE Y UN PRESUPUESTO POR OPORTUNIDAD
+------------------------------------------------
+(Bloque POST /calculate-estimate, 2026-09-19. Migración:
+scripts/migraciones_ejecutadas/paso3_calculate_estimate.py.)
+
+Problema 1: el estado de una oportunidad cuyo presupuesto activa el Gate
+HITL. Hasta ahora solo había dos candidatos, y los dos eran falsos:
+  - 'nueva': diría que no se ha hecho nada, cuando ya hay un presupuesto
+    calculado y guardado, esperando a una persona. create_followup_task
+    la confundiría con un lead sin atender.
+  - 'presupuesto_enviado': diría que el cliente ya tiene su cifra, y con
+    el Gate activo NO la tiene. Es precisamente lo que el Gate impide.
+Y a diferencia de 'cualificada' (sección 2), este estado SÍ tiene un
+observador mientras dura: una persona con un aviso en Telegram, y
+potencialmente horas de espera. Cumple el criterio de "un estado solo
+aporta valor si alguien puede leerlo".
+
+DECISIÓN: estado nuevo 'pendiente_aprobacion', añadido al CHECK
+oportunidades_estado_check (de 6 a 7 valores, rehecho con DROP + ADD en
+un solo ALTER TABLE). calculate-estimate escribe 'presupuesto_enviado'
+si no hay Gate y 'pendiente_aprobacion' si lo hay, en la misma
+transacción que el INSERT del presupuesto. datos_completos, confianza_ia
+y prioridad no se tocan.
+
+Problema 2: idempotencia de calculate-estimate. Al contrario que en D7,
+aquí la clave natural YA existe: una oportunidad tiene como mucho un
+presupuesto en N0. Sin restricción, un reintento de n8n o una segunda
+llamada del agente crearía un segundo presupuesto y un segundo aviso a
+Telegram para la misma reforma.
+
+Alternativas: (a) comprobar en Python si ya existe antes de insertar
+(no protege de dos llamadas simultáneas); (b) bloquear la oportunidad
+con SELECT ... FOR UPDATE (funciona, pero es un mecanismo más que
+explicar y deja la regla solo en el código); (c) UNIQUE (oportunidad_id)
+en presupuestos, más INSERT ... ON CONFLICT (oportunidad_id) DO NOTHING.
+
+DECISIÓN: (c). La regla "un presupuesto por oportunidad" queda en la
+base de datos, que la hace cumplir venga la escritura de donde venga, y
+la carrera la resuelve Postgres dentro de una sola sentencia. Se eligió
+DO NOTHING y no el DO UPDATE de D2 porque aquí sí hay que distinguir
+"recién creado" (se cambia el estado y se marca creado=true) de "ya
+existía" (no se escribe nada). Además, un presupuesto ya emitido, quizá
+pendiente de aprobación, no debe reescribirse nunca.
+
+Coste asumido y documentado: la restricción impide tener varios
+presupuestos por oportunidad (por ejemplo, un presupuesto definitivo
+tras la visita técnica). Si N1 lo necesita, habrá que sustituir el
+UNIQUE por uno sobre (oportunidad_id, tipo) o una versión.
+
+Verificado con ejecución real: scripts/check_migracion_calculate_estimate.py,
+9/14 antes de migrar (fallan exactamente las cinco comprobaciones que
+dependen de la migración) y 14/14 después. Y el servicio completo:
+scripts/check_estimate_service.py 83/83, incluida una carrera forzada en
+la que el servicio queda bloqueado en el índice UNIQUE hasta que la otra
+transacción confirma, y devuelve el presupuesto de esta sin error.
+
+D9 — UMBRAL DE APROBACIÓN MANUAL: POR QUÉ DEJA DE SER UN VALOR GLOBAL
+------------------------------------------------
+Problema: reglas_negocio.umbral_aprobacion_manual era un único valor
+(10.000 €) aplicado a las 4 categorías de tipo_reforma, con precios/m²
+que van de 130 € (parcial_acabados/basico) a 1.700 € (bano/alto) — más
+de 13 veces de diferencia. Verificado contra las 12 filas reales de
+tarifas_base: a 10.000 €, el m² a partir del cual una reforma sin
+cambios estructurales supera el umbral (importe_max = precio_m2 × m2 ×
+1,15) va de 5,12 m² (bano/alto) a 66,89 m² (parcial_acabados/basico).
+
+El propio campo reglas_negocio.umbral_aprobacion_manual.descripcion
+documenta que el valor fue revisado de 8.000 € a 10.000 € "para evitar
+activación sistemática del gate en el segmento de mayor volumen de
+leads", y cada fila de tarifas_base declara en su fuente si esa
+combinación debería o no disparar Gate "en tamaño típico". Contrastando
+ambas afirmaciones contra el cálculo real, usando 6 m² como tamaño
+típico de baño y 10 m² como tamaño típico de cocina (cifras estándar
+del sector, no verificadas contra histórico propio porque el sistema
+aún no tiene volumen real de leads):
+
+  bano/medio    (6 m² típico):  1.150 × 6 × 1,15  =  7.935 €
+                                -> bajo el umbral. Cumple lo declarado.
+  cocina/medio  (10 m² típico): 1.000 × 10 × 1,15 = 11.500 €
+                                -> SOBRE el umbral. NO cumple lo
+                                   declarado en su propia fila.
+
+Un proyecto de cocina/medio de tamaño perfectamente típico ya activa el
+Gate con el umbral actual, pese a que tarifas_base.fuente afirma para
+esa fila "sin Gate HITL en tamaño típico". Es una contradicción
+verificable entre el dato y su propia documentación, no una apreciación
+subjetiva.
+
+Alternativas evaluadas:
+  (A) Subir el umbral global a un valor de compromiso (~13.000 €).
+  (B) Dejar el umbral en 10.000 € y corregir tarifas_base.fuente para
+      que refleje la realidad de cocina/medio en vez del objetivo de
+      diseño original.
+  (C) umbral_aprobacion_manual deja de ser un valor único y pasa a
+      depender de tipo_reforma.
+
+(A) se descarta: corrige cocina/medio (nuevo punto de corte 11,30 m²,
+margen razonable sobre el típico de 10 m²) pero degrada bano/alto, cuyo
+objetivo de diseño es disparar Gate en tamaño típico. Con 13.000 €, el
+punto de corte de bano/alto sube de 5,12 a 6,65 m², y modelando con una
+distribución triangular razonable (mínimo 3, moda 6, máximo 12 m² —
+modelización estándar sin histórico propio, no una cifra oficial) la
+probabilidad de que un bano/alto dispare Gate cae de ~83 % (a 10.000 €)
+a ~53 % (a 13.000 €). Protege una categoría degradando la garantía de
+otra: es una cesión, no una solución.
+
+(B) se descarta: es la opción más barata (cero cambio de esquema o de
+código) pero no corrige el comportamiento real del sistema, solo el
+texto que lo describe. Si la intención de negocio era que cocina/medio
+—línea de volumen, junto con baño— tuviera aprobación automática en el
+caso típico, (B) renuncia a esa intención en vez de conseguirla.
+
+DECISIÓN: (C). umbral_aprobacion_manual pasa a depender de
+tipo_reforma: cada categoría tiene su propio umbral, de modo que
+ajustar uno no degrada el objetivo de diseño de otro. Es la única
+alternativa que no exige sacrificar el objetivo de una categoría para
+cumplir el de otra, porque ninguna de las dos primeras resuelve el
+problema de raíz: un único número no puede optimizar dos objetivos de
+negocio distintos a la vez.
+
+  VALORES ADOPTADOS POR CATEGORÍA, Y POR QUÉ CADA UNO
+  (defensa de las cifras concretas, no solo del mecanismo)
+  --------------------------------------------------------------
+
+  bano / cocina -> 13.000 €.
+      Es el valor mínimo que devuelve a cocina/medio (10 m² típico,
+      11.500 € con la tarifa actual) a estar bajo el umbral con un
+      margen operativo razonable (punto de corte 11,30 m², 1,3 m² de
+      margen sobre el típico -no se ajusta al límite exacto, que
+      dejaría el resultado demasiado sensible a variaciones normales
+      de superficie-), sin subir tanto que bano/alto deje de cumplir su
+      objetivo de diseño: a 13.000 €, el punto de corte de bano/alto
+      (6,65 m²) sigue por debajo de la moda asumida (6 m²), de modo que
+      más de la mitad de los casos sigue activando Gate según la misma
+      modelización triangular, aunque el margen de seguridad de ese
+      objetivo se reduce del ~83 % original al ~53 %. Es la cesión
+      mínima necesaria, no una cifra arbitraria.
+
+  integral_vivienda -> se mantiene en 10.000 € (no se sube a 13.000 €
+      como bano/cocina). Justificación: subir este umbral no tiene
+      ningún efecto medible. Verificado con los tres niveles de
+      tarifas_base contra un rango de superficie de vivienda española
+      realista (45-150 m², franja de superficie útil habitual, sin
+      desglose porcentual verificado en esta sesión): incluso
+      integral_vivienda/basico en su extremo inferior (45 m²) ya da
+      500 × 45 × 1,15 = 25.875 €, muy por encima de cualquier umbral
+      entre 10.000 y 20.000 €. Mantenerlo en el valor original
+      documenta honestamente que, para esta categoría, el umbral NO es
+      la variable de control -lo es incluye_cambios_estructurales, que
+      en una reforma integral real es prácticamente siempre true-.
+      Subirlo sin efecto real daría la falsa impresión de un ajuste que
+      no existe.
+
+  parcial_acabados -> se mantiene en 10.000 € PENDIENTE de revisión al
+      cerrar D10: el umbral correcto para esta categoría depende de qué
+      alcance de superficie se considera válido dentro de ella,
+      cuestión que D10 deja abierta.
+
+  IMPLEMENTADO Y VERIFICADO el 2026-09-20 (ver
+  docs/Umbral_Gate_por_Categoria_D9_final.txt). La forma del esquema que
+  D9 dejaba abierta ("columna en tarifas_base o tabla equivalente") se
+  resolvió con una TABLA NUEVA, umbrales_gate, cuya clave primaria es
+  tipo_reforma.
+
+  Por qué no una columna en tarifas_base: esa tabla está identificada
+  por la PAREJA (tipo_reforma, nivel_acabados), 12 filas, y el umbral no
+  depende del nivel. El mismo valor quedaría repetido tres veces por
+  categoría, cambiarlo exigiría tres UPDATE coherentes, y si uno fallara
+  el presupuesto pasaría a depender del nivel de acabados, justo lo que
+  D9 dice que NO debe ocurrir. Además, tarifas_base guarda precios de
+  mercado, y el umbral es un parámetro de gobernanza interna.
+  Se evaluó también una tercera vía (cuatro claves nuevas en
+  reglas_negocio, del tipo 'umbral_aprobacion_manual_bano'), descartada
+  porque esconde la categoría dentro de un texto: nada garantizaría que
+  existan las cuatro ni que estén bien escritas, y una errata como
+  '..._baño' no daría error, solo un cálculo que acaba en
+  'requiere_revision' sin causa visible — el mismo fallo silencioso que
+  motivó el CHECK de D5.
+
+  umbrales_gate(tipo_reforma PK, umbral NUMERIC(10,2) NOT NULL,
+  provisional BOOLEAN NOT NULL, descripcion, fecha_actualizacion), con
+  CHECK de las 4 categorías y CHECK de umbral > 0, y RLS activado como
+  las demás tablas. La columna provisional marca EN EL DATO que el
+  umbral de parcial_acabados sigue sin cerrar (D10), de modo que se
+  puede consultar con SQL y queda anotada en cada log de cálculo.
+
+  Consecuencia de alcance documentada: el proyecto pasa de 8 a 9 tablas.
+  Es la misma clase de ampliación justificada que el salto de 6 a 8
+  (reglas_negocio y tarifas_base): responde a un requisito verificado.
+
+  estimate_service.evaluar_gate NO cambió: es una función pura que ya
+  recibía el umbral como parámetro. Lo que cambió es quién se lo pasa:
+  calculate_estimate lo busca ahora en umbrales_gate por tipo_reforma,
+  dentro de la MISMA consulta que ya leía la tarifa y las reglas, así
+  que el número de viajes a la base de datos no aumenta.
+
+  Si una categoría se quedara sin umbral (un DELETE manual en Supabase;
+  la base de datos no puede impedirlo), el cálculo NO usa un valor por
+  defecto: cae en el fallback ya existente, 'requiere_revision', con
+  "umbral_gate" en la lista detalle.faltan del log. Se descartó heredar
+  los 10.000 € antiguos como valor de respaldo, porque un umbral
+  inventado no da error: da presupuestos mal clasificados en silencio.
+
+
+D10 — QUÉ HACER CUANDO EL TIPO DE REFORMA NO ENCAJA EN LAS 4 CATEGORÍAS
+------------------------------------------------
+Problema surgido al diseñar el futuro flujo guiado de captura: cuando
+la respuesta del lead no encaja limpiamente en bano/cocina/
+integral_vivienda, aparece la tentación de tratar parcial_acabados como
+categoría "cajón de sastre" para cualquier "otro tipo de reforma". Pero
+tarifas_base.parcial_acabados está tarifada explícitamente como "sin
+instalaciones" (130-480 €/m², precio bajo precisamente por excluir
+fontanería y electricidad). Ejemplos reales que NO encajan en esa
+definición pese a poder describirse como "otro tipo": cambiar una
+bañera por un plato de ducha (fontanería), o una instalación eléctrica
+puntual.
+
+Riesgo si se ignora: dar un presupuesto de "solo pintura y suelo" para
+un trabajo que en realidad incluye instalaciones produce una cifra
+sistemáticamente por debajo del coste real. No es un problema de
+interfaz de usuario: es un presupuesto que induce a error al cliente y
+compromete el margen real de la empresa si se usa como referencia.
+
+Alternativas evaluadas:
+  (A) Forzar cualquier "otro tipo" dentro de parcial_acabados
+      igualmente.
+  (B) Añadir categorías nuevas al enum tipo_reforma (p.ej.
+      fontaneria_puntual, electricidad_puntual) con tarifas propias.
+  (C) Cualquier caso que no encaje limpiamente en las 4 categorías
+      definidas no recibe presupuesto automático: se enruta a revisión
+      humana desde la captura del lead, sin pasar por
+      calculate-estimate.
+
+(A) se descarta: perpetúa el riesgo de infravaloración descrito arriba.
+
+(B) se descarta: exigiría fijar un precio_m2 de mercado para categorías
+que hoy no existen y de las que no hay ninguna fuente verificada —el
+mismo problema de origen ya señalado para parcial_acabados en
+Decisiones_Verificacion_Tarifas_y_Margen_N0 (ausencia de fuente de
+mercado dedicada para esa categoría). Añadir enums nuevos sin datos
+reales detrás fabrica precisión donde no la hay.
+
+DECISIÓN: (C). Reutiliza el mecanismo de fallback ya construido y
+verificado en estimate_service -el mismo camino de código que produce
+status='requiere_revision' cuando falta una tarifa o una regla-,
+aplicado ahora a una condición de entrada distinta: tipo de reforma sin
+categoría automatizable, en vez de tarifa ausente para una categoría
+que sí existe. No se inventa un mecanismo nuevo: se reconoce que el
+sistema ya sabía decir "esto necesita a una persona" y se usa esa misma
+vía en vez de forzar una cifra sin base de precio fiable que la
+sostenga.
+
+  Consecuencia para el flujo guiado (diseño, no implementado aún): la
+  pregunta "¿es otro tipo de reforma?" no necesita una rama de
+  subpreguntas (pintura / electricidad / fontanería) que alimenten un
+  cálculo -basta con capturar la respuesta libre en
+  leads.datos_estructurados (evidencia, ver D3) y crear la oportunidad
+  sin invocar calculate-estimate, dejándola marcada para contacto
+  humano desde el origen. No hace falta ampliar el CHECK de
+  tipo_reforma para esto.
+
+  | parcial_acabados | 10.000 € (sin cambio) | Decisión de negocio: parcial_acabados es por definición una intervención puntual — si el alcance creciera hasta cubrir una vivienda completa, dejaría de clasificarse como tal. Bajo esa definición, 10.000 € es un techo razonable. |
+
+DEFECTO OPERATIVO SIN RESOLVER: la regla "si crece, deja de ser
+parcial_acabados" es una definición de negocio, no una restricción
+técnica. Nada en el esquema ni en el código impide hoy crear un lead
+con tipo_reforma='parcial_acabados' y una superficie grande (verificado:
+70 m² en nivel medio ya da 22.540 €, muy por encima del umbral). Queda
+como mejora pendiente: un tope de m² específico para esta categoría, o
+que el futuro flujo guiado (D10) impida estructuralmente ofrecerla para
+una vivienda completa.
+
+Coste asumido en baño: bano/medio a su tamaño típico (6 m²) ya cumplía
+el objetivo de diseño a 10.000 € y no necesitaba subir de umbral.
+Subirlo a 13.000 € junto con cocina es una decisión de simplicidad
+operativa (un solo número para "reforma de habitación"), no una
+corrección de un problema propio de baño. Consecuencia medida: bano/alto
+pasa de disparar Gate en ~83% de los casos (a 10.000 €) a ~53% (a
+13.000 €). Se ofreció mantener baño en 10.000 € de forma independiente
+de cocina, sin coste de migración; se decidió mantener el mismo umbral
+para ambas categorías, sin una razón de negocio adicional más allá de
+la paridad entre ellas.
+  
 ================================================================
 4. LO QUE ESCRIBE POST /leads, CAMPO A CAMPO
 ================================================================
@@ -473,6 +770,22 @@ entity_type nuevo, mirar aquí; si no está, añadirlo aquí también.
               secuencias SERIAL de Postgres empiezan en 1, así que
               ningún registro real puede tener ese id y no hay riesgo
               de confundirlo con una entidad de verdad.
+
+  'oportunidad'  (añadido el 2026-09-19, POST /calculate-estimate)
+              entity_id = oportunidades.id, una fila real. Dos acciones:
+                accion = 'presupuesto_calculado': cálculo correcto;
+                  detalle guarda los datos de entrada, las tarifas y
+                  reglas USADAS (precio_m2, margen, recargo, y desde D9
+                  umbral_gate más umbral_provisional, que dice si ese
+                  umbral era todavía provisional), los
+                  importes y el motivo del Gate. Es la auditoría de por
+                  qué salió esa cifra, ya que tarifas_base y
+                  reglas_negocio se pueden editar.
+                accion = 'presupuesto_requiere_revision': no se pudo
+                  calcular; detalle.faltan dice qué faltaba ('tarifa',
+                  'datos_lead' o el nombre de la regla).
+              Los importes van como TEXTO dentro del JSON ("8625.00"),
+              no como número, para no perder exactitud.
 
   LISTA PENDIENTE DE CRECER
   --------------------------------------------------------------

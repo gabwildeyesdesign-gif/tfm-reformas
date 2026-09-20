@@ -1,14 +1,14 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-09-18 14:07:36 UTC
+-- Generado por scripts/dump_schema.py el 2026-09-19 22:18:10 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
 -- table_constraints, key_column_usage, constraint_column_usage y
 -- check_constraints), no copiado de ningun archivo previo.
 --
--- Tablas: 8
+-- Tablas: 9
 -- ==========================================================================
 
 
@@ -69,7 +69,7 @@ CREATE TABLE oportunidades (
     CONSTRAINT oportunidades_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES leads(id),
     CONSTRAINT oportunidades_pkey PRIMARY KEY (id),
     CONSTRAINT chk_oportunidades_tipo_reforma CHECK (((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying])::text[])) OR (tipo_reforma IS NULL)),
-    CONSTRAINT oportunidades_estado_check CHECK ((estado)::text = ANY ((ARRAY['nueva'::character varying, 'cualificada'::character varying, 'visita_agendada'::character varying, 'presupuesto_enviado'::character varying, 'ganada'::character varying, 'perdida'::character varying])::text[])),
+    CONSTRAINT oportunidades_estado_check CHECK ((estado)::text = ANY ((ARRAY['nueva'::character varying, 'cualificada'::character varying, 'pendiente_aprobacion'::character varying, 'visita_agendada'::character varying, 'presupuesto_enviado'::character varying, 'ganada'::character varying, 'perdida'::character varying])::text[])),
     CONSTRAINT oportunidades_prioridad_check CHECK ((prioridad)::text = ANY ((ARRAY['baja'::character varying, 'media'::character varying, 'alta'::character varying])::text[]))
 );
 
@@ -89,6 +89,7 @@ CREATE TABLE presupuestos (
     motivo_gate              VARCHAR(30),
     CONSTRAINT presupuestos_oportunidad_id_fkey FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
     CONSTRAINT presupuestos_pkey PRIMARY KEY (id),
+    CONSTRAINT presupuestos_oportunidad_id_key UNIQUE (oportunidad_id),
     CONSTRAINT presupuestos_motivo_gate_check CHECK ((motivo_gate)::text = ANY ((ARRAY['cambios_estructurales'::character varying, 'importe_superior_umbral'::character varying, 'ambos'::character varying])::text[]))
 );
 
@@ -123,6 +124,20 @@ CREATE TABLE tarifas_base (
 );
 
 -- ------------------------------------------------------------------------
+-- Tabla: umbrales_gate   (4 filas en el momento del volcado)
+-- ------------------------------------------------------------------------
+CREATE TABLE umbrales_gate (
+    tipo_reforma             VARCHAR(30) NOT NULL,
+    umbral                   NUMERIC(10,2) NOT NULL,
+    provisional              BOOLEAN NOT NULL DEFAULT false,
+    descripcion              TEXT,
+    fecha_actualizacion      DATE NOT NULL DEFAULT CURRENT_DATE,
+    CONSTRAINT umbrales_gate_pkey PRIMARY KEY (tipo_reforma),
+    CONSTRAINT chk_umbrales_gate_tipo_reforma CHECK ((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying])::text[])),
+    CONSTRAINT chk_umbrales_gate_umbral_positivo CHECK (umbral > (0)::numeric)
+);
+
+-- ------------------------------------------------------------------------
 -- Tabla: visitas   (0 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE visitas (
@@ -146,4 +161,5 @@ ALTER TABLE oportunidades    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE presupuestos     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reglas_negocio   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tarifas_base     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE umbrales_gate    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE visitas          ENABLE ROW LEVEL SECURITY;

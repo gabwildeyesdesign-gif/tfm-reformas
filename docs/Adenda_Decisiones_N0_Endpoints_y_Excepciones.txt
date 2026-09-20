@@ -11,7 +11,7 @@ endpoints y revisión técnica final.
 | # | Endpoint | Input | Output | Trigger real |
 |---|---|---|---|---|
 | 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales, fotos[] (opcional, máx. 5), lead_token | 201: lead_id, cliente_id, oportunidad_id, status | Webhook n8n, formulario web |
-| 2 | POST /calculate-estimate | oportunidad_id | presupuesto_id, importe_min, importe_max, motivo_gate, requiere_aprobacion, status | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
+| 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min, importe_max, motivo_gate, requiere_aprobacion, status, creado (ver 5.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | Producción N0: temporizador n8n llama al endpoint directamente (no pasa por MCP). MCP tool disponible para N1+, no ejercida en N0 |
@@ -168,6 +168,41 @@ secreto se compara en tiempo constante (secrets.compare_digest).
 Implementación: app/api/security.py. Verificación:
 scripts/check_webhook_auth_http.py.
 
+5.2 POST /calculate-estimate y tool MCP calculate_estimate (añadido el
+2026-09-19, en el mismo bloque que el código)
+
+Autenticación por puerta:
+  - REST: la misma cabecera X-Webhook-Secret que POST /leads (misma
+    dependencia, app/api/security.py). Es obligatoria porque esta puerta
+    devuelve siempre los importes y escribe en la base de datos.
+  - MCP: cabecera "Authorization: Bearer <MCP_SECRET>", un secreto
+    DISTINTO de WEBHOOK_SECRET (app/mcp_server/server.py). Sin él, o con
+    otro valor (incluido WEBHOOK_SECRET), /mcp responde 401 con
+    WWW-Authenticate: Bearer.
+
+| Puerta | Código / resultado | Causa | Reintento en n8n | Acción |
+|---|---|---|---|---|
+| REST | 200 | Presupuesto calculado ahora (creado=true) o ya existente (creado=false) | — | n8n solo envía el aviso a Telegram si creado=true y requiere_aprobacion=true |
+| REST | 200 con status="requiere_revision" | Falta la tarifa, una regla de negocio o un dato del lead | NO (reintentar no lo arregla) | Se registra en logs (accion presupuesto_requiere_revision, con lo que faltaba); revisión humana |
+| REST | 401 | Falta X-Webhook-Secret o es incorrecto | NO | Revisar la credencial Header Auth |
+| REST | 404 | La oportunidad no existe | NO | Revisar el oportunidad_id que envía n8n |
+| REST | 409 | La oportunidad no tiene presupuesto y no está en 'nueva' | NO | Revisión humana del estado de la oportunidad |
+| REST | 422 | Cuerpo inválido: falta oportunidad_id, no es entero > 0, o trae campos de más (m2, lead_id...) | NO | Corregir la petición |
+| REST | 500 | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff | Registrado por el manejador global |
+| MCP | resultado normal | Igual que el 200 REST, salvo que importe_min/importe_max van a null si motivo_gate es cambios_estructurales o ambos | — | El agente no debe estimar ni inventar importes |
+| MCP | ToolError | Oportunidad inexistente, estado no permitido, o argumentos inválidos/extra | NO | El agente informa de que no se pudo calcular |
+| MCP | 401 | Token Bearer ausente o incorrecto | NO | Revisar la credencial del nodo MCP Client Tool |
+
+Idempotencia: llamar dos veces para la misma oportunidad devuelve el
+mismo presupuesto_id, sin recalcular ni escribir nada (UNIQUE en
+presupuestos.oportunidad_id, D8). Los importes viajan en el JSON como
+TEXTO exacto ("8625.00"), no como número.
+
+Implementación: app/services/estimate_service.py, app/api/estimates.py,
+app/mcp_server/server.py. Verificación: scripts/check_estimate_service.py,
+scripts/check_calculate_estimate_http.py y
+scripts/check_mcp_calculate_estimate.py.
+
 Ejemplo de fallback en FastAPI (calculate_estimate): si la combinación
 tipo_reforma/nivel_acabados no existe en tarifas_base, no se inventa un
 precio — se registra la incidencia en logs y se devuelve
@@ -208,9 +243,9 @@ sin respuesta.
   vía services/).
 - Explorar opciones para el riesgo de concurrencia del Session pooler
   (punto 5 de esta adenda).
-- Reflejar en TFM_Decisiones_Modelo_Datos_Leads.txt y en el esquema real
-  (ALTER TABLE + scripts/dump_schema.py) el nuevo valor de
-  oportunidades.estado para la espera del Gate HITL (ver 1.1c).
+- HECHO (2026-09-19): 'pendiente_aprobacion' añadido al esquema real
+  (migración paso3), a schema_actual.sql y a
+  TFM_Decisiones_Modelo_Datos_Leads.txt como D8.
 
 8. Correcciones de datos (2026-09-19)
 
@@ -245,6 +280,7 @@ Detectado pero NO corregido aquí (pendiente de decisión):
   documento: corregirlo requiere un UPDATE sobre reglas_negocio.
 - Punto 1.1: remite a claude/Decisiones_Verificacion_Tarifas_y_Margen_N0.md,
   que no está en este repositorio.
-- Punto 1.1(a): nombra dos fuentes para tipo_reforma
-  (leads.datos_estructurados y oportunidades.tipo_reforma) sin decir
-  cuál manda si no coinciden.
+- RESUELTO (2026-09-19). Punto 1.1(a): nombra dos fuentes para
+  tipo_reforma. Manda la columna oportunidades.tipo_reforma (el dato de
+  trabajo según D3). nivel_acabados, m2 e incluye_cambios_estructurales
+  salen de leads.datos_estructurados, porque no existen en otro sitio.

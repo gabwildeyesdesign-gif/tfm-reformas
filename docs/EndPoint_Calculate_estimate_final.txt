@@ -1,0 +1,910 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+POST /calculate-estimate — DOCUMENTO FINAL DE IMPLEMENTACIÓN
+(puerta REST + tool MCP + migración de base de datos)
+
+Nivel N0 · 2026-09-19 · Rama feat/n0-calculate-estimate
+Estado: implementado y verificado con ejecución real. SIN COMMITEAR: todo
+está en el árbol de trabajo, a la espera de la revisión de Gabi.
+
+Este documento está escrito para alguien que está aprendiendo Python y
+SQL. No da nada por sabido: la sección 2 explica todos los conceptos que
+aparecen, y conviene leerla antes que el resto si alguno suena extraño.
+
+ÍNDICE
+  1. Qué hace este endpoint, en una página
+  2. Conceptos que aparecen (glosario para empezar desde cero)
+  3. Qué archivos se han creado o cambiado, y para qué sirve cada uno
+  4. Recorrido completo de una petición, con números reales
+  5. La lógica de negocio, explicada
+  6. El código, archivo por archivo
+  7. La migración de la base de datos
+  8. Cómo se ha verificado (resultados reales)
+  9. Complicaciones encontradas y cómo se resolvieron
+  10. Decisiones tomadas y por qué
+  11. Limitaciones conocidas (lo que NO hace)
+  12. Sugerencias de mejora
+  13. Cómo probarlo tú mismo
+  14. Estado de Git y siguientes pasos
+
+
+================================================================
+1. QUÉ HACE ESTE ENDPOINT, EN UNA PÁGINA
+================================================================
+
+Un cliente rellena el formulario web ("quiero reformar mi baño, 6 m²,
+calidad media, hay que tirar un tabique"). POST /leads guarda esa
+petición y crea una OPORTUNIDAD (el trato comercial). Ese paso ya
+existía.
+
+Este bloque añade el paso siguiente: dado el identificador de esa
+oportunidad, calcular un PRESUPUESTO ORIENTATIVO. Es un rango de precio
+(por ejemplo, entre 7.500 € y 8.625 €), y el sistema decide además si
+una persona tiene que revisarlo antes de enseñárselo al cliente (el
+"Gate HITL", Human In The Loop).
+
+Se puede pedir por dos "puertas":
+
+  - Puerta MCP (producción): la usa el agente de IA que corre dentro de
+    n8n. El agente "ve" una herramienta llamada calculate_estimate, y
+    decide cuándo llamarla.
+  - Puerta REST (pruebas y administración): una petición HTTP normal a
+    POST /calculate-estimate, para que una persona lo pruebe sin tener
+    que montar una conversación con el agente.
+
+Las dos puertas llaman EXACTAMENTE a la misma función de Python
+(calculate_estimate, en app/services/estimate_service.py). No hay dos
+copias del cálculo, así que es imposible que den cifras distintas.
+
+Lo que se guarda en la base de datos:
+  - una fila en presupuestos (el rango y si necesita aprobación);
+  - el estado de la oportunidad pasa de 'nueva' a 'presupuesto_enviado'
+    (sin Gate) o a 'pendiente_aprobacion' (con Gate);
+  - una fila en logs con los datos exactos usados en el cálculo, para
+    poder explicarlo meses después.
+
+Tres garantías importantes:
+  1. Quien llama solo manda el identificador. Los datos de la reforma
+     (metros, calidad, cambios estructurales) los lee el sistema de la
+     base de datos. El agente de IA no puede cambiar el precio ni
+     saltarse la revisión humana diciendo "no hay cambios
+     estructurales".
+  2. Llamar dos veces no duplica nada: la segunda vez devuelve el mismo
+     presupuesto (y dice creado=false).
+  3. Si la reforma tiene cambios estructurales, el agente NO recibe la
+     cifra (le llega null). Solo la ve una persona.
+
+
+================================================================
+2. CONCEPTOS QUE APARECEN (glosario para empezar desde cero)
+================================================================
+
+Ordenados de lo más general a lo más concreto.
+
+ENDPOINT
+  Una "dirección" del servidor que hace una tarea concreta. Aquí:
+  POST /calculate-estimate. POST es el tipo de petición HTTP que se usa
+  para enviar datos al servidor.
+
+REST / HTTP
+  La forma normal de hablar con un servidor web: se envía una petición
+  (método + dirección + cabeceras + cuerpo JSON) y se recibe una
+  respuesta con un código numérico (200, 404...) y un cuerpo JSON.
+
+CÓDIGOS HTTP que usa este endpoint
+  200  todo bien.
+  401  "no has demostrado quién eres" (falta el secreto o es incorrecto).
+  404  "lo que pides no existe" (no hay oportunidad con ese id).
+  409  "conflicto": la petición es correcta, pero choca con el estado
+       actual (la oportunidad no está en un estado que permita calcular).
+  422  "el cuerpo que me mandas no tiene la forma correcta".
+  500  "error interno del servidor": algo inesperado.
+  Los 4xx son culpa de quien llama: reintentar igual no sirve. Los 5xx
+  son del servidor: puede tener sentido reintentar.
+
+MCP (Model Context Protocol)
+  Un protocolo pensado para que un agente de IA descubra qué
+  herramientas tiene disponibles ("¿qué puedes hacer?") y las use. Una
+  "tool" MCP es una función del servidor que el agente puede llamar. El
+  agente lee su nombre, su descripción y qué parámetros acepta.
+
+ADAPTADOR vs SERVICIO (la arquitectura del proyecto)
+  - services/ es la "cocina": la única capa con lógica de negocio.
+  - api/ (REST) y mcp_server/ (MCP) son "mostradores": reciben el
+    pedido en su idioma (HTTP o MCP), llaman a la cocina y traducen la
+    respuesta. No calculan nada.
+  Regla del proyecto: services/ nunca importa fastapi ni fastmcp.
+
+PYDANTIC / ESQUEMA
+  Pydantic es una librería que, a partir de una clase que describe
+  "este dato tiene estos campos de estos tipos", valida automáticamente
+  lo que llega de fuera y lo convierte al tipo correcto. Si no encaja,
+  FastAPI responde 422 sin ejecutar nada.
+
+ENUM
+  Un tipo con una lista cerrada de valores posibles. MotivoGate solo
+  puede ser 'cambios_estructurales', 'importe_superior_umbral' o
+  'ambos'. Evita errores tipográficos: un valor que no está en la lista
+  no se puede crear.
+
+DECIMAL vs FLOAT
+  float es el número con decimales "normal" de Python. Se guarda en
+  binario, y muchos decimales sencillos no tienen representación exacta
+  en binario. Decimal(8.7) vale en realidad 8.699999999999999289...
+  Con dinero eso produce céntimos de error. Decimal (módulo decimal de
+  Python) guarda el número EXACTO tal como se escribe en texto:
+  Decimal("8.7") es 8.7. Postgres guarda los importes como NUMERIC, que
+  también es exacto, y psycopg2 lo entrega como Decimal.
+
+REDONDEO ROUND_HALF_UP
+  El redondeo escolar: 2,345 -> 2,35. Hay que pedirlo explícitamente
+  porque Decimal usa por defecto el "redondeo del banquero" (2,345 ->
+  2,34, que va al número par).
+
+TRANSACCIÓN, COMMIT Y ROLLBACK
+  Una transacción agrupa varias operaciones de base de datos para que se
+  comporten como una sola: o se aplican todas (COMMIT) o ninguna
+  (ROLLBACK). Si se guarda el presupuesto pero falla el cambio de
+  estado, el rollback deshace también el presupuesto: nunca queda nada
+  a medias.
+
+CONTEXT MANAGER Y "with"
+  "with algo() as x:" ejecuta un código de preparación al entrar en el
+  bloque y un código de cierre al salir, pase lo que pase dentro
+  (termine bien, haga return o lance un error). El proyecto tiene
+  get_transactional_connection(): al entrar presta una conexión del
+  pool; al salir hace commit (si todo fue bien) o rollback (si hubo
+  error), y devuelve la conexión. Sin with, habría que acordarse de
+  hacerlo a mano en cada salida posible.
+
+DECORADOR (@algo)
+  Una línea con @ encima de una función es una función que recibe la de
+  debajo y hace algo con ella. @router.post("/calculate-estimate")
+  REGISTRA la función como endpoint. @mcp.tool la REGISTRA como
+  herramienta MCP. No cambian lo que hace la función.
+
+EXCEPCIÓN / try-except / raise
+  Una excepción es la forma de Python de decir "ha pasado algo que
+  impide seguir". raise la lanza; try/except la captura y decide qué
+  hacer. El proyecto define excepciones propias
+  (OportunidadNoEncontrada, EstadoNoPermiteCalculo) para que el
+  servicio diga QUÉ pasó en términos de negocio, y cada puerta lo
+  traduzca: REST a 404/409, MCP a ToolError.
+
+JSONB y el operador ->>
+  JSONB es un tipo de columna de Postgres que guarda un documento JSON.
+  leads.datos_estructurados guarda {"m2": 6, "nivel_acabados": "medio",
+  ...}. El operador ->> saca UNA clave como texto:
+  datos_estructurados ->> 'm2' da '6'. Después, ::numeric convierte ese
+  texto a número exacto dentro de Postgres.
+
+CAST (::numeric, ::boolean)
+  "Convertir a otro tipo". '8.7'::numeric es el número 8.7.
+
+CHECK
+  Una regla de la tabla que Postgres comprueba en cada escritura. El
+  CHECK de oportunidades.estado solo admite 7 valores concretos.
+  Cualquier otro falla con CheckViolation, venga de donde venga (el
+  código, el panel de Supabase, n8n).
+
+UNIQUE e ÍNDICE
+  UNIQUE (oportunidad_id) prohíbe que dos filas tengan el mismo valor
+  en esa columna. Para comprobarlo rápido, Postgres crea él solo un
+  índice (una estructura de búsqueda, como el índice de un libro).
+
+ON CONFLICT ... DO NOTHING
+  Una cláusula del INSERT: "si esta fila choca con una restricción
+  UNIQUE, no des error; simplemente no insertes nada".
+
+RETURNING
+  Hace que un INSERT o UPDATE devuelva columnas de la fila que acaba de
+  escribir, como si fuera un SELECT, sin hacer una segunda consulta.
+
+LEFT JOIN
+  Une dos tablas. Un JOIN normal descarta las filas sin pareja; un LEFT
+  JOIN las conserva y rellena con NULL lo que falta. Aquí: "dame la
+  oportunidad, y su presupuesto SI LO TIENE".
+
+SUBCONSULTA ESCALAR
+  Un (SELECT ...) entre paréntesis que devuelve UN valor. Se pueden
+  poner varias en una sola consulta para traer datos de tablas
+  distintas en un único viaje a la base de datos.
+
+SAVEPOINT
+  Un "punto de guardado" dentro de una transacción. Si una sentencia
+  falla, ROLLBACK TO SAVEPOINT vuelve a ese punto sin perder lo
+  anterior, y la transacción sigue viva. Sin él, en Postgres, un solo
+  error aborta la transacción entera.
+
+IDEMPOTENCIA
+  Una operación es idempotente si hacerla dos veces tiene el mismo
+  efecto que hacerla una. Importa porque n8n reintenta cuando algo
+  falla, y un agente de IA puede llamar dos veces a la misma tool.
+
+CONDICIÓN DE CARRERA (race condition)
+  Dos operaciones simultáneas que, por el orden en que se cruzan,
+  producen un resultado incorrecto. Ejemplo: dos llamadas miran a la
+  vez "¿hay presupuesto?", las dos ven que no, y las dos lo crean.
+
+READ COMMITTED
+  El nivel de aislamiento por defecto de Postgres: cada consulta ve lo
+  que otras transacciones han CONFIRMADO hasta ese momento, nunca lo que
+  tienen a medias.
+
+TOKEN BEARER
+  Una forma estándar de autenticarse: la cabecera HTTP
+  "Authorization: Bearer <secreto>". Es la que usa el protocolo MCP.
+
+secrets.compare_digest Y EL ATAQUE DE TIEMPO
+  Comparar dos textos con == se detiene en el primer carácter distinto,
+  así que tarda un poco más cuanto más se acierta. Midiendo tiempos, un
+  atacante podría adivinar el secreto letra a letra. compare_digest
+  tarda siempre lo mismo.
+
+FAIL FAST
+  "Fallar pronto": si falta algo imprescindible (un secreto), el
+  servidor se niega a arrancar, en vez de arrancar roto y fallar más
+  tarde, delante de un cliente.
+
+HILO (thread)
+  Una línea de ejecución dentro de un programa. FastAPI y fastmcp
+  ejecutan las funciones "def" (no async) en hilos aparte, para que una
+  consulta lenta a Supabase no congele las demás peticiones.
+
+SECUENCIA (SERIAL)
+  El contador que da los id automáticos (1, 2, 3...). Un rollback NO la
+  hace retroceder. Por eso, tras las pruebas, los id tienen "huecos": es
+  normal.
+
+
+================================================================
+3. QUÉ ARCHIVOS SE HAN CREADO O CAMBIADO, Y PARA QUÉ
+================================================================
+
+CÓDIGO DE LA APLICACIÓN
+  app/services/estimate_service.py   NUEVO CONTENIDO. Toda la lógica de
+                                     negocio: fórmula, Gate, lecturas y
+                                     escrituras en la base de datos.
+  app/api/estimates.py               NUEVO CONTENIDO. Puerta REST
+                                     (adaptador delgado).
+  app/mcp_server/server.py           CAMBIADO. Autenticación de /mcp y
+                                     tool calculate_estimate.
+  app/schemas/estimates.py           NUEVO. EstimateRequest y
+                                     EstimateResponse.
+  app/schemas/common.py              CAMBIADO. Enum MotivoGate.
+  app/config.py                      CAMBIADO. Lee MCP_SECRET.
+  app/main.py                        CAMBIADO. Registra el router nuevo.
+  .env.example                       CAMBIADO. Plantilla de MCP_SECRET.
+  .env (no se sube a Git)            CAMBIADO. Se añadió MCP_SECRET con
+                                     un valor aleatorio generado con
+                                     secrets.token_urlsafe(32). No se ha
+                                     impreso en ningún sitio.
+
+BASE DE DATOS
+  scripts/migraciones_ejecutadas/paso3_calculate_estimate.py
+                                     NUEVO. La migración (ya ejecutada).
+  docs/schema_actual.sql             REGENERADO con dump_schema.py (no
+                                     editado a mano).
+
+VERIFICACIÓN (scripts/)
+  check_migracion_calculate_estimate.py  NUEVO. 14 comprobaciones.
+  check_estimate_service.py              NUEVO. 83 comprobaciones.
+  check_calculate_estimate_http.py       NUEVO. 20 comprobaciones.
+  check_mcp_calculate_estimate.py        NUEVO. 19 comprobaciones.
+  check_mcp_connection.py                CAMBIADO. Ahora envía el token.
+
+DOCUMENTACIÓN
+  docs/TFM_Decisiones_Modelo_Datos_Leads.txt  D8, ciclo de estados con 7
+                                              valores, entity_type
+                                              'oportunidad' en el
+                                              registro de logs.
+  docs/Adenda_...txt                          Fila 2 del contrato,
+                                              subsección 5.2 (códigos y
+                                              autenticación), pendientes
+                                              resueltos.
+  docs/Plan_calculate_estimate.txt            Corregido (SAVEPOINT).
+  CLAUDE.md                                   Estado actual, gotchas
+                                              nuevos, pendientes.
+  docs/EndPoint_Calculate_estimate_final.txt  Este documento.
+
+
+================================================================
+4. RECORRIDO COMPLETO DE UNA PETICIÓN, CON NÚMEROS REALES
+================================================================
+
+Ejemplo: baño, calidad media, 6 m², CON cambios estructurales.
+Datos reales de la base de datos:
+  tarifas_base (bano, medio).precio_m2    = 1150.00
+  reglas_negocio.recargo_informe_tecnico  = 600.00
+  reglas_negocio.margen_empresa_pct       = 15.00
+  reglas_negocio.umbral_aprobacion_manual = 10000.00
+
+PASO 0 — Antes: POST /leads crea cliente, lead y oportunidad (id 55,
+por ejemplo), con estado 'nueva'. En leads.datos_estructurados queda
+{"tipo_reforma": "bano", "nivel_acabados": "medio", "m2": 6.0,
+ "incluye_cambios_estructurales": true}.
+
+PASO 1 — El agente de n8n llama a la tool calculate_estimate con
+{"oportunidad_id": 55} y la cabecera Authorization: Bearer <MCP_SECRET>.
+
+PASO 2 — VerificadorSecretoMCP compara el token con compare_digest.
+Correcto: la petición pasa. (Si no, 401 y nada más ocurre.)
+
+PASO 3 — fastmcp valida los argumentos: solo oportunidad_id, entero y
+mayor que 0. Un argumento de más (m2) se rechaza aquí.
+
+PASO 4 — La tool llama a estimate_service.calculate_estimate(55), que
+abre UNA transacción y:
+
+  4.1 Consulta 1 (lee todo de una vez): estado 'nueva', tipo_reforma
+      'bano' (de la columna), nivel 'medio', m2 = Decimal('6.0'),
+      estructural = True, y ningún presupuesto previo (NULL en el LEFT
+      JOIN).
+  4.2 No tiene presupuesto, así que no es un reintento. Sigue.
+  4.3 Está en 'nueva', así que puede calcularse. Sigue.
+  4.4 Consulta 2 (tarifa + 3 reglas de una vez): 1150.00, 15.00, 600.00
+      y 10000.00. No falta nada.
+  4.5 Cálculo:
+        importe_min = 1150.00 × 6.0 + 600.00        = 7500.00
+        importe_max = 7500.00 × (1 + 15.00 / 100)   = 8625.00
+        Gate: estructural=sí, 8625.00 > 10000.00 no
+              -> motivo 'cambios_estructurales'
+        requiere_aprobacion = True
+        nuevo estado = 'pendiente_aprobacion'
+  4.6 Consulta 3: INSERT del presupuesto ... ON CONFLICT DO NOTHING
+      RETURNING id -> id 17.
+  4.7 Consulta 4: UPDATE oportunidades SET estado =
+      'pendiente_aprobacion' WHERE id = 55 AND estado = 'nueva'
+      RETURNING estado.
+  4.8 Consulta 5: INSERT en logs con todo lo usado.
+  4.9 Al salir del with: COMMIT. Todo queda guardado a la vez.
+
+PASO 5 — La tool aplica ocultar_importes_para_agente. Como el motivo es
+'cambios_estructurales', los importes pasan a null. El agente recibe:
+  {"presupuesto_id": 17, "oportunidad_id": 55, "importe_min": null,
+   "importe_max": null, "motivo_gate": "cambios_estructurales",
+   "requiere_aprobacion": true, "status": "pendiente_aprobacion",
+   "creado": true}
+(Salida real de check_mcp_calculate_estimate.py.)
+
+La MISMA oportunidad pedida por la puerta REST devolvería los importes
+"7500.00" y "8625.00". En la tabla presupuestos están guardados en
+cualquier caso (comprobado).
+
+PASO 6 — Si el agente (o n8n) repite la llamada: la consulta 1 ya
+encuentra el presupuesto 17 y lo devuelve con creado=false, sin
+calcular ni escribir nada. n8n usa creado para no mandar dos veces el
+aviso de aprobación a Telegram.
+
+
+================================================================
+5. LA LÓGICA DE NEGOCIO, EXPLICADA
+================================================================
+
+5.1 La fórmula (Adenda 1.1b)
+  importe_min = precio_m2 × m2 + recargo_informe_tecnico (si hay cambios
+                estructurales)
+  importe_max = importe_min × (1 + margen_empresa_pct / 100)
+
+  Por qué el margen AMPLÍA el rango en vez de sumarse como beneficio:
+  los precio_m2 de tarifas_base ya son precios de VENTA de mercado, con
+  el margen dentro. Sumarlo otra vez lo contaría dos veces. El margen
+  define el techo de negociación ("hasta aquí puede subir si aparecen
+  complicaciones").
+
+  El recargo del informe técnico va en importe_min porque es un coste
+  seguro: si hay que tocar estructura, el informe se paga siempre.
+
+  Los dos importes se redondean a céntimos en Python (ROUND_HALF_UP)
+  antes de guardarlos. Así el valor guardado, el devuelto y el que se
+  compara con el umbral son exactamente el mismo. importe_max se
+  calcula a partir de importe_min YA redondeado, para que quien lo
+  recalcule desde la tabla obtenga lo mismo.
+
+5.2 El Gate HITL (Adenda 1.1c)
+  Se evalúa contra importe_max (el peor caso) con ">" estricto:
+    estructural y > umbral     -> 'ambos'
+    estructural y ≤ umbral     -> 'cambios_estructurales'
+    no estructural y > umbral  -> 'importe_superior_umbral'
+    no estructural y ≤ umbral  -> sin Gate (null)
+  Verificado en el límite exacto: 10000.00 no activa el Gate; 10000.01
+  sí.
+
+5.3 El estado de la oportunidad (D8)
+  Sin Gate: 'presupuesto_enviado'. Con Gate: 'pendiente_aprobacion'
+  (valor nuevo). Solo se calcula desde 'nueva': una oportunidad
+  'perdida' sin presupuesto da error 409, y no se escribe nada.
+
+5.4 Quién ve los importes
+  Puerta REST: siempre, porque la usan personas de confianza.
+  Puerta MCP: null si hay cambios estructurales ('cambios_estructurales'
+  o 'ambos'). Motivo: una cifra que depende de un informe técnico no
+  debe llegar al cliente sin revisión, y un prompt ("no digas el
+  importe") no es un control fiable. La única garantía es que el agente
+  nunca la tenga.
+
+5.5 Cuando no se puede calcular (fallback)
+  Si falta la tarifa, una regla o un dato del lead: no se inventa nada.
+  Se escribe un log con lo que faltaba, la oportunidad sigue en 'nueva'
+  y se responde status='requiere_revision' con importes null. Es un 200
+  y no un 500 a propósito: n8n reintenta los 5xx, y reintentar no
+  arregla una tarifa que falta.
+
+
+================================================================
+6. EL CÓDIGO, ARCHIVO POR ARCHIVO
+================================================================
+
+Cada archivo tiene comentarios línea a línea que explican QUÉ hace cada
+cosa y POR QUÉ está ahí. Esta sección es un mapa para leerlos en orden.
+Orden de lectura recomendado: 6.1 -> 6.2 -> 6.3 -> 6.4 -> 6.5.
+
+6.1 app/schemas/common.py — MotivoGate
+  Enum con los tres motivos, copiados del CHECK real de la tabla. Está
+  en common.py porque POST /gate-decisions también lo usará. "Sin Gate"
+  no es un cuarto valor: es None (NULL), la ausencia de motivo.
+
+6.2 app/schemas/estimates.py
+  EstimateRequest: un único campo, oportunidad_id (entero > 0), y
+    extra="forbid", que rechaza con 422 cualquier campo de más. Es la
+    defensa, en la propia puerta, de "los datos de negocio no entran por
+    aquí".
+  EstimateResponse: los 8 campos de la respuesta. Los importes son
+    Decimal | None ("un Decimal o nada"). creado es la señal para n8n.
+
+6.3 app/services/estimate_service.py (el corazón)
+  Secciones del archivo:
+  1. Constantes: los estados, las claves de reglas, DOS_DECIMALES. Así
+     un error tipográfico se nota en un solo sitio.
+  2. Excepciones propias: OportunidadNoEncontrada y
+     EstadoNoPermiteCalculo. Clases vacías que heredan de Exception; su
+     nombre ya dice qué pasó.
+  3. Funciones PURAS (sin base de datos):
+       redondear(importe)
+       calcular_importes(precio_m2, m2, estructural, recargo, margen)
+       evaluar_gate(importe_max, estructural, umbral)
+       ocultar_importes_para_agente(respuesta)
+     "Pura" = el resultado solo depende de los parámetros. Se pueden
+     probar con cifras hechas a mano sin Supabase, y serán lo primero
+     que cubra la futura suite de pytest.
+  4. calculate_estimate(oportunidad_id): la orquestación, en 6 pasos
+     comentados dentro del código:
+       Paso 1  una consulta con LEFT JOIN: oportunidad + datos del lead
+               + presupuesto si existe.
+       Paso 2  si ya hay presupuesto -> devolverlo (idempotencia).
+       Paso 3  guarda de estado: solo desde 'nueva'.
+       Paso 4  una consulta con 4 subconsultas: tarifa + 3 reglas. Si
+               falta algo -> fallback.
+       Paso 5  cálculo con las funciones puras.
+       Paso 6  INSERT ON CONFLICT DO NOTHING, UPDATE con guarda y log.
+
+  Los tres puntos más delicados, explicados a fondo en los comentarios:
+
+  (a) Por qué m2 se extrae con (datos_estructurados ->> 'm2')::numeric
+      y no leyendo el JSON entero. Si psycopg2 lee el JSONB entero, lo
+      convierte en un diccionario de Python, y todo número con
+      decimales pasa a ser float (comprobado: 8.7 llega como float).
+      Pasar ese float a Decimal arrastra el error binario:
+      Decimal(8.7) = 8.699999999999999289... Con ->> el valor sale de
+      Postgres como texto ('8.7'), y ::numeric lo convierte a número
+      exacto DENTRO de Postgres. psycopg2 lo entrega ya como
+      Decimal('8.7'). El float no llega a existir. Verificado de
+      extremo a extremo con 8.7 m²: importe_min 10005.00 exacto.
+
+  (b) ON CONFLICT DO NOTHING frente al DO UPDATE de D2. En
+      leads_service.py, clientes usa ON CONFLICT (email) DO UPDATE SET
+      email = EXCLUDED.email. Es un truco para que RETURNING devuelva el
+      id también cuando el cliente ya existía, porque allí se necesitaba
+      en los dos casos. Aquí se hace lo contrario a propósito:
+        - Hay que DISTINGUIR "lo acabo de crear" (entonces se cambia el
+          estado y creado=true) de "ya existía" (no se escribe nada).
+          Con DO NOTHING, RETURNING devuelve fila solo si insertó: la
+          señal sale gratis. Con el truco de D2, los dos casos
+          devolverían una fila idéntica.
+        - DO UPDATE REESCRIBE la fila existente (Postgres crea una
+          versión nueva aunque el valor no cambie). Un presupuesto ya
+          emitido, quizá pendiente de aprobación, no debe tocarse.
+      Lo que comparten: dejar que la restricción UNIQUE resuelva la
+      carrera dentro de UNA sentencia, en vez de "SELECT y, si no hay,
+      INSERT", que D2 ya descartó por abrir una condición de carrera.
+
+  (c) get_transactional_connection() y no get_db_connection(). La de
+      solo lectura hace rollback() al salir: el presupuesto
+      desaparecería sin ningún error visible (el bug que motivó D6). La
+      de escritura hace commit si todo va bien y rollback si algo
+      falla, así que presupuesto, estado y log se guardan juntos o no
+      se guarda ninguno.
+
+6.4 app/api/estimates.py — puerta REST
+  @router.post(...) registra el endpoint con:
+    - response_model: valida y documenta la respuesta;
+    - status_code=200: un 201 ("creado") mentiría en los reintentos;
+    - dependencies=[Depends(verificar_webhook_secret)]: el mismo control
+      de secreto que POST /leads, reutilizado sin cambios.
+  El try/except traduce OportunidadNoEncontrada a 404 y
+  EstadoNoPermiteCalculo a 409. Lo inesperado sube al manejador global
+  de main.py (500 + fila en logs).
+  Es "def" y no "async def" porque psycopg2 bloquea: FastAPI la ejecuta
+  en un hilo aparte.
+
+6.5 app/mcp_server/server.py — puerta MCP
+  (a) Fail fast: si MCP_SECRET falta o está vacío, RuntimeError al
+      importar el archivo, y uvicorn no arranca. Mismo patrón que
+      WEBHOOK_SECRET en security.py.
+  (b) VerificadorSecretoMCP hereda de TokenVerifier (clase de fastmcp) y
+      solo redefine verify_token. Devuelve un AccessToken si el token es
+      válido y None si no; con None, fastmcp responde 401.
+      Compara con secrets.compare_digest sobre BYTES, igual que
+      security.py, por dos motivos: tiempo constante (ataque de tiempo)
+      y porque compare_digest con texto lanza TypeError ante caracteres
+      no ASCII. Un "Bearer ñ" daría 500 en vez de 401 (verificado: da
+      401).
+      Por qué NO StaticTokenVerifier (el que trae fastmcp): se leyó su
+      código fuente en el venv. Busca el token en un diccionario
+      (self.tokens.get(token)), que no es una comparación en tiempo
+      constante, y su propio docstring dice "Never use this in
+      production - tokens are stored in plain text!". Siendo honestos,
+      el riesgo práctico de esa búsqueda es bajo. La razón de peso es
+      no tener dos criterios de seguridad distintos en el mismo sistema.
+  (c) FastMCP(..., auth=VerificadorSecretoMCP()) activa la
+      autenticación para TODO /mcp, incluido list_tools.
+  (d) @mcp.tool registra calculate_estimate. El DOCSTRING de la función
+      es lo que lee el LLM: está escrito para el agente, sin fórmulas ni
+      tarifas. Las explicaciones para personas van en comentarios #, que
+      el agente no ve.
+      Annotated[int, Field(gt=0)]: un int con la regla "mayor que 0".
+      fastmcp lo valida y lo publica en el esquema que ve el agente
+      (comprobado: additionalProperties=false, solo oportunidad_id).
+      "raise ToolError(...) from None": el "from None" evita que el
+      error interno viaje adjunto al mensaje que ve el agente.
+      Se importa el MÓDULO estimate_service y no la función suelta,
+      porque la tool se llama igual (calculate_estimate) y uno taparía
+      al otro.
+
+
+================================================================
+7. LA MIGRACIÓN DE LA BASE DE DATOS
+================================================================
+
+Archivo: scripts/migraciones_ejecutadas/paso3_calculate_estimate.py
+(ejecutado el 2026-09-19; se puede volver a ejecutar sin romper nada).
+
+Cambio 1: oportunidades_estado_check pasa de 6 a 7 valores, añadiendo
+'pendiente_aprobacion'. Postgres no permite editar un CHECK, así que se
+borra y se crea de nuevo (DROP CONSTRAINT + ADD CONSTRAINT) en UN solo
+ALTER TABLE. Así no existe ni un instante sin restricción.
+
+Cambio 2: UNIQUE (oportunidad_id) en presupuestos, que crea el índice
+presupuestos_oportunidad_id_key. Sin él, la sentencia ON CONFLICT
+(oportunidad_id) ni siquiera se puede ejecutar: Postgres responde
+InvalidColumnReference (visto en la ejecución previa a la migración).
+
+Los dos cambios van en una sola transacción. En Postgres (a diferencia
+de MySQL u Oracle), los ALTER TABLE son transaccionales: se aplican los
+dos o ninguno.
+
+Salida real:
+  ANTES:   CHECK con 6 valores; presupuestos_oportunidad_id_key: None
+  DESPUÉS: CHECK con 'pendiente_aprobacion'; UNIQUE (oportunidad_id)
+  Segunda ejecución: "ya incluía ... no se toca" (idempotente).
+
+schema_actual.sql regenerado: 16 restricciones PK/UNIQUE/FK (antes 15)
+y 7 CHECK. El diff muestra solo los dos cambios y la fecha.
+
+
+================================================================
+8. CÓMO SE HA VERIFICADO (RESULTADOS REALES)
+================================================================
+
+Todo con ejecución real contra Supabase y con el servidor arrancado de
+verdad (uvicorn sin --reload). Cada script borra sus datos de prueba al
+terminar. Al final se comprobó: clientes, leads, oportunidades,
+presupuestos y logs a 0 filas.
+
+8.1 check_migracion_calculate_estimate.py
+  ANTES de migrar:  9/14. Fallaron exactamente las 5 comprobaciones que
+    dependen de la migración: CHECK sin el valor nuevo, UNIQUE
+    inexistente, A1 (CheckViolation), A4 (el segundo presupuesto SE
+    INSERTÓ) y A5 (InvalidColumnReference). Y, lo importante, A2 y A3 se
+    ejecutaron DESPUÉS del fallo de A1: el aislamiento con SAVEPOINT
+    funciona.
+  DESPUÉS:          14/14.
+  La sección 0 demuestra la premisa ejecutándola: tras SELECT 1/0, un
+  SELECT 1 recibe InFailedSqlTransaction.
+
+8.2 check_estimate_service.py — 83/83
+  A) Funciones puras (16): 6 cálculos, 6 casos del Gate (incluidos
+     10000.00 y 10000.01) y 4 casos de ocultación.
+  B) Contra la base de datos real (67):
+     B1 sin Gate; B2 repetición (mismo id, creado=false, nada escrito);
+     B3 cambios_estructurales; B4 ambos; B5 importe_superior_umbral;
+     B6 m² = 8.7 de extremo a extremo (10005.00 / 11505.75 exactos);
+     B7 oportunidad inexistente; B8 oportunidad 'perdida' (error y 0
+     presupuestos); B9 tipo_reforma NULL (requiere_revision, log con
+     faltan=['tarifa']); B10 lead sin m2 en el JSON; B11 carrera forzada
+     (ver 9.8).
+     En cada cálculo se comprueba en la tabla: importes, motivo, estado,
+     NULL en duracion_estimada_dias y aprobado_por, datos_completos,
+     confianza_ia y prioridad intactos, 1 presupuesto y 1 log.
+
+8.3 check_calculate_estimate_http.py — 20/20
+  H0 /openapi.json publica el endpoint y la petición solo admite
+     oportunidad_id (additionalProperties=false).
+  H1 sin secreto 401, secreto malo 401, 0 presupuestos escritos.
+  H2 5 cuerpos inválidos -> 422 (lead_id, m2 de más,
+     incluye_cambios_estructurales de más, 0, texto), sin escribir nada.
+  H3 404. H4 200 con "6900.00"/"7935.00" como texto. H5 repetición
+  creado=false. H6 estructural con importes VISIBLES por REST. H7 409.
+  H8 requiere_revision.
+  Tiempos medidos: cálculo nuevo 544 ms (5 consultas + commit = 6 viajes
+  a Supabase); reintento 236 ms (1 consulta + commit = 2 viajes).
+
+8.4 check_mcp_calculate_estimate.py — 19/19
+  M1 HTTP a pelo contra /mcp/: sin cabecera 401, token malo 401,
+     "Bearer ñ" 401 (no 500), WEBHOOK_SECRET como token 401 (secretos
+     separados), MCP_SECRET 200.
+  M2 fastmcp.Client: solo existe la tool calculate_estimate; su esquema
+     solo admite oportunidad_id; sin Gate e importe_superior_umbral con
+     importes visibles; cambios_estructurales y ambos con importes NULL
+     (pero guardados en la tabla, comprobado); idempotencia; ToolError
+     para inexistente, argumento m2 extra y 0; mensaje de error
+     genérico.
+  M3 uvicorn con MCP_SECRET vacío termina con código 1 y el mensaje
+     "MCP_SECRET no está definido".
+
+8.5 Regresión (lo que ya existía sigue funcionando)
+  check_mcp_connection.py (actualizado): conecta con token y ve
+    ['calculate_estimate'].
+  check_webhook_auth_http 15/15, check_leads_endpoint_http 12/12,
+  check_schemas 34/34, check_rls_estado sin errores,
+  check_graceful_shutdown OK.
+  check_exception_handler 22/28: FALLO ANTERIOR a este bloque (ver 9.10).
+
+
+================================================================
+9. COMPLICACIONES ENCONTRADAS Y CÓMO SE RESOLVIERON
+================================================================
+
+9.1 El plan no aislaba las aserciones de la verificación (detectado en
+la revisión del plan)
+  Problema: el plan decía "todo en una transacción con ROLLBACK final".
+  En Postgres, la primera sentencia que falla aborta la transacción, y
+  las siguientes solo reciben InFailedSqlTransaction: se darían por
+  comprobadas cosas que nunca se ejecutaron. El script anterior
+  (check_tipo_reforma_constraint.py) lo esquivaba con rollback() entre
+  pruebas, y eso borraba también sus filas de preparación.
+  Solución: cada aserción en su propio SAVEPOINT, con ROLLBACK TO
+  SAVEPOINT y RELEASE SAVEPOINT en un finally. Demostrado ejecutándolo
+  antes de migrar (9/14 con las 14 ejecutadas). Plan corregido.
+
+9.2 m2 llegaba como float
+  Problema: leído el JSONB entero, 8.7 llega como float, y la decisión
+  "todo en Decimal" se rompía sin avisar.
+  Solución: extraerlo en SQL con ->> y ::numeric (ver 6.3a).
+
+9.3 StaticTokenVerifier no compara en tiempo constante
+  Problema: lo que el prompt proponía verificar resultó ser, al leer su
+  código fuente, una búsqueda en diccionario.
+  Solución: clase propia de pocas líneas con compare_digest (6.5b),
+  coherente con security.py.
+
+9.4 "No enviar un segundo aviso a Telegram" no depende del backend
+  Problema: quien envía el aviso es n8n, no el backend. Si la respuesta
+  de un reintento es idéntica, n8n no puede saberlo.
+  Solución: campo creado en la respuesta (ampliación del contrato,
+  reflejada en la Adenda 5.2).
+
+9.5 El orden de las comprobaciones rompía la idempotencia
+  Problema: si se calcula antes de mirar si ya hay presupuesto, un
+  reintento podría caer en el fallback (si alguien borró una tarifa) o
+  en el 409 (si la oportunidad ya avanzó).
+  Solución: mirar primero si ya existe (paso 2), y mantener ON CONFLICT
+  para el caso simultáneo.
+
+9.6 La puerta REST también necesitaba autenticación
+  Problema: si quedaba abierta, ocultar importes al agente no protegía
+  nada, y además escribe en la base de datos.
+  Solución: reutilizar verificar_webhook_secret.
+
+9.7 Colisión de nombres en server.py
+  Problema: la tool y la función del servicio se llaman igual
+  (calculate_estimate). Importar la función suelta la habría tapado.
+  Solución: importar el módulo (estimate_service.calculate_estimate).
+
+9.8 Probar la condición de carrera de forma fiable
+  Problema: lanzar dos llamadas "a la vez" con hilos no garantiza que se
+  crucen justo en el momento crítico. La prueba podría pasar sin haber
+  probado nada.
+  Solución (B11): una conexión "rival" inserta un presupuesto y NO
+  confirma. El servicio, en otro hilo, no lo ve (lo no confirmado es
+  invisible), calcula e intenta insertar, y se queda BLOQUEADO en el
+  índice UNIQUE. La prueba comprueba que 3 segundos después sigue
+  bloqueado, confirma la rival, y verifica que el servicio devuelve el
+  presupuesto de la rival (111.11 €) con creado=false, sin error y sin
+  escribir ningún log. Así se ejerce la rama exacta del código, de forma
+  determinista.
+
+9.9 Salidas que pueden despistar
+  - Los id de las pruebas saltan (cliente=34 con la tabla vacía): las
+    secuencias no retroceden con un rollback. Normal.
+  - El log guarda m2 "6.0" aunque el cliente escribió 6: LeadCreate
+    declara m2 como float, y en JSON queda 6.0. Numéricamente es igual.
+  - dump_schema.py escribe schema_actual.sql con finales de línea CRLF
+    en Windows. Git muestra un aviso y lo normaliza a LF al hacer commit
+    (.gitattributes). No afecta al contenido.
+  - fastmcp imprime en la consola del servidor "Auth error returned" en
+    cada 401 y "Error calling tool" en cada ToolError. Son registros
+    informativos del servidor, no fallos. Y al parsear un esquema con
+    Decimal, el cliente emite un UserWarning sobre un patrón regex, sin
+    consecuencias.
+  - fastmcp 4.0.3 avisa de que Tool.inputSchema está obsoleto. Los
+    scripts usan ya .input_schema.
+
+9.10 check_exception_handler.py falla, y no por este bloque
+  Al ejecutar la regresión dio 22/28. Para no suponer, se ejecutó el
+  MISMO script sobre main, en un worktree temporal de Git sin nada de
+  este bloque: da los mismos 22/28. Causa: sus peticiones a POST /leads
+  no envían X-Webhook-Secret (el script es anterior a la autenticación
+  del webhook), y reciben 401 donde esperan 500/422/201. No se ha
+  tocado porque está fuera del alcance. Está anotado en CLAUDE.md.
+
+9.11 Herramientas del entorno
+  - venv/Scripts/pip.exe show no devolvió nada. Se usó
+    "python -m pip show".
+  - httpx no está instalado en el venv. No se instaló nada: las pruebas
+    usan requests (ya presente) o urllib (biblioteca estándar).
+
+
+================================================================
+10. DECISIONES TOMADAS Y POR QUÉ
+================================================================
+
+Las ocho decisiones cerradas antes del plan se implementaron tal cual.
+Las del plan (P1–P10), aprobadas con él:
+  P1  VerificadorSecretoMCP propio con compare_digest (no
+      StaticTokenVerifier).
+  P2  Campo creado en la respuesta.
+  P3  status = estado REAL de la oportunidad (como D4), más
+      'requiere_revision'.
+  P4  Importes ocultos al agente como null explícito (no se quitan los
+      campos): un solo esquema, y "existe pero no te lo doy" es más
+      claro para un LLM que un campo ausente.
+  P5  Guarda de estado en services/ (WHERE estado = 'nueva' + 409).
+  P6  Regla ausente -> el mismo fallback que la tarifa ausente.
+  P7  Log de auditoría también en los cálculos correctos.
+  P8  200 siempre por REST.
+  P9  Importes como texto exacto en el JSON.
+  P10 MCP_SECRET: se autorizó en esta sesión a generarlo y escribirlo en
+      el .env (valor aleatorio, no impreso). Para n8n hay que copiarlo
+      del .env a la credencial del nodo MCP Client Tool.
+Añadidas durante la implementación, para ganar eficiencia:
+  - Paso 1 con LEFT JOIN: un reintento cuesta 1 consulta en vez de 2.
+  - Tarifa + 3 reglas con subconsultas escalares: 1 consulta en vez de
+    2 (o 4).
+  - Datos del lead incompletos (clave ausente en el JSON) -> fallback,
+    en vez de un 500 por TypeError.
+
+
+================================================================
+11. LIMITACIONES CONOCIDAS (lo que NO hace)
+================================================================
+
+- m2 sin tope: LeadCreate solo exige m2 > 0. A partir de unos 64.000 m²
+  (integral alto), importe_max no cabe en NUMERIC(10,2) y la llamada
+  acaba en 500 (con rollback: no queda nada a medias). Se arregla en
+  POST /leads, fuera de este bloque.
+- Un m2 guardado como texto no numérico dentro del JSON (solo posible
+  escribiendo a mano en la base de datos) haría fallar ::numeric -> 500.
+- El fallback por regla ausente en reglas_negocio no se ha probado
+  borrando una regla real (afectaría a todo el sistema). Usa el mismo
+  camino de código que la tarifa ausente, que sí está probado.
+- UNIQUE (oportunidad_id) impide varios presupuestos por oportunidad.
+  Si N1 quiere un presupuesto definitivo tras la visita, habrá que
+  cambiarlo (D8).
+- La guarda de estado vive en services/: una escritura directa desde el
+  panel de Supabase o un nodo Postgres de n8n no pasa por ella.
+- MCP_SECRET, como WEBHOOK_SECRET, está en claro en el .env y en memoria.
+  Es la limitación de cualquier secreto compartido en N0. Producción:
+  OAuth/JWT.
+- duracion_estimada_dias queda NULL: no hay fórmula (Adenda 1.1b).
+- No se ha probado todavía desde el nodo MCP Client Tool real de n8n
+  (sí con fastmcp.Client, que habla el mismo protocolo).
+- Con umbral 10.000 € evaluado sobre importe_max, casi cualquier
+  integral_vivienda de tamaño normal pasa por aprobación humana (por
+  ejemplo, integral básico: 500 × 1,15 = 575 €/m² de importe_max, así
+  que se supera el umbral a partir de unos 17,4 m²). No es un error;
+  conviene saberlo para la demo y la defensa.
+- Documentos con frases ya desactualizadas, no tocados en este bloque:
+  Notas_Tecnicas_N0 nota B ("gate-decisions y visits serán los primeros
+  en actualizar el estado": el primero ha sido calculate-estimate), el
+  Informe ("el margen se aplica sobre el coste total", sustituido por la
+  Adenda 1.1b), y la descripción de dias_espera_decision_post_visita
+  dentro de la tabla reglas_negocio.
+
+
+================================================================
+12. SUGERENCIAS DE MEJORA
+================================================================
+
+Ordenadas por relación beneficio/coste:
+
+1. Arreglar check_exception_handler.py: añadir la cabecera
+   X-Webhook-Secret a sus peticiones. Son unas pocas líneas.
+2. Poner tope a m2 en LeadCreate (Field(gt=0, le=...)), con un valor
+   de negocio razonable (por ejemplo 2.000 m²) guardado en
+   reglas_negocio.
+3. Suite de pytest (ya planificada): empezar por las cuatro funciones
+   puras. Sus casos y resultados esperados ya están en
+   check_estimate_service.py, parte A.
+4. Menos viajes a Supabase en un cálculo nuevo: las tres escrituras
+   (INSERT presupuesto, UPDATE estado, INSERT log) se pueden unir en una
+   sola sentencia con CTE (WITH ... AS). Bajaría de 6 a 4 viajes (unos
+   200 ms menos según lo medido). Se descartó en N0 porque ese SQL es
+   bastante más difícil de leer y explicar.
+5. Actualizar Notas_Tecnicas nota B, el Informe y la descripción de la
+   regla en la base de datos (ver 11).
+6. Proteger las transiciones de estado también en la base de datos (un
+   trigger) cuando haya más caminos de escritura (gate-decisions,
+   visits).
+7. Producción: sustituir los secretos compartidos por OAuth/JWT
+   (fastmcp JWTVerifier) y rotar los secretos periódicamente.
+8. Estilo menor: usar "with conn.cursor() as cursor:" para cerrar el
+   cursor también en los return tempranos. Hoy se libera solo al
+   devolverse la conexión; no tiene efecto práctico, pero sería más
+   explícito.
+
+
+================================================================
+13. CÓMO PROBARLO TÚ MISMO
+================================================================
+
+Todos los comandos, en PowerShell, desde C:\Proyectos\tfm-reformas.
+
+Verificaciones (no necesitan el servidor arrancado; lo arrancan ellas):
+  .\venv\Scripts\python.exe scripts\check_migracion_calculate_estimate.py
+  .\venv\Scripts\python.exe scripts\check_estimate_service.py
+  $env:PYTHONIOENCODING="utf-8"; .\venv\Scripts\python.exe scripts\check_calculate_estimate_http.py
+  $env:PYTHONIOENCODING="utf-8"; .\venv\Scripts\python.exe scripts\check_mcp_calculate_estimate.py
+
+A mano:
+  1. Arrancar el servidor (NUNCA con --reload):
+       .\venv\Scripts\uvicorn.exe app.main:app
+  2. Crear un lead (cuerpo en un archivo lead.json) con curl.exe (no
+     curl, que en PowerShell 5.1 es otro comando):
+       curl.exe -X POST http://127.0.0.1:8000/leads -H "Content-Type: application/json" -H "X-Webhook-Secret: <WEBHOOK_SECRET del .env>" -d "@lead.json"
+     La respuesta trae oportunidad_id.
+  3. Calcular (cuerpo en est.json: {"oportunidad_id": <el id>}):
+       curl.exe -X POST http://127.0.0.1:8000/calculate-estimate -H "Content-Type: application/json" -H "X-Webhook-Secret: <WEBHOOK_SECRET del .env>" -d "@est.json"
+  4. O desde el navegador en http://127.0.0.1:8000/docs, con el botón
+     "Authorize" para pegar el secreto una vez.
+  5. MCP, con el servidor arrancado:
+       .\venv\Scripts\python.exe scripts\check_mcp_connection.py
+  6. En n8n (nodo MCP Client Tool): URL http://<host>:8000/mcp/ y una
+     credencial Bearer con el valor de MCP_SECRET del .env.
+
+Para ver lo que ha quedado guardado, en el editor SQL de Supabase:
+  SELECT * FROM presupuestos ORDER BY id DESC;
+  SELECT id, estado FROM oportunidades ORDER BY id DESC;
+  SELECT accion, detalle FROM logs WHERE entity_type = 'oportunidad'
+  ORDER BY id DESC;
+
+
+================================================================
+14. ESTADO DE GIT Y SIGUIENTES PASOS
+================================================================
+
+- Rama: feat/n0-calculate-estimate. Nada de este bloque está commiteado
+  (regla del proyecto: Gabi revisa antes de commitear).
+- Siguen en local, sin subir: el commit 6aa0cef (correcciones de la
+  Adenda), docs/Plan_calculate_estimate.txt y
+  docs/TFM_Resumen_Sesion_Diseno_Calculate_Estimate.txt.
+- La migración SÍ está aplicada en la base de datos real de Supabase
+  (los cambios de esquema no dependen de Git).
+- Siguientes pasos:
+    1. Revisión del código y de este documento.
+    2. Commits por bloques (migración, servicio, REST, MCP, docs).
+    3. Push de la rama.
+    4. Merge a main solo con confirmación explícita de Gabi, y siempre
+       con git merge --ff-only.
+    5. Probar la tool desde el nodo MCP Client Tool real de n8n.

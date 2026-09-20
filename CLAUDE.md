@@ -55,11 +55,12 @@ delgados que llaman siempre a las mismas funciones de services/.
 
 ## Dos puertas: REST vs MCP — IMPLEMENTADO SOLO PARCIALMENTE
 
-Estado real del código a día de hoy: POST /leads está implementado y
-verificado por HTTP real (app/api/leads.py + app/services/leads_service.py,
-registrado en main.py con el único include_router del proyecto). Los
-otros cuatro endpoints siguen siendo un docstring de una línea, y el
-servidor MCP no tiene ninguna tool registrada (list_tools() devuelve []).
+Estado real del código a día de hoy: POST /leads y POST
+/calculate-estimate están implementados y verificados por HTTP real
+(dos include_router en main.py). calculate-estimate tiene además su
+tool MCP calculate_estimate (list_tools() devuelve solo esa), con /mcp
+autenticado por Bearer MCP_SECRET. gate-decisions, visits y
+create-followup-task siguen siendo un docstring de una línea.
 Lo que sigue es la especificación completa, no el estado actual.
 
 calculate-estimate tiene las dos (MCP en producción, REST para
@@ -87,6 +88,27 @@ SOLO REST.
       curl.exe -X POST http://127.0.0.1:8000/leads -H "Content-Type: application/json" -H "X-Webhook-Secret: <valor del .env>" -d "@cuerpo.json"
   En /docs, el botón "Authorize" permite pegar el secreto una vez. n8n
   debe enviarlo con una credencial "Header Auth" en el nodo HTTP.
+- MCP_SECRET (distinto de WEBHOOK_SECRET) también es obligatorio para
+  ARRANCAR: si falta o está vacío, uvicorn se detiene al importar
+  app/mcp_server/server.py. /mcp exige "Authorization: Bearer
+  <MCP_SECRET>" (401 sin él). Se usa una clase propia
+  (VerificadorSecretoMCP, compare_digest), NO StaticTokenVerifier de
+  fastmcp (comparación no constante, "no usar en producción").
+  scripts/check_mcp_connection.py ya envía el token.
+- El umbral del Gate NO es un valor global: desde D9 (2026-09-20) vive en
+  la tabla umbrales_gate, una fila por tipo_reforma (bano y cocina 13.000 €,
+  integral_vivienda y parcial_acabados 10.000 €; el de parcial_acabados es
+  PROVISIONAL hasta cerrar D10). La fila
+  reglas_negocio.umbral_aprobacion_manual sigue existiendo pero está marcada
+  como OBSOLETA y nadie la lee: editarla no tiene ningún efecto.
+  El proyecto tiene por tanto 9 tablas, no 8.
+- m2 y cualquier número dentro de un JSONB llegan a Python como float si
+  se lee el JSONB entero. Para Decimal exacto, extraerlo en SQL:
+  (datos_estructurados ->> 'm2')::numeric.
+- En scripts que prueban varias violaciones de restricción dentro de UNA
+  transacción, cada una va en su propio SAVEPOINT (ROLLBACK TO +
+  RELEASE); si no, la primera aborta la transacción y las demás dan
+  InFailedSqlTransaction. Patrón: scripts/check_migracion_calculate_estimate.py.
 - WEBHOOK_SECRET es obligatorio para ARRANCAR el servidor: si falta o
   solo tiene espacios, uvicorn se detiene al importar
   app/api/security.py, antes de abrir el puerto. Los scripts que solo
@@ -126,7 +148,27 @@ rollback automáticos), CHECK en oportunidades.tipo_reforma, y POST
 /leads completo de punta a punta (HTTP real: 201 con datos válidos, 422
 sin tocar la base de datos con datos inválidos).
 
-Pendiente: los otros cuatro endpoints, las tools MCP, la concurrencia
+POST /calculate-estimate (REST + tool MCP) implementado y verificado el
+2026-09-19 en la rama feat/n0-calculate-estimate, SIN commitear a la
+espera de la revisión de Gabi: migración paso3 (estado
+'pendiente_aprobacion' + UNIQUE presupuestos.oportunidad_id, D8),
+check_migracion 14/14, check_estimate_service 83/83,
+check_calculate_estimate_http 20/20, check_mcp_calculate_estimate 19/19.
+Detalle completo: docs/EndPoint_Calculate_estimate_final.txt.
+
+Umbral del Gate por categoria (D9) implementado y verificado el
+2026-09-20, tambien SIN commitear: migracion paso4 (tabla umbrales_gate),
+check_migracion_umbrales_gate 17/17, check_estimate_service 107/107,
+check_calculate_estimate_http 21/21, check_mcp_calculate_estimate 19/19.
+Detalle: docs/Umbral_Gate_por_Categoria_D9_final.txt. PENDIENTE: el
+umbral de parcial_acabados (10.000 EUR) es PROVISIONAL hasta cerrar D10.
+
+AVISO: scripts/check_exception_handler.py falla 22/28 también en main
+(no envía X-Webhook-Secret desde que /leads exige autenticación). Fallo
+anterior a este bloque, pendiente de arreglar.
+
+Pendiente: gate-decisions, visits, create-followup-task,
+get_business_rules y request_missing_information, la concurrencia
 del Session pooler bajo carga, la tabla de excepciones de la Adenda
 (hoy un error no controlado de services/ sale como 500 genérico), y la
 idempotencia frente a reintentos de n8n (D7, limitación asumida en N0).

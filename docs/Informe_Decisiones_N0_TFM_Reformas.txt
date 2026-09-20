@@ -36,6 +36,8 @@ Las 8 tablas de N0, con su función:
 | reglas_negocio | Parámetros de gobernanza editables sin redeploy: umbral_aprobacion_manual, margen_empresa_pct, recargo_informe_tecnico. | Sí                       |
 | tarifas_base   | Tabla de tarifas de referencia: tipo_reforma × nivel_acabados → precio_m2 (banda de mercado).                           | Sí                       |
 
+*ACTUALIZACIÓN 2026-09-20 (decisión D9): son 9 tablas. Se añadió umbrales_gate (un umbral de Gate HITL por tipo_reforma), porque un único umbral global no podía cumplir a la vez el objetivo de baño/cocina y el de reforma integral. Mismo criterio de justificación que la nota siguiente. La fuente fiable del esquema es docs/schema_actual.sql.*
+
 *Nota de disciplina de alcance: el recuento sube de 6 a 8 tablas, pero cada adición responde a un requisito verificado (no a scope creep). Sigue muy por debajo de las 9-10 tablas reservadas para N1.*
 
 3. Modelo de cálculo de la preestimación (calculate_estimate)
