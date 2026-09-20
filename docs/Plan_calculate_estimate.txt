@@ -1,0 +1,855 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+PLAN DE IMPLEMENTACIÓN — POST /calculate-estimate (puerta REST + tool MCP)
+
+Documento de plan · Nivel N0 · 2026-09-19
+Rama: feat/n0-calculate-estimate
+Estado: BORRADOR PENDIENTE DE REVISIÓN Y APROBACIÓN. No se ha escrito
+todavía ninguna línea de código ni se ha tocado la base de datos.
+
+Este plan traduce a diseño concreto las ocho decisiones cerradas para
+este endpoint (contrato en la Adenda, punto 1.1) y señala, antes de
+escribir código, todo lo que al leer el repositorio real contradice o
+completa esas decisiones. Nada de la sección 2 se ha reinterpretado en
+silencio: cada punto dice qué dice la decisión, qué se encontró y qué se
+propone.
+
+
+================================================================
+0. QUÉ SE HA LEÍDO Y QUÉ SE HA EJECUTADO PARA ESCRIBIR ESTE PLAN
+================================================================
+
+Lectura completa, en este orden:
+  1. docs/Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt (1.1 a/b/c)
+  2. docs/TFM_Decisiones_Modelo_Datos_Leads.txt (entero: D1–D7, ciclo de
+     vida de la oportunidad, registro de entity_type)
+  3. docs/schema_actual.sql
+  4. docs/TFM_Decisiones_Arquitectura_MCP_y_DB.txt, secciones 3, 4, 5 y 6
+  5. app/services/leads_service.py y app/api/security.py (estándar de
+     estilo y profundidad de comentario de este bloque)
+
+Comprobaciones con ejecución real (fuente: salida del venv o de la base
+de datos real, no documentación). Las sondas desechables se ejecutaron
+desde el directorio temporal de la sesión, fuera del repositorio:
+
+  [E1] pip show fastmcp -> Version: 4.0.3. fastmcp.__version__ = 4.0.3.
+  [E2] from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+       -> EXISTE. Firma: __init__(tokens: dict[str, dict], required_scopes
+       = None). Su propio docstring dice: "WARNING: Never use this in
+       production - tokens are stored in plain text!".
+  [E3] Código fuente de StaticTokenVerifier.verify_token: valida con
+       self.tokens.get(token), es decir, una búsqueda en diccionario. NO
+       es una comparación en tiempo constante (ver 2.4).
+  [E4] FastMCP.__init__ acepta el parámetro auth. fastmcp.exceptions.
+       ToolError existe.
+  [E5] Sonda HTTP real: FastMCP(auth=StaticTokenVerifier(...)) montado
+       en FastAPI bajo /mcp con el mismo patrón que app/main.py, servido
+       por uvicorn (sin --reload):
+         sin cabecera Authorization      -> 401, WWW-Authenticate: Bearer
+         Authorization: Bearer <malo>    -> 401, error="invalid_token"
+         Authorization: Bearer <bueno>   -> 200
+         fastmcp.Client con token bueno  -> llama a la tool sin error
+         fastmcp.Client con token malo   -> MCPError
+       Conclusión: la autenticación de fastmcp 4.0.3 SÍ se aplica cuando
+       el http_app va montado dentro de FastAPI. Esta sonda NO sustituye a
+       la verificación del bloque 4, que se hará contra el servidor real
+       del proyecto.
+  [E6] Una tool MCP síncrona (def, no async def) se ejecuta en un
+       "AnyIO worker thread", no en el hilo del bucle de eventos. Por
+       tanto una tool def que hace llamadas bloqueantes a psycopg2 es
+       segura, por el mismo motivo por el que los endpoints REST del
+       proyecto son def.
+  [E7] Un campo Decimal devuelto por una tool MCP (modelo Pydantic)
+       llega al cliente como TEXTO: {"importe": "8625.00"}. Es el mismo
+       comportamiento ya comprobado en la puerta REST con Pydantic
+       2.13.5. (Al parsear ese esquema, el cliente de fastmcp emite un
+       UserWarning inofensivo sobre un patrón regex; se revisará en el
+       bloque 4.)
+  [E8] Base de datos real: '{"m2": 8.7}'::jsonb leído entero por
+       psycopg2 devuelve m2 como float 8.7. Extraído en SQL con
+       (datos_estructurados ->> 'm2')::numeric devuelve Decimal('8.7').
+       (->> 'incluye_cambios_estructurales')::boolean devuelve bool.
+  [E9] Estado actual de los datos: presupuestos 0 filas, oportunidades 0
+       filas, leads 0 filas. presupuestos solo tiene tres restricciones:
+       pkey, fkey a oportunidades y el CHECK de motivo_gate. No hay
+       ningún UNIQUE sobre oportunidad_id. La migración no puede chocar
+       con datos existentes.
+  [E10] scripts/check_mcp_connection.py se conecta a /mcp/ SIN ninguna
+       credencial (línea 24). En cuanto /mcp exija token, ese script
+       dejará de funcionar (ver 2.9).
+
+
+================================================================
+1. LAS OCHO DECISIONES CERRADAS (resumen de lo que se implementa)
+================================================================
+
+  1. Entrada: solo oportunidad_id, por las dos puertas.
+  2. Fórmula: importe_min = precio_m2 × m2 (+ recargo_informe_tecnico si
+     hay cambios estructurales); importe_max = importe_min × (1 +
+     margen_empresa_pct / 100). Todo con Decimal.
+  3. Gate contra importe_max: ambos / cambios_estructurales /
+     importe_superior_umbral / sin Gate. Solo salta si importe_max es
+     estrictamente mayor que el umbral (">").
+  4. Estado: sin Gate -> 'presupuesto_enviado'; con Gate ->
+     'pendiente_aprobacion' (valor nuevo). No se tocan datos_completos,
+     confianza_ia ni prioridad.
+  5. Visibilidad: la tool MCP no entrega importes si motivo_gate incluye
+     cambios estructurales; la puerta REST los entrega siempre.
+  6. Idempotencia: INSERT ... ON CONFLICT (oportunidad_id) DO NOTHING
+     RETURNING ...; si no devuelve fila, SELECT de la existente.
+  7. Fallback sin tarifa: se registra en logs, no se toca el estado ni se
+     crea presupuesto, y se devuelve status="requiere_revision" con los
+     importes a None.
+  8. /mcp autenticado con MCP_SECRET, distinto de WEBHOOK_SECRET.
+
+
+================================================================
+2. CONTRADICCIONES Y HUECOS ENCONTRADOS AL LEER EL CÓDIGO REAL
+================================================================
+
+Cada punto dice QUÉ se encontró y QUÉ se propone. Los que requieren una
+elección con más de una opción razonable están marcados [DECIDIR] y se
+recogen, con sus alternativas, en la sección 3.
+
+2.1 La numeración nueva es D8, no D9
+----------------------------------------
+El prompt pide añadir la decisión como "D9, siguiendo la numeración
+D1–D8 ya existente". En TFM_Decisiones_Modelo_Datos_Leads.txt existen
+SOLO D1 a D7 (el título del documento dice "decisiones D1–D7" y la
+sección 3 termina en D7). Propuesta: numerarla D8. Si existe un D8 en
+otro documento que no está en el repositorio, hay que decirlo antes de
+escribirla.
+
+2.2 El ON CONFLICT de D2 NO es el mismo patrón: es su contrario
+deliberado
+----------------------------------------
+La decisión 6 pide ON CONFLICT ... DO NOTHING + SELECT y lo describe
+como "mismo patrón que el ON CONFLICT de clientes.email en D2". El
+código real de D2 (leads_service.py, líneas 70–76) usa DO UPDATE SET
+email = EXCLUDED.email, y su comentario explica que se eligió
+precisamente PARA NO usar DO NOTHING, porque DO NOTHING no devuelve fila
+en RETURNING cuando hay conflicto.
+
+Las dos técnicas comparten la idea (dejar que la restricción UNIQUE
+resuelva la carrera en una sola sentencia, en vez de "SELECT y, si no
+hay, INSERT") pero eligen distinto por motivos concretos. Aquí DO
+NOTHING es el correcto, por dos razones que en D2 no existían:
+  - Aquí SÍ importa distinguir "lo acabo de crear" de "ya existía": solo
+    en el primer caso se actualiza oportunidades.estado. Con DO NOTHING
+    esa señal sale gratis (RETURNING devuelve fila / no devuelve fila).
+    Con el truco de D2 las dos situaciones devuelven una fila idéntica.
+  - DO UPDATE reescribe la fila existente (crea una versión nueva de la
+    fila en Postgres aunque el valor sea el mismo). En un presupuesto ya
+    emitido, que puede estar pendiente de aprobación, no se quiere
+    ninguna escritura.
+El comentario del código dirá exactamente esto, comparándolo con D2, en
+vez de presentarlo como "el mismo patrón".
+
+2.3 m2 NO llega como Decimal si se lee el JSONB entero
+----------------------------------------
+La decisión 2 dice que "psycopg2 ya devuelve Decimal para columnas
+NUMERIC, así que no hay que convertir nada manualmente". Es cierto para
+tarifas_base.precio_m2 y reglas_negocio.valor (columnas NUMERIC), pero
+m2 NO vive en una columna NUMERIC: vive dentro del JSONB
+leads.datos_estructurados. Comprobado [E8]: leído entero, psycopg2 lo
+devuelve como float 8.7.
+
+Propuesta: extraerlo en el propio SQL con
+    (l.datos_estructurados ->> 'm2')::numeric
+->> saca el valor como texto ("8.7") y ::numeric lo convierte en
+Postgres a NUMERIC exacto, que psycopg2 entrega como Decimal('8.7').
+Así el float no aparece nunca en Python y se cumple la decisión 2 sin
+conversión manual. La alternativa obvia, Decimal(float), arrastraría el
+error binario: Decimal(8.7) = 8.699999999999999289... (comprobado en
+esta sesión). Igual para el booleano: (... ->> 'incluye_cambios_
+estructurales')::boolean.
+
+2.4 StaticTokenVerifier no compara en tiempo constante  [DECIDIR P1]
+----------------------------------------
+[E3] StaticTokenVerifier busca el token en un diccionario. El proyecto
+ya fijó su estándar en app/api/security.py: secrets.compare_digest sobre
+bytes. Siendo honestos con el riesgo, una búsqueda en diccionario filtra
+muchísima menos información por tiempo que un "==" carácter a carácter
+(primero compara el hash). El riesgo práctico es bajo. Pero la pregunta
+"¿por qué en /leads usáis compare_digest y en /mcp no?" es previsible en
+la defensa, y la respuesta "porque la librería lo hace así" es débil.
+Alternativas en 3, P1.
+
+Sobre el aviso de "texto plano": aplica igual a cualquier secreto
+compartido de N0, WEBHOOK_SECRET incluido (está en claro en el .env y en
+memoria). Se documenta como decisión consciente de N0, igual que
+psycopg2-binary en Notas_Tecnicas_N0.txt, y se nombra la solución de
+producción: un proveedor OAuth/JWT real (fastmcp trae JWTVerifier),
+donde el servidor nunca guarda los tokens válidos.
+
+2.5 "No dispares un segundo aviso a Telegram" no depende del backend
+[DECIDIR P2]
+----------------------------------------
+La decisión 6 pide no disparar un segundo aviso a Telegram en una
+llamada repetida. Pero el backend no envía nada a Telegram: lo hace n8n
+(Adenda, punto 3) a partir de la respuesta del endpoint. Si una llamada
+repetida devuelve exactamente la misma respuesta que la primera, n8n no
+tiene forma de saber que ya avisó y avisará otra vez. El backend solo
+puede cumplir esta decisión dándole a n8n una señal en la respuesta.
+Propuesta en 3, P2: un campo booleano creado. Es una ampliación del
+contrato de la Adenda (como hizo D1 con oportunidad_id).
+
+2.6 El orden de las comprobaciones importa para la idempotencia
+----------------------------------------
+La decisión 6 describe el INSERT ... ON CONFLICT y, si hay conflicto, el
+SELECT. Si se aplica literalmente como PRIMER paso de escritura, antes
+se habrá tenido que calcular el importe, y eso tiene dos efectos malos
+en una llamada repetida:
+  - Si entre la primera y la segunda llamada alguien borró la tarifa, la
+    segunda caería en el fallback "requiere_revision" aunque ya exista
+    un presupuesto válido.
+  - Si entretanto la oportunidad avanzó de estado (por ejemplo, a
+    'visita_agendada'), la guarda de estado de 2.8 la rechazaría con un
+    error, en vez de devolver el presupuesto que ya existe.
+Propuesta (mantiene la decisión 6 entera, solo añade un paso delante):
+  1) SELECT del presupuesto existente para esa oportunidad_id. Si
+     existe, se devuelve tal cual (creado=false), sin calcular nada y
+     sin escribir nada. Es el camino normal de un reintento.
+  2) Si no existe: calcular, e INSERT ... ON CONFLICT (oportunidad_id)
+     DO NOTHING RETURNING ... Este ON CONFLICT sigue siendo necesario:
+     cubre la carrera de dos llamadas SIMULTÁNEAS que pasan las dos por
+     el paso 1 vacío. La que pierde se queda esperando en el índice
+     UNIQUE hasta que la ganadora confirma, recibe "sin fila", hace el
+     SELECT y devuelve la fila de la ganadora (con READ COMMITTED, el
+     nivel por defecto, ese SELECT nuevo ya ve la fila confirmada).
+Sin el paso 2 la carrera rompería con UniqueViolation (un 500). Sin el
+paso 1 se darían los dos efectos malos de arriba.
+
+2.7 La puerta REST también tiene que estar autenticada
+----------------------------------------
+El prompt pide autenticar /mcp, pero no dice nada de POST
+/calculate-estimate. La puerta REST devuelve SIEMPRE los importes
+(decisión 5). Si quedara abierta, ocultárselos al agente por MCP no
+protegería nada: bastaría con llamar a la puerta REST. Además, esa
+puerta ESCRIBE en la base de datos (presupuestos y estado).
+Propuesta: reutilizar la dependencia verificar_webhook_secret de
+app/api/security.py, sin cambiarla (cabecera X-Webhook-Secret, 401
+idéntico). Es la puerta de testing y administración y quien la use ya
+tiene ese secreto. No se crea un tercer secreto.
+
+2.8 calculate-estimate es el PRIMER endpoint que actualiza el estado
+[DECIDIR P5]
+----------------------------------------
+Notas_Tecnicas_N0.txt (nota B) dice que la protección del orden de
+estados se decidiría "al construir POST /gate-decisions y POST /visits,
+que serán los primeros en ACTUALIZAR el estado". Con la decisión 4, el
+primero es este endpoint. La elección (trigger / guarda en services /
+riesgo asumido) llega un bloque antes. Propuesta en 3, P5. Además, el
+significado documentado de 'presupuesto_enviado' ("con el Gate HITL ya
+resuelto") cambia de matiz y habrá que reescribirlo en D8: ahora el
+Gate pendiente tiene su propio estado.
+
+2.9 scripts/check_mcp_connection.py se romperá
+----------------------------------------
+[E10] Se conecta sin credencial. Tras activar la autenticación recibirá
+401. Se actualizará en el bloque 4 para que lea MCP_SECRET del .env y lo
+mande como Bearer. Queda dentro del alcance porque es consecuencia
+directa del punto 8, no una tarea aparte.
+
+2.10 La Adenda también debe cambiar en este bloque
+----------------------------------------
+El prompt señala que el nuevo estado va en TFM_Decisiones_Modelo_Datos_
+Leads.txt y no en la Adenda, y así se hará. Pero los códigos HTTP del
+endpoint (401, 404, 409, 422), el campo creado si se aprueba P2, los
+valores de status y la fila de excepciones SÍ son contrato observable.
+La regla del proyecto es que cualquier cambio observable de un endpoint
+se refleja en la Adenda en el mismo bloque de trabajo. Se actualizará la
+fila 2 y se añadirá una subsección 5.2 con los códigos de calculate-
+estimate, en el bloque 3 (cuando esos códigos existan de verdad).
+
+2.11 Regla de negocio ausente: la decisión 7 no la cubre  [DECIDIR P6]
+----------------------------------------
+La decisión 7 cubre "no existe la tarifa". No dice qué pasa si falta en
+reglas_negocio alguna de las tres claves que usa el cálculo
+(margen_empresa_pct, recargo_informe_tecnico, umbral_aprobacion_
+manual). Sin margen no hay importe_max; sin umbral no se puede decidir
+el Gate. Propuesta en 3, P6.
+
+2.12 Qué fuente manda para tipo_reforma: la resuelve D3
+----------------------------------------
+La Adenda (1.1a) nombra dos fuentes: leads.datos_estructurados y
+oportunidades.tipo_reforma. D3 ya lo decidió: el JSON es "la evidencia
+de lo que llegó" y la columna es "el dato de negocio de trabajo".
+Propuesta: tipo_reforma sale de oportunidades.tipo_reforma (el dato de
+trabajo, con CHECK en la base de datos). nivel_acabados, m2 e
+incluye_cambios_estructurales salen de leads.datos_estructurados, porque
+no existen en ningún otro sitio. Si oportunidades.tipo_reforma es NULL
+(la columna lo admite), la búsqueda en tarifas_base no encuentra fila y
+se aplica el fallback de la decisión 7 por el MISMO camino de código,
+sin un caso especial. Con esto se cierra el último pendiente de la
+sección 8 de la Adenda.
+
+2.13 Límite conocido que este bloque no arregla: m2 sin tope
+----------------------------------------
+presupuestos.importe_max es NUMERIC(10,2): como máximo 99.999.999,99.
+LeadCreate valida m2 > 0, pero no le pone tope. Con integral_vivienda
+alto (1.350 €/m²) y el 15 %, se desborda a partir de unos 64.000 m². En
+ese caso el INSERT falla, la transacción se deshace entera y el cliente
+recibe el 500 genérico del manejador global. Arreglarlo es un cambio de
+POST /leads (le=... en m2), fuera de este bloque. Se anota como
+limitación en el resumen de cierre.
+
+
+================================================================
+3. DECISIONES ABIERTAS PARA GABI (Rule of Three)
+================================================================
+
+Cada una con alternativas, contras reales en este proyecto (N0, 8 GB,
+defensa oral) y una recomendación. Las marcadas "decisión del
+implementador" las pedía el prompt explícitamente decidir y explicar:
+se dejan escritas para revisión, no como pregunta.
+
+P1. Verificador del token de /mcp
+  (A) StaticTokenVerifier tal cual. Contra: no compara en tiempo
+      constante [E3], lo que rompe el estándar de security.py. La propia
+      librería lo marca como "no usar en producción".
+  (B) Una clase propia de unas 15 líneas que hereda de TokenVerifier
+      (la misma clase base de fastmcp) y compara con
+      secrets.compare_digest sobre bytes, reutilizando exactamente el
+      razonamiento de security.py. Contra: una clase más que explicar
+      (herencia, un método async). El aviso de "texto plano" sigue
+      siendo verdad, igual que para WEBHOOK_SECRET.
+  (C) Un middleware de Starlette propio delante del montaje /mcp que
+      mire una cabecera. Contra: se salta el mecanismo de auth del
+      protocolo MCP (el cliente no recibe el WWW-Authenticate: Bearer
+      estándar que vimos en [E5]) y es más código que B.
+  RECOMENDACIÓN: B. Mismo coste de mantenimiento que A, un solo estándar
+  de comparación en todo el proyecto, y [E5] ya demostró que el
+  mecanismo auth= de fastmcp funciona montado. Si se prefiere A, es
+  defendible como N0 siempre que la memoria reconozca la diferencia.
+
+P2. Cómo evita n8n un segundo aviso a Telegram (ver 2.5)
+  (A) Campo nuevo creado: bool en la respuesta. true = presupuesto
+      creado en esta llamada, false = ya existía. n8n solo avisa si
+      creado y requiere_aprobacion. Contra: amplía el contrato de la
+      Adenda.
+  (B) Codificarlo en status (por ejemplo 'presupuesto_existente').
+      Contra: mezcla dos preguntas distintas en un solo campo ("qué
+      estado tiene" y "lo creé yo").
+  (C) No hacer nada y que n8n deduplique por su cuenta. Contra: obliga a
+      n8n a guardar estado propio. Contradice la decisión 6.
+  RECOMENDACIÓN: A.
+
+P3. Qué significa el campo status
+  (A) Igual que D4 en /leads: el estado REAL de la oportunidad, leído
+      con RETURNING o SELECT ('presupuesto_enviado',
+      'pendiente_aprobacion' o el que tenga ahora en un reintento), más
+      el valor especial 'requiere_revision' del fallback, que ya fija la
+      Adenda. Contra: 'requiere_revision' no es un estado de la tabla,
+      y hay que documentarlo.
+  (B) Etiquetas propias del endpoint ('calculado', 'requiere_revision').
+      Contra: una etiqueta inventada que puede desincronizarse del dato
+      real, justo lo que D4 descartó.
+  (C) Quitar status. Contra: rompe la Adenda, que lo exige para el
+      fallback.
+  RECOMENDACIÓN: A, por coherencia con D4.
+
+P4. Cómo ocultar los importes al agente (decisión del implementador)
+  Se ponen a null EXPLÍCITO. No se omiten del payload. Motivos:
+  - Un solo esquema de respuesta (EstimateResponse) para las dos
+    puertas. El contrato de la Adenda es uno y el esquema de salida que
+    ve el agente coincide con el documentado. Omitirlos obligaría a un
+    segundo modelo solo para MCP.
+  - Un campo presente con valor null dice "este dato existe y no te lo
+    doy". Un campo ausente es ambiguo para un LLM, que puede interpretar
+    que la tool falló o rellenar el hueco. La descripción de la tool
+    dirá explícitamente cuándo llegan a null y que no debe estimarlos.
+  - El caso se distingue del fallback: el fallback tiene
+    status='requiere_revision' y presupuesto_id=null; aquí status es un
+    estado real, presupuesto_id existe y motivo_gate explica por qué.
+  Dónde vive la regla: en services/, como función pura
+  ocultar_importes_para_agente(respuesta). La tool MCP solo la llama.
+  Así la regla de seguridad no queda escondida en un adaptador, se
+  puede verificar sin servidor y la puerta REST nunca pasa por ella.
+
+P5. Protección del orden de estados (ver 2.8)
+  (A) Guarda en services/: UPDATE ... SET estado = %s WHERE id = %s AND
+      estado = 'nueva', comprobando cursor.rowcount. Si es 0, se lanza
+      una excepción, la transacción se deshace (el INSERT del
+      presupuesto también) y la API responde 409. Contra: no protege
+      frente a escrituras que no pasen por services/ (panel de
+      Supabase, nodo Postgres de n8n).
+  (B) Trigger BEFORE UPDATE en Postgres. Contra: saca lógica de negocio
+      de services/, es PL/pgSQL que hay que probar aparte, y hoy solo
+      hay un camino de escritura de estado.
+  (C) Sin guarda y riesgo documentado. Contra: una oportunidad 'perdida'
+      a mano podría volver a 'presupuesto_enviado' sin que nadie lo
+      note.
+  RECOMENDACIÓN: A. Es la opción 2 que ya describe Notas_Tecnicas nota
+  B, cuesta una condición en el WHERE y deja escrito el criterio para
+  gate-decisions y visits.
+
+P6. Falta una regla en reglas_negocio (ver 2.11)
+  (A) El mismo fallback que la tarifa ausente: log con la clave que
+      falta y status='requiere_revision'. Contra: esconde un error de
+      configuración global tras una respuesta 200.
+  (B) Excepción no controlada -> 500 del manejador global. Contra: la
+      Adenda manda REINTENTAR los 5xx con backoff. n8n repetiría una
+      llamada que va a fallar siempre, y el cliente esperaría más.
+  (C) Comprobar las reglas al arrancar el servidor (fail fast como
+      WEBHOOK_SECRET). Contra: las reglas se editan sin redeploy, así
+      que pueden desaparecer con el servidor ya arrancado; haría falta
+      además A o B.
+  RECOMENDACIÓN: A. Es coherente con "no se inventa un precio" y no
+  provoca reintentos inútiles. El log deja la causa exacta.
+
+P7. Registrar en logs también los cálculos que salen bien
+  (A) Sí: una fila accion='presupuesto_calculado' con precio_m2,
+      margen, recargo y umbral USADOS. tarifas_base y reglas_negocio se
+      pueden editar sin redeploy, así que sin esa foto no se puede
+      explicar después por qué salió una cifra. Contra: un INSERT más
+      por cálculo, en la misma transacción.
+  (B) No; solo se registra el fallback, como pide la decisión 7.
+      Contra: se pierde la auditoría del cálculo. leads guarda los
+      datos de entrada inmutables (D3), pero no las tarifas vigentes.
+  RECOMENDACIÓN: A. Cuesta una sentencia y da la mitad que faltaba de
+  la trazabilidad que D3 empezó.
+
+P8. Código HTTP de éxito de la puerta REST
+  (A) 200 siempre. Contra: no sigue la convención de 201 para
+      "creado".
+  (B) 201 si se creó y 200 si ya existía. Contra: n8n tendría que
+      mirar dos códigos de éxito. Con P2-A la información ya va en el
+      cuerpo.
+  (C) 201 siempre. Contra: miente en el reintento.
+  RECOMENDACIÓN: A. Es una llamada de tipo RPC ("calcula"), no un
+  "crea este recurso", y creado ya dice lo que pasó.
+
+P9. Importes en JSON: texto o número (decisión del implementador)
+  Se envían como TEXTO ("8625.00"), el comportamiento por defecto de
+  Pydantic con Decimal, comprobado en las dos puertas [E7]. Motivo:
+  representación exacta de extremo a extremo. El Gate ya se decide en
+  el backend, así que n8n no necesita comparar importes, solo
+  mostrarlos. Esto CORRIGE mi sugerencia anterior de esta sesión
+  (convertir a float en la respuesta), hecha antes de que el Gate
+  quedara decidido en el servidor.
+
+P10. Quién escribe MCP_SECRET en el .env
+  El plan añade la plantilla a .env.example. El valor real del .env lo
+  genera Gabi con secrets.token_urlsafe(32), igual que WEBHOOK_SECRET,
+  salvo que autorice expresamente que lo haga el implementador.
+
+
+================================================================
+4. DISEÑO CONCRETO
+================================================================
+
+4.1 Archivos que se tocan
+----------------------------------------
+  NUEVOS
+    app/schemas/estimates.py
+    scripts/migraciones_ejecutadas/paso3_calculate_estimate.py
+    scripts/check_migracion_calculate_estimate.py
+    scripts/check_estimate_service.py
+    scripts/check_calculate_estimate_http.py
+    scripts/check_mcp_calculate_estimate.py
+    docs/TFM_Resumen_Sesion_Calculate_Estimate.txt   (cierre)
+  CON CONTENIDO NUEVO (hoy son un docstring de una línea)
+    app/services/estimate_service.py
+    app/api/estimates.py
+  MODIFICADOS
+    app/mcp_server/server.py     (auth + tool)
+    app/main.py                  (un include_router más)
+    app/config.py                (MCP_SECRET = os.getenv(...))
+    app/schemas/common.py        (enum MotivoGate, ver 4.2)
+    .env.example                 (MCP_SECRET)
+    scripts/check_mcp_connection.py (token Bearer, ver 2.9)
+    docs/schema_actual.sql       (SOLO regenerado con dump_schema.py)
+    docs/TFM_Decisiones_Modelo_Datos_Leads.txt (D8, estados, logs)
+    docs/Adenda_...txt           (fila 2 y 5.2, ver 2.10)
+    CLAUDE.md                    (estado actual al cerrar)
+  NO SE TOCAN
+    gate_decisions, visits, followup_tasks (api y services),
+    get_business_rules, request_missing_information, max_fotos_lead,
+    ningún test de pytest.
+
+4.2 Esquemas (app/schemas/estimates.py, y MotivoGate en common.py)
+----------------------------------------
+  class MotivoGate(str, Enum):         -> en common.py, porque POST
+      CAMBIOS_ESTRUCTURALES = "cambios_estructurales"   /gate-decisions
+      IMPORTE_SUPERIOR_UMBRAL = "importe_superior_umbral"  también lo
+      AMBOS = "ambos"                                   leerá (mismo
+                                         criterio que TipoReforma).
+      Los valores se copian del CHECK real presupuestos_motivo_gate_check.
+
+  class EstimateRequest(BaseModel):
+      model_config = ConfigDict(extra="forbid")
+      oportunidad_id: int = Field(gt=0)
+    extra="forbid" hace que un cuerpo con lead_id, m2 o
+    incluye_cambios_estructurales se rechace con 422 en vez de ignorarse
+    en silencio. Es la defensa en la puerta de la decisión 1.
+
+  class EstimateResponse(BaseModel):
+      presupuesto_id: int | None
+      oportunidad_id: int
+      importe_min: Decimal | None
+      importe_max: Decimal | None
+      motivo_gate: MotivoGate | None
+      requiere_aprobacion: bool
+      status: str
+      creado: bool                        (si se aprueba P2-A)
+
+4.3 Servicio (app/services/estimate_service.py)
+----------------------------------------
+Sin imports de fastapi ni de fastmcp (regla 3.2 de arquitectura).
+
+  Constantes:
+    CLAVES_REGLAS = ("margen_empresa_pct", "recargo_informe_tecnico",
+                     "umbral_aprobacion_manual")
+    STATUS_REQUIERE_REVISION = "requiere_revision"
+    DOS_DECIMALES = Decimal("0.01")
+
+  Excepciones propias (clases de Python normales, heredan de
+  Exception). services/ no puede lanzar HTTPException ni ToolError,
+  porque eso lo ataría a una puerta. Cada adaptador las traduce a su
+  idioma:
+    class OportunidadNoEncontrada(Exception)   -> REST 404 / MCP ToolError
+    class EstadoNoPermiteCalculo(Exception)    -> REST 409 / MCP ToolError
+
+  Funciones puras (sin base de datos, verificables sin Supabase):
+    calcular_importes(precio_m2: Decimal, m2: Decimal,
+                      incluye_cambios_estructurales: bool,
+                      recargo_informe_tecnico: Decimal,
+                      margen_empresa_pct: Decimal)
+        -> tuple[Decimal, Decimal]            # (importe_min, importe_max)
+      Cada importe se redondea a 2 decimales con quantize(DOS_DECIMALES,
+      ROUND_HALF_UP) ANTES de devolverlo: es el valor exacto que
+      guardará la columna NUMERIC(10,2). Si Python dejara el redondeo a
+      Postgres, el importe devuelto al cliente y el guardado podrían
+      diferir en un céntimo.
+
+    evaluar_gate(importe_max: Decimal, incluye_cambios_estructurales:
+                 bool, umbral: Decimal) -> MotivoGate | None
+      La tabla de 4 casos de la decisión 3 con ">" estricto. Compara el
+      importe_max YA redondeado, el mismo que queda guardado, para que
+      quien recalcule desde la base de datos obtenga el mismo Gate.
+
+    ocultar_importes_para_agente(r: EstimateResponse) -> EstimateResponse
+      Devuelve una COPIA con importe_min/importe_max a None si
+      motivo_gate es CAMBIOS_ESTRUCTURALES o AMBOS; si no, la misma.
+      (model_copy(update=...) de Pydantic; no modifica el original.)
+
+  Función principal:
+    calculate_estimate(oportunidad_id: int) -> EstimateResponse
+
+  Todo dentro de UN solo with get_transactional_connection() as conn
+  (mismo context manager que create_lead: commit si todo va bien,
+  rollback si salta cualquier excepción, conexión devuelta al pool
+  siempre).
+
+    Paso 1: leer la oportunidad y sus datos de entrada
+      SELECT o.estado, o.tipo_reforma,
+             l.datos_estructurados ->> 'nivel_acabados',
+             (l.datos_estructurados ->> 'm2')::numeric,
+             (l.datos_estructurados ->> 'incluye_cambios_estructurales')::boolean
+      FROM oportunidades o JOIN leads l ON l.id = o.lead_id
+      WHERE o.id = %s;
+      Si no hay fila -> OportunidadNoEncontrada.
+
+    Paso 2: ¿ya tiene presupuesto? (idempotencia, ver 2.6)
+      SELECT id, importe_min, importe_max, motivo_gate,
+             requiere_aprobacion
+      FROM presupuestos WHERE oportunidad_id = %s;
+      Si hay fila -> se devuelve con creado=false y status = estado real
+      leído en el paso 1. Sin cálculo ni escrituras.
+
+    Paso 3: guarda de estado (P5-A, primera línea)
+      Si el estado leído en el paso 1 no es 'nueva' ->
+      EstadoNoPermiteCalculo. Esta comprobación temprana da un error
+      claro; la guarda definitiva, a prueba de carreras, es el WHERE del
+      paso 7.
+
+    Paso 4: tarifa
+      SELECT precio_m2 FROM tarifas_base
+      WHERE tipo_reforma = %s AND nivel_acabados = %s;
+      Sin fila (incluido tipo_reforma NULL, ver 2.12) -> fallback (paso F).
+
+    Paso 5: reglas
+      SELECT clave, valor FROM reglas_negocio WHERE clave = ANY(%s);
+      Se convierte en un dict {clave: Decimal}. Si falta alguna de
+      CLAVES_REGLAS -> fallback (P6-A). ANY(%s) con una lista de Python:
+      psycopg2 la convierte en un ARRAY de Postgres, así que es UNA
+      consulta para tres claves en vez de tres.
+
+    Paso 6: cálculo
+      calcular_importes(...) y evaluar_gate(...).
+      requiere_aprobacion = motivo_gate is not None.
+      nuevo_estado = 'pendiente_aprobacion' si hay Gate, si no
+      'presupuesto_enviado'.
+
+    Paso 7: escrituras (misma transacción)
+      INSERT INTO presupuestos (oportunidad_id, importe_min, importe_max,
+          duracion_estimada_dias, requiere_aprobacion, aprobado_por,
+          motivo_gate, created_at, updated_at)
+      VALUES (%s, %s, %s, NULL, %s, NULL, %s, now(), now())
+      ON CONFLICT (oportunidad_id) DO NOTHING
+      RETURNING id, importe_min, importe_max, motivo_gate,
+                requiere_aprobacion;
+        - Con fila: se ha creado. Se sigue.
+        - Sin fila: carrera perdida (2.6). SELECT de la existente,
+          creado=false, y se devuelve sin tocar el estado.
+      duracion_estimada_dias y aprobado_por se escriben NULL a mano
+      (criterio de la sección 4 del documento de leads: la intención
+      visible en el código, no escondida en el DEFAULT).
+
+      UPDATE oportunidades SET estado = %s, updated_at = now()
+      WHERE id = %s AND estado = 'nueva'
+      RETURNING estado;
+        - Sin fila (alguien cambió el estado entre el paso 1 y este) ->
+          EstadoNoPermiteCalculo. La excepción provoca rollback: el
+          presupuesto del INSERT anterior tampoco queda guardado.
+        - Con fila: status = estado devuelto (P3-A, igual que D4).
+        - datos_completos, confianza_ia y prioridad no aparecen en el
+          SET: quedan como estaban (decisión 4).
+
+      INSERT INTO logs ('oportunidad', oportunidad_id,
+                        'presupuesto_calculado', detalle)   (si P7-A)
+        detalle = precio_m2, m2, incluye_cambios_estructurales, margen,
+        recargo y umbral usados, importes y motivo_gate. Los Decimal se
+        pasan a texto antes de Json(): el serializador JSON estándar de
+        Python no sabe convertir Decimal.
+
+    Paso F: fallback (decisión 7 y P6-A)
+      INSERT INTO logs ('oportunidad', oportunidad_id,
+                        'presupuesto_requiere_revision',
+                        {motivo, tipo_reforma, nivel_acabados, claves
+                         que faltan})
+      No se toca presupuestos ni oportunidades.estado.
+      Se devuelve presupuesto_id=None, importes None, motivo_gate None,
+      requiere_aprobacion=False, status='requiere_revision',
+      creado=False.
+      Se escribe con la misma conexión transaccional, así que el log SÍ
+      se confirma. Es la única escritura de este camino.
+      entity_type 'oportunidad' es un valor NUEVO de la tabla logs: se
+      añade al registro de la sección 5 del documento de leads, como ese
+      documento exige, con entity_id apuntando a una fila real.
+
+4.4 Puerta REST (app/api/estimates.py), mismo patrón que leads.py
+----------------------------------------
+  router = APIRouter(tags=["estimates"])
+
+  @router.post("/calculate-estimate",
+               response_model=EstimateResponse,
+               status_code=200,                          (P8-A)
+               dependencies=[Depends(verificar_webhook_secret)])  (2.7)
+  def post_calculate_estimate(data: EstimateRequest) -> EstimateResponse:
+      try:  return calculate_estimate(data.oportunidad_id)
+      except OportunidadNoEncontrada -> HTTPException(404)
+      except EstadoNoPermiteCalculo  -> HTTPException(409)
+  def y no async def: llama a psycopg2 (bloqueante), igual que
+  post_leads. No llama a ocultar_importes_para_agente (decisión 5).
+  main.py: app.include_router(estimates_api.router).
+
+4.5 Puerta MCP (app/mcp_server/server.py)
+----------------------------------------
+  Autenticación (con P1-B):
+    class VerificadorSecretoMCP(TokenVerifier):
+        async def verify_token(self, token) -> AccessToken | None
+          compare_digest sobre bytes contra MCP_SECRET, con el mismo
+          razonamiento que security.py y citándolo.
+    Fail fast a nivel de módulo, igual que security.py: si MCP_SECRET
+    falta o solo tiene espacios -> RuntimeError y uvicorn no arranca.
+    Se comprueba en server.py, no en config.py, por el mismo motivo que
+    WEBHOOK_SECRET: solo se exige a quien lo usa. Cadena de imports:
+    main.py -> mcp_server/server.py.
+    mcp = FastMCP("Reformas Integrales Amedida — MCP Server",
+                  auth=VerificadorSecretoMCP())
+    El cliente (n8n) manda: Authorization: Bearer <MCP_SECRET>.
+
+  Tool:
+    @mcp.tool
+    def calculate_estimate(oportunidad_id: Annotated[int, Field(gt=0)])
+        -> EstimateResponse:
+      r = calculate_estimate_service(oportunidad_id)
+      return ocultar_importes_para_agente(r)
+      OportunidadNoEncontrada / EstadoNoPermiteCalculo -> ToolError con
+      un mensaje corto y sin datos internos.
+    El nombre de la función de services/ se importa con un alias para no
+    chocar con el nombre de la tool. El docstring de la tool es lo que
+    lee el LLM: dirá qué hace, que no recibe ni debe inventar datos de
+    negocio y cuándo llegan los importes a null. No incluirá tarifas,
+    reglas ni fórmulas (decisión 1: el agente no ve tarifas_base ni
+    reglas_negocio).
+    def y no async def: verificado en [E6] que corre en un hilo aparte.
+
+  main.py no cambia su combined_lifespan: auth= va dentro del FastMCP y
+  el montaje /mcp sigue igual (patrón verificado en [E5]).
+
+4.6 Migración (scripts/migraciones_ejecutadas/paso3_calculate_estimate.py)
+----------------------------------------
+Mismo formato que paso2b_insert.py: docstring de "migración ya
+ejecutada, no verificación", fecha y motivo. Se ejecuta una vez y se
+conserva como evidencia. Las dos sentencias van en UNA transacción: en
+Postgres, a diferencia de otros motores, los ALTER TABLE son
+transaccionales, así que se aplican las dos o ninguna.
+
+  ALTER TABLE oportunidades
+      DROP CONSTRAINT oportunidades_estado_check,
+      ADD CONSTRAINT oportunidades_estado_check CHECK (estado IN (
+          'nueva','cualificada','pendiente_aprobacion','visita_agendada',
+          'presupuesto_enviado','ganada','perdida'));
+  ALTER TABLE presupuestos
+      ADD CONSTRAINT presupuestos_oportunidad_id_key UNIQUE (oportunidad_id);
+
+  - DROP + ADD porque Postgres no permite modificar un CHECK en su sitio.
+    Es el mismo patrón que chk_oportunidades_tipo_reforma. Hacer las dos
+    cosas en el MISMO ALTER TABLE evita que exista un instante sin
+    ninguna restricción sobre estado.
+  - Se conserva el nombre oportunidades_estado_check para que el esquema
+    volcado siga siendo comparable con el anterior.
+  - El UNIQUE crea automáticamente un índice. Es lo que necesita ON
+    CONFLICT (oportunidad_id): sin restricción UNIQUE sobre esa columna,
+    Postgres rechaza la sentencia con un error.
+  - Idempotente: comprueba en pg_constraint si el UNIQUE ya existe
+    antes de añadirlo, para que ejecutarlo dos veces no falle.
+  - Precondición comprobada [E9]: presupuestos tiene 0 filas, así que el
+    UNIQUE no puede chocar con duplicados.
+
+
+================================================================
+5. BLOQUES DE IMPLEMENTACIÓN Y VERIFICACIÓN REAL
+================================================================
+
+Cada bloque termina con su script ejecutado y la salida completa
+pegada. No se pasa al siguiente sin el visto bueno del anterior. Ningún
+commit sin revisión. uvicorn siempre sin --reload. Los scripts que
+lancen uvicorn como subproceso le pasan PYTHONIOENCODING=utf-8 (gotcha
+documentado en CLAUDE.md).
+
+Datos de prueba: la base de datos está vacía [E9]. Cada script crea sus
+propios leads llamando a create_lead() (el camino real) con emails
+@example.com (EmailStr rechaza .test) y los BORRA al terminar, en un
+finally, en orden inverso a las claves foráneas: logs, presupuestos,
+oportunidades, leads, clientes. Es el patrón de los check_*.py
+existentes.
+
+BLOQUE 1 — Migración
+  1. Ejecutar paso3_calculate_estimate.py contra la base de datos real.
+  2. scripts/check_migracion_calculate_estimate.py (todo dentro de una
+     transacción que acaba en ROLLBACK, así que no deja rastro; CADA
+     aserción en su propio SAVEPOINT + ROLLBACK TO SAVEPOINT + RELEASE
+     SAVEPOINT. Corrección del 2026-09-19 detectada en la revisión: sin
+     savepoints, la primera violación esperada aborta la transacción y
+     las demás aserciones fallan con InFailedSqlTransaction sin haber
+     comprobado nada. El script se ejecuta ANTES de migrar, donde debe
+     fallar en A1, A4 y A5, y DESPUÉS, donde debe acertar en todo):
+       - UPDATE a estado 'pendiente_aprobacion'        -> acepta
+       - UPDATE a estado 'inventado'                   -> CheckViolation
+       - los seis estados anteriores siguen aceptados
+       - dos presupuestos con la misma oportunidad_id  -> UniqueViolation
+       - INSERT ... ON CONFLICT (oportunidad_id) DO NOTHING RETURNING
+         sobre uno existente                           -> 0 filas
+  3. Regenerar docs/schema_actual.sql con dump_schema.py y comprobar en
+     el diff solo dos cambios: el CHECK con 7 valores y el UNIQUE nuevo.
+  4. D8 y documento de leads actualizados.
+
+BLOQUE 2 — Esquemas y servicio
+  scripts/check_estimate_service.py, primero la parte pura (sin BD) y
+  luego contra la BD. Valores esperados calculados con Decimal en esta
+  sesión:
+    calcular_importes:
+      bano medio (1150.00), 6 m², sin estructural -> 6900.00 / 7935.00
+      bano medio, 6 m², con estructural (+600)    -> 7500.00 / 8625.00
+      integral medio (800.00), 80 m², sin         -> 64000.00 / 73600.00
+      integral medio, 80 m², con                  -> 64600.00 / 74290.00
+      bano medio, 8.7 m² (trampa del float)       -> 10005.00 / 11505.75
+      cocina basico (650.00), 8.333 m² (redondeo) -> 5416.45 / 6228.92
+    evaluar_gate (umbral 10000.00):
+      7935.00  sin   -> None
+      8625.00  con   -> cambios_estructurales
+      73600.00 sin   -> importe_superior_umbral
+      74290.00 con   -> ambos
+      10000.00 sin   -> None (límite exacto: ">" no salta)
+      10000.01 sin   -> importe_superior_umbral
+    ocultar_importes_para_agente: null con cambios_estructurales y con
+      ambos; intactos con importe_superior_umbral y sin Gate.
+    Contra la BD real:
+      - lead nuevo -> calculate_estimate: creado=true, fila en
+        presupuestos con los importes esperados, estado correcto, fila
+        en logs (si P7-A)
+      - segunda llamada misma oportunidad: mismo presupuesto_id,
+        creado=false, sigue habiendo UNA fila, estado sin cambios
+      - datos_completos, confianza_ia y prioridad sin cambios
+      - oportunidad_id inexistente -> OportunidadNoEncontrada
+      - oportunidad en estado distinto de 'nueva' sin presupuesto ->
+        EstadoNoPermiteCalculo, y 0 presupuestos creados (rollback)
+      - oportunidad con tipo_reforma NULL -> status requiere_revision,
+        0 presupuestos, estado sigue 'nueva', 1 fila en logs
+      - dos llamadas SIMULTÁNEAS (dos hilos) sobre la misma oportunidad
+        -> un solo presupuesto, una con creado=true y otra con false,
+        ningún error
+
+BLOQUE 3 — Puerta REST
+  scripts/check_calculate_estimate_http.py (arranca uvicorn real):
+    sin X-Webhook-Secret                  -> 401 (sin tocar la BD)
+    cuerpo con lead_id o con m2           -> 422 (extra="forbid")
+    oportunidad_id = 0                    -> 422
+    oportunidad inexistente               -> 404
+    caso válido                           -> 200, creado=true
+    repetición                            -> 200, mismo presupuesto_id,
+                                             creado=false
+    caso con cambios estructurales        -> 200 CON importes visibles
+    estado no 'nueva'                     -> 409
+    tipo_reforma NULL                     -> 200, status requiere_revision
+    importes en el JSON como texto "8625.00" (P9)
+  Adenda: fila 2 y subsección 5.2 actualizadas en este bloque.
+
+BLOQUE 4 — Puerta MCP y autenticación
+  scripts/check_mcp_calculate_estimate.py (uvicorn real):
+    POST /mcp/ sin Authorization          -> 401
+    Authorization: Bearer <incorrecto>    -> 401
+    Bearer con caracteres no ASCII        -> 401, no 500 (mismo caso
+                                             que security.py)
+    fastmcp.Client con MCP_SECRET:
+      list_tools incluye calculate_estimate y su esquema de entrada
+        tiene SOLO oportunidad_id
+      caso con cambios estructurales      -> importes null
+      caso 'ambos'                        -> importes null
+      caso importe_superior_umbral        -> importes visibles
+      caso sin Gate                       -> importes visibles
+      oportunidad inexistente             -> ToolError
+    WEBHOOK_SECRET NO sirve como token MCP -> 401 (secretos separados)
+    arranque sin MCP_SECRET en el entorno -> uvicorn se detiene con el
+                                             RuntimeError
+  check_mcp_connection.py actualizado y ejecutado otra vez.
+
+CIERRE
+  Ejecutar de nuevo check_webhook_auth_http, check_leads_endpoint_http,
+  check_schemas y check_rls_estado (regresión). Escribir
+  docs/TFM_Resumen_Sesion_Calculate_Estimate.txt con las salidas
+  reales. Actualizar CLAUDE.md. Merge a main solo con confirmación
+  explícita de Gabi y con --ff-only.
+
+
+================================================================
+6. COMPROMISOS DE ESTILO Y COMENTARIOS (requisito pedagógico)
+================================================================
+
+El listón es el de leads_service.py (comentario del ON CONFLICT de D2)
+y security.py (compare_digest). Cada bloque se entregará con:
+  - Antes del código: qué se va a hacer y por qué frente a la
+    alternativa obvia que probaría un principiante.
+  - Comentarios que expliquen QUÉ hace el mecanismo y POR QUÉ está aquí,
+    nunca una traducción de la línea.
+  - Explicación la primera vez que aparezcan: cada import nuevo
+    (Decimal y ROUND_HALF_UP de decimal, Annotated de typing,
+    TokenVerifier y AccessToken de fastmcp, ToolError), cada decorador
+    (@router.post, @mcp.tool), cada with, y cada SQL no trivial
+    (->> y ::numeric, ON CONFLICT DO NOTHING, RETURNING, ANY(%s),
+    UPDATE ... WHERE estado = 'nueva' con rowcount, DROP + ADD
+    CONSTRAINT, ALTER TABLE transaccional).
+  - Cada patrón reutilizado se nombra y se compara con su original, en
+    vez de presentarlo como nuevo: ON CONFLICT (y en qué se aparta de
+    D2, ver 2.2), get_transactional_connection (D6), compare_digest
+    (security.py), fail fast a nivel de módulo (security.py), RETURNING
+    del estado real (D4), NULL explícito en lugar del DEFAULT (sección 4
+    del documento de leads).
+  - Docstrings de función con el razonamiento de negocio, no solo los
+    parámetros.
+  - Después de cada bloque: explicación por secciones en la respuesta.

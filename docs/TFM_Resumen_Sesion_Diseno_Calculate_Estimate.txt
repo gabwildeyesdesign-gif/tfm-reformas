@@ -1,0 +1,289 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+RESUMEN DE SESIÓN — DISEÑO DE POST /calculate-estimate
+(contrato, correcciones de la Adenda y plan de implementación)
+
+Documento de sesión · Nivel N0 · 2026-09-19
+Rama: feat/n0-calculate-estimate
+
+En esta sesión NO se ha escrito código de la aplicación ni se ha
+modificado la base de datos. Todo el trabajo ha sido de diseño,
+documentación y comprobaciones de solo lectura. Este documento recoge
+qué se hizo, en qué orden, qué salió mal, qué dudas quedan y qué hay
+que revisar antes de implementar.
+
+
+================================================================
+1. CRONOLOGÍA DE LO REALIZADO
+================================================================
+
+1.1 Primera propuesta de diseño del endpoint
+----------------------------------------
+Se pidió decidir la forma más eficiente de arquitectura, código y
+lógica de negocio para POST /calculate-estimate. Antes de proponer nada
+se leyeron la Adenda, el Informe de decisiones, los documentos de
+modelo de datos y de arquitectura MCP, schema_actual.sql, el código de
+POST /leads, y los datos reales de reglas_negocio (5 filas) y
+tarifas_base (12 filas).
+
+Se presentaron cuatro contradicciones entre documentos y ocho
+decisiones de diseño (E1 a E8), cada una con alternativas y
+recomendación. Varias de esas recomendaciones se corrigieron después
+(ver sección 3).
+
+1.2 Primera corrección de la Adenda (se perdió, ver 3.3)
+----------------------------------------
+Se corrigieron en la Adenda los datos que contradecían la base de
+datos o el código:
+  - Fila 1 (POST /leads): faltaban lead_token en la entrada, y
+    oportunidad_id y el código 201 en la salida.
+  - Punto 2: visitas.fecha -> visitas.fecha_propuesta;
+    convertido/descartado -> ganada/perdida.
+  - Nueva sección 8 con cada corrección y su fuente.
+
+1.3 Cambio de contrato de Gabi: entrada oportunidad_id
+----------------------------------------
+Gabi rechazó tanto "solo lead_id" (propuesta del asistente) como el
+contrato original. La entrada es oportunidad_id, porque
+oportunidades.lead_id no tiene UNIQUE (D7) y porque
+presupuestos.oportunidad_id es la clave foránea real. Gabi redactó la
+sección 1.1 (a, b, c) de la Adenda con el contrato revisado:
+  - (a) entrada oportunidad_id; los datos de negocio no se reciben
+    nunca como parámetro.
+  - (b) salida importe_min/importe_max. margen_empresa_pct pasa a ser
+    el ancho del rango de negociación, no un recargo sobre el coste.
+  - (c) el Gate se evalúa contra importe_max con ">" estricto.
+
+1.4 Subida de la Adenda de Gabi a GitHub
+----------------------------------------
+A petición de Gabi se hizo commit y push de su versión de la Adenda:
+  cd8dd08 docs(n0): contrato revisado de calculate-estimate en la Adenda (1.1)
+  -> subido a origin/feat/n0-calculate-estimate.
+
+1.5 Segunda aplicación de las correcciones (commit aparte, SIN push)
+----------------------------------------
+A petición de Gabi se volvieron a aplicar las correcciones de 1.2 en
+un commit separado, sin subirlo, para revisión:
+  6aa0cef docs(n0): corrige en la Adenda los datos que contradicen esquema y codigo
+La sección 8 se actualizó respecto a la primera versión:
+  - Se quitó el pendiente de calculate-estimate, porque ya lo resuelve
+    la 1.1 de Gabi.
+  - Se añadieron dos pendientes: la referencia a un documento que no
+    está en el repositorio y las dos fuentes de tipo_reforma.
+
+1.6 Plan de implementación
+----------------------------------------
+Siguiendo el flujo del proyecto (plan en docs/ antes de escribir
+código), se escribió docs/Plan_calculate_estimate.txt, que está sin
+commitear. Parte de ocho decisiones ya cerradas y contiene:
+  - lo leído y lo ejecutado para escribirlo;
+  - 13 contradicciones o huecos encontrados en el código real;
+  - 10 decisiones abiertas (P1–P10) con alternativas y recomendación;
+  - el diseño concreto: archivos, firmas, SQL y migración;
+  - 4 bloques de implementación con sus resultados esperados.
+
+
+================================================================
+2. VERIFICACIONES REALIZADAS
+================================================================
+
+2.1 Fuente: ejecución real en el venv o consulta a la base de datos
+----------------------------------------
+Todas las comprobaciones son de solo lectura. Las sondas de fastmcp se
+ejecutaron como scripts desechables en el directorio temporal de la
+sesión, fuera del repositorio.
+
+  - Pydantic 2.13.5 serializa Decimal como TEXTO en JSON:
+    {"a":"11040.50"}.
+  - Decimal(8.7) = 8.699999999999999289...; Decimal(str(8.7)) = 8.7.
+  - fastmcp 4.0.3 (pip show y fastmcp.__version__).
+  - fastmcp.server.auth.providers.jwt.StaticTokenVerifier existe. Su
+    docstring dice "Never use this in production - tokens are stored
+    in plain text!".
+  - Código fuente de StaticTokenVerifier.verify_token: busca con
+    self.tokens.get(token), NO en tiempo constante.
+  - FastMCP.__init__ acepta auth=. ToolError existe.
+  - Sonda HTTP con uvicorn real (sin --reload), /mcp montado en
+    FastAPI con auth:
+      sin cabecera 401, token incorrecto 401, token correcto 200;
+      fastmcp.Client con token correcto llama a la tool sin error;
+      con token incorrecto, MCPError.
+  - Una tool MCP síncrona se ejecuta en "AnyIO worker thread", no en
+    el bucle de eventos.
+  - Una tool MCP que devuelve Decimal lo entrega como texto
+    ("8625.00"). Al parsear el esquema, el cliente emite un UserWarning
+    sobre un patrón regex.
+  - Base de datos: el JSONB leído entero da m2 como float;
+    (->> 'm2')::numeric da Decimal; (->> 'flag')::boolean da bool.
+  - Base de datos: presupuestos, oportunidades y leads tienen 0 filas.
+    presupuestos no tiene UNIQUE sobre oportunidad_id (solo pkey, fkey
+    y el CHECK de motivo_gate).
+  - Datos reales de reglas_negocio: umbral 10000.00, margen 15.00,
+    recargo 600.00, dias_espera 5.00, max_fotos 5.00.
+  - Datos reales de tarifas_base: las 12 combinaciones existen (por
+    ejemplo bano medio 1150.00, integral_vivienda medio 800.00).
+  - Importes esperados para el plan, calculados con Decimal: por
+    ejemplo bano medio 6 m² con estructural -> 7500.00 / 8625.00;
+    8.333 m² de cocina basico -> 5416.45 / 6228.92.
+  - Búsqueda de la sección 1.1 de la Adenda en disco, en las tres
+    ramas, en el stash y en C:\Proyectos: no existía en ese momento
+    (ver 3.2).
+  - La Adenda tiene codificación UTF-8 y finales de línea LF tras cada
+    edición.
+
+2.2 Fuente: confirmación de Gabi
+----------------------------------------
+  - Entrada del endpoint: oportunidad_id (mensaje de Gabi en sesión).
+  - Las ocho decisiones cerradas del plan: fórmula, Gate, estado
+    'pendiente_aprobacion', visibilidad por puerta, idempotencia,
+    fallback y MCP_SECRET. Llegaron en el prompt del plan como
+    "cerradas con Gabi y con Claude (arquitecto)".
+  - Push de cd8dd08 y commit aparte 6aa0cef: pedidos expresamente.
+
+
+================================================================
+3. FALLOS Y ERRORES DE LA SESIÓN
+================================================================
+
+3.1 Recomendación equivocada: lead_id como entrada
+----------------------------------------
+El asistente recomendó "recibir solo lead_id" (E1-B). Era incorrecto,
+y por un motivo que el propio asistente había citado en la misma
+respuesta (E6): oportunidades.lead_id no tiene UNIQUE (D7), así que un
+lead puede tener dos oportunidades y lead_id no identifica cuál. Lo
+corrigió Gabi. Lección: aplicar la misma restricción del esquema a
+todas las decisiones que dependen de ella, no solo a una.
+
+3.2 Afirmación de que la sección 1.1(a) no existía
+----------------------------------------
+Gabi pidió leer la sección 1.1(a). El asistente la buscó en disco, en
+las ramas, en el stash y en todo C:\Proyectos, y no estaba. Era
+cierto en ese momento: Gabi la tenía escrita en el editor sin guardar.
+Al guardarla apareció en disco. No fue un error de lectura, pero
+muestra el riesgo de editar el mismo archivo desde dos sitios a la
+vez.
+
+3.3 Pérdida de las primeras correcciones de la Adenda
+----------------------------------------
+Al guardar su versión desde el editor, Gabi sobrescribió las
+correcciones que el asistente había hecho en disco (1.2). Nadie lo
+detectó hasta que se revisó el diff antes del commit. Por eso el push
+cd8dd08 subió la Adenda sin esas correcciones, y hubo que reaplicarlas
+en 6aa0cef. Prevención: recargar el archivo desde disco en el editor
+antes de guardar, o no editar el mismo archivo en paralelo.
+
+3.4 Recomendación revertida: importes como float
+----------------------------------------
+En la primera propuesta (E8) el asistente sugirió devolver los
+importes como float para que n8n pudiera compararlos. En el plan se
+revierte (P9): el Gate se decide en el backend, así que n8n no compara
+importes, y el texto exacto de Decimal es preferible.
+
+3.5 Recomendaciones de la primera propuesta sustituidas por decisiones
+cerradas
+----------------------------------------
+No son errores de ejecución, pero conviene tenerlas en cuenta al leer
+la conversación:
+  - E3 proponía un importe central ± banda. Se cerró min/max con el
+    margen como ancho del rango.
+  - E4 proponía ">=". Se cerró ">".
+  - E5 proponía dejar la oportunidad en 'nueva' con Gate. Se cerró un
+    estado nuevo, 'pendiente_aprobacion'.
+  - E6 proponía un bloqueo con FOR UPDATE sin UNIQUE. Se cerró UNIQUE
+    más ON CONFLICT DO NOTHING.
+
+3.6 Fallos técnicos menores durante las comprobaciones
+----------------------------------------
+  - venv/Scripts/pip.exe show no devolvió nada. Se resolvió con
+    python -m pip show.
+  - La primera sonda HTTP falló con ModuleNotFoundError: httpx. No se
+    instaló nada; se reescribió con urllib de la biblioteca estándar.
+  - La lectura de reglas_negocio por consola mostró las tildes rotas
+    (codificación cp1252 de la consola, el mismo fenómeno documentado
+    en CLAUDE.md). No afecta a los datos.
+
+
+================================================================
+4. DUDAS ABIERTAS (pendientes de decisión de Gabi)
+================================================================
+
+Detalle, alternativas y recomendación en la sección 3 de
+Plan_calculate_estimate.txt.
+
+  P1  Verificador del token de /mcp: StaticTokenVerifier o una clase
+      propia con compare_digest. Se recomienda la clase propia.
+  P2  Campo creado: bool en la respuesta, para que n8n no avise dos
+      veces a Telegram. Se recomienda.
+  P3  Significado de status: el estado real de la oportunidad (igual
+      que D4) más 'requiere_revision'. Se recomienda.
+  P5  Guarda del orden de estados en services/ (WHERE estado =
+      'nueva', 409). Se recomienda.
+  P6  Regla ausente en reglas_negocio: el mismo fallback
+      'requiere_revision'. Se recomienda.
+  P7  Registrar en logs también los cálculos correctos, con las
+      tarifas usadas. Se recomienda.
+  P8  Código HTTP de éxito: 200 siempre. Se recomienda.
+  P10 Quién genera MCP_SECRET en el .env. Se propone que lo haga Gabi.
+
+Otras dudas:
+  - D8 o D9: el prompt habla de "D1–D8 ya existente", pero el documento
+    de leads solo llega a D7. ¿Existe un D8 en otro documento fuera del
+    repositorio?
+  - La Adenda 1.1 remite a
+    claude/Decisiones_Verificacion_Tarifas_y_Margen_N0.md, que no está
+    en el repositorio. ¿Se añade, o se cambia la referencia?
+  - n8n MCP Client Tool: confirmar en la instancia real de n8n que
+    admite autenticación Bearer. No se ha comprobado en esta sesión.
+
+
+================================================================
+5. PUNTOS A REVISAR
+================================================================
+
+5.1 Git
+----------------------------------------
+  - 6aa0cef (correcciones de la Adenda) está en local y SIN push:
+    revisar con git show 6aa0cef y autorizar la subida.
+  - docs/Plan_calculate_estimate.txt y este documento están sin
+    commitear.
+  - Nada se ha integrado en main.
+
+5.2 Documentación con datos desactualizados que no se han tocado
+----------------------------------------
+  - Notas_Tecnicas_N0.txt, nota B: dice que gate-decisions y visits
+    serán los primeros en actualizar el estado; el primero será
+    calculate-estimate.
+  - TFM_Decisiones_Modelo_Datos_Leads.txt: el CHECK de estados (seis
+    valores) y el significado de 'presupuesto_enviado' cambiarán con
+    D8. Previsto en el bloque 1 del plan.
+  - Informe_Decisiones_N0: dice que el margen "se aplica al final
+    sobre el coste total", lectura que la Adenda 1.1(b) sustituye.
+  - La descripción de dias_espera_decision_post_visita, guardada en la
+    tabla reglas_negocio de Supabase, repite "visitas.fecha" y
+    "convertido/descartado". Corregirla requiere un UPDATE autorizado.
+  - Adenda fila 4: franja_horaria no tiene columna en visitas.
+
+5.3 Riesgos y limitaciones detectados
+----------------------------------------
+  - m2 sin tope en LeadCreate: a partir de unos 64.000 m² importe_max
+    desborda NUMERIC(10,2) y la llamada acaba en un 500. Es un cambio
+    de POST /leads.
+  - Con umbral 10.000 € y el Gate evaluado contra importe_max,
+    prácticamente cualquier integral_vivienda de tamaño normal pasará
+    por aprobación humana. No es un error, pero conviene tenerlo
+    presente para la demo y la defensa. Las cifras exactas cambian con
+    la fórmula nueva: están por recalcular.
+  - check_mcp_connection.py dejará de funcionar al activar la
+    autenticación de /mcp. Su actualización está prevista en el bloque
+    4.
+  - La puerta REST de calculate-estimate debe ir protegida con
+    X-Webhook-Secret. Si no, ocultar los importes al agente no protege
+    nada.
+
+5.4 Siguiente paso
+----------------------------------------
+Revisar y aprobar Plan_calculate_estimate.txt, respondiendo a P1–P10.
+Después, bloque 1: la migración (CHECK de estado con
+'pendiente_aprobacion' y UNIQUE en presupuestos.oportunidad_id), su
+script de verificación y la regeneración de schema_actual.sql.
