@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from psycopg2.extras import Json
 
+from app.api import estimates as estimates_api
 from app.api import leads as leads_api
 from app.db.connection import (
     close_pool,
@@ -68,6 +69,13 @@ app.mount("/mcp", mcp_app)
 # sobre "app" porque son dos funciones sueltas de infraestructura, no un
 # dominio de negocio con su propio archivo.
 app.include_router(leads_api.router)
+
+# Segundo router: POST /calculate-estimate (app/api/estimates.py). Es la
+# puerta REST del cálculo de presupuestos. La puerta MCP del mismo
+# cálculo es la tool calculate_estimate de app/mcp_server/server.py, ya
+# montada más arriba bajo /mcp. Las dos llaman a la misma función de
+# app/services/estimate_service.py.
+app.include_router(estimates_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna

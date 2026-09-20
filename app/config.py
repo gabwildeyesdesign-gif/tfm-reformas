@@ -26,6 +26,19 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 # arrancar quien de verdad necesita autenticar webhooks: el servidor.
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
+# Secreto de la puerta MCP (/mcp), que usa el agente de IA de n8n. Lo
+# envía en la cabecera "Authorization: Bearer <secreto>", el formato
+# estándar del protocolo MCP.
+#
+# Es un secreto DISTINTO de WEBHOOK_SECRET a propósito: son dos puertas
+# con permisos distintos. Si uno se filtra, se puede cambiar sin tocar el
+# otro, y el agente no hereda el acceso a POST /leads ni al revés.
+#
+# Mismo criterio que WEBHOOK_SECRET: aquí solo se lee. La comprobación de
+# "obligatorio y no vacío" vive en app/mcp_server/server.py, el único
+# archivo que lo usa.
+MCP_SECRET = os.getenv("MCP_SECRET")
+
 # Número mínimo de conexiones que el pool mantiene siempre abiertas, listas
 # para usar sin esperar a crear una nueva. os.getenv devuelve siempre texto
 # (str) aunque el valor parezca un número, así que hay que convertirlo con

@@ -66,6 +66,37 @@ class NivelAcabados(str, Enum):
     ALTO = "alto"
 
 
+class MotivoGate(str, Enum):
+    """
+    Motivos por los que un presupuesto necesita la aprobación de una
+    persona (Gate HITL) antes de llegar al cliente.
+
+    Los valores de la derecha están copiados del CHECK real
+    presupuestos_motivo_gate_check de Supabase (docs/schema_actual.sql),
+    no de la documentación. Si aquí se escribiera un valor que el CHECK
+    no admite, el INSERT del presupuesto fallaría en la base de datos.
+
+    Vive en common.py, y no en estimates.py, por el mismo motivo que
+    TipoReforma: lo van a necesitar dos dominios distintos. Hoy lo usa
+    calculate-estimate, que DECIDE el motivo, y mañana lo leerá POST
+    /gate-decisions, que RESUELVE el Gate.
+
+    Cuando NO hay Gate no existe un cuarto valor "ninguno": el campo
+    motivo_gate vale None (NULL en la base de datos). Así "no hay motivo"
+    se representa con la ausencia de valor, que es lo que significa, y
+    no con un texto que habría que añadir también al CHECK.
+    """
+
+    # El importe está bajo el umbral, pero la reforma toca estructura:
+    # hace falta un informe técnico, y un técnico debe revisarlo.
+    CAMBIOS_ESTRUCTURALES = "cambios_estructurales"
+    # Sin cambios estructurales, pero importe_max supera el umbral de
+    # reglas_negocio.umbral_aprobacion_manual.
+    IMPORTE_SUPERIOR_UMBRAL = "importe_superior_umbral"
+    # Las dos cosas a la vez.
+    AMBOS = "ambos"
+
+
 # Número máximo de fotos que se aceptan en un lead.
 #
 # PROVISIONAL — PENDIENTE (limitación documentada en
