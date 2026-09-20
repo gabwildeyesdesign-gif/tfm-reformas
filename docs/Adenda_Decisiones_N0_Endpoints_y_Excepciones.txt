@@ -14,7 +14,7 @@ endpoints y revisión técnica final.
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
-| 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | Producción N0: temporizador n8n llama al endpoint directamente (no pasa por MCP). MCP tool disponible para N1+, no ejercida en N0 |
+| 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md` |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
 autenticación del webhook): además del cuerpo, toda petición debe traer la
@@ -145,6 +145,19 @@ atiende una llamada repetida devuelve lo guardado sin recalcular nada.
 2. Motivos de create_followup_task (dos disparadores)
 
 - sin_respuesta_visita: 48h desde la pre-estimación sin reservar visita.
+  **[Mecanismo cerrado por D13, 2026-09-20]** Detectado por un Schedule
+  Trigger periódico en n8n (no un nodo Wait por lead) que consulta
+  `oportunidades` filtrando por `estado='presupuesto_enviado' AND
+  fecha_ultimo_contacto IS NULL` y una antigüedad de creación superior a
+  48h; cada fila encontrada dispara una llamada a este endpoint. Se
+  prefirió este diseño porque el umbral de 48h se relee en cada ciclo
+  desde `reglas_negocio` (una ejecución en espera no lo actualizaría
+  retroactivamente) y el estado es auditable con una consulta SQL
+  directa. La columna `fecha_ultimo_contacto` y el estado
+  `seguimiento_pendiente` ya existen en el esquema (migración paso7,
+  verificada, 17/17); el Schedule Trigger en sí no está construido
+  todavía. Ver
+  `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`.
 - sin_decision_post_visita: N días desde visitas.fecha_propuesta sin que
   oportunidades.estado llegue a ganada/perdida. N = 5 días
   laborables, almacenado en reglas_negocio como

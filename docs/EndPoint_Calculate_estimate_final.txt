@@ -8,6 +8,22 @@ Nivel N0 · 2026-09-19 · Rama feat/n0-calculate-estimate
 Estado: implementado y verificado con ejecución real. SIN COMMITEAR: todo
 está en el árbol de trabajo, a la espera de la revisión de Gabi.
 
+*NOTA POSTERIOR (2026-09-20, sesión D13/D14 — no reescribe este documento,
+lo corrige por remisión, siguiendo la misma disciplina de "no borrar el
+histórico" que usa el resto de la documentación del proyecto): este
+bloque SÍ se comiteó y se mergeó a main (rama feat/n0-calculate-estimate,
+después feat/n0-iva-y-seguimiento). La frase "SIN COMMITEAR" de arriba y
+la sección 14 quedan desactualizadas en cuanto al estado de Git — ver la
+nota ampliada al final de este documento. Además, los campos de salida
+importe_min/importe_max que este documento describe en todo su contenido
+fueron renombrados a importe_min_con_iva/importe_max_con_iva por D14
+(2026-09-20): el valor que ahora se guarda y se devuelve incluye el IVA.
+La fórmula, el Gate y el resto del razonamiento de este documento NO
+cambian — solo el nombre de esos dos campos y que el importe que
+contienen ya lleva IVA. Detalle completo:
+docs/Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt §1.2 y
+docs/Informe_Decisiones_N0_TFM_Reformas.txt.*
+
 Este documento está escrito para alguien que está aprendiendo Python y
 SQL. No da nada por sabido: la sección 2 explica todos los conceptos que
 aparecen, y conviene leerla antes que el resto si alguno suena extraño.
@@ -910,3 +926,12 @@ Para ver lo que ha quedado guardado, en el editor SQL de Supabase:
     4. Merge a main solo con confirmación explícita de Gabi, y siempre
        con git merge --ff-only.
     5. Probar la tool desde el nodo MCP Client Tool real de n8n.
+
+*ACTUALIZACIÓN POSTERIOR (2026-09-20): los pasos 1 a 4 de esta lista SE
+COMPLETARON. El bloque se comiteó, se subió y se mergeó a main
+(confirmado: main está en el mismo commit que la rama de trabajo de esa
+sesión, luego avanzada por D9 y D13/D14). El paso 5 (probar la tool
+desde el nodo MCP Client Tool real de n8n) sigue pendiente — n8n se
+instaló en esta sesión pero el workflow real de captura y cálculo aún no
+se ha construido. Ver también la nota al inicio de este documento sobre
+el renombrado de importe_min/importe_max por D14.*

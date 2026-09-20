@@ -9,6 +9,19 @@ Estado: implementado y verificado con ejecución real. SIN COMMITEAR.
 Continúa docs/EndPoint_Calculate_estimate_final.txt, que describe el
 endpoint completo; este documento cubre solo lo que D9 cambió.
 
+*NOTA POSTERIOR (2026-09-20, sesión D13/D14 — no reescribe este
+documento, lo corrige por remisión): este bloque SÍ se comiteó y se
+mergeó a main. La frase "SIN COMMITEAR" de arriba y la sección 13 quedan
+desactualizadas en cuanto al estado de Git — ver la nota ampliada al
+final de este documento. Los importes que aparecen en los ejemplos de
+este documento (importe_min/importe_max) fueron renombrados a
+importe_min_con_iva/importe_max_con_iva por D14 (2026-09-20): el sistema
+ahora guarda y devuelve el importe con IVA incluido. El razonamiento del
+umbral por categoría (D9) que cubre este documento NO cambia: el Gate se
+sigue evaluando contra el importe SIN IVA. Detalle completo:
+docs/Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt §1.2 y
+docs/Informe_Decisiones_N0_TFM_Reformas.txt.*
+
 Escrito, como el anterior, para alguien que está aprendiendo Python y
 SQL: los conceptos nuevos se explican donde aparecen, y los que ya se
 explicaron antes se citan indicando dónde están.
@@ -621,3 +634,9 @@ servidor: el servicio lee la tabla en cada cálculo.
   codigo) ya la da esta tabla con un UPDATE normal.
 - Después: revisión, commits por bloques, push, y merge a main solo con
   confirmación explícita y con --ff-only.
+
+*ACTUALIZACIÓN POSTERIOR (2026-09-20): todo lo anterior de esta sección
+SE COMPLETÓ. El bloque se comiteó, se subió y se mergeó a main
+(confirmado: main está en el mismo commit que la rama de trabajo de esa
+sesión, luego avanzada por D13/D14). Ver también la nota al inicio de
+este documento sobre el renombrado de importe_min/importe_max por D14.*
