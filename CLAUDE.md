@@ -15,6 +15,36 @@ actual: Nivel N0 (núcleo mínimo aprobable).
   petición real, ver la salida real) — nunca solo lectura de código.
 - Si algo se contradice con lo que dice este archivo, dilo
   explícitamente antes de asumir nada; no lo reinterpretes en silencio.
+- El terminal real de trabajo es Git Bash sobre Windows, no PowerShell.
+  Las rutas se escriben con barra normal (app/db/connection.py) y el
+  intérprete siempre es ./venv/Scripts/python.exe. Cuando un comando
+  lance un proceso hijo de Python y capture su salida, se le pone
+  delante PYTHONIOENCODING=utf-8, o la primera tilde o eñe lo revienta
+  (el porqué está en el gotcha de cp1252, más abajo). Esto no anula la
+  nota sobre curl.exe y el alias curl: esa sigue valiendo para las
+  pruebas que Gabi hace a mano en una consola de PowerShell.
+- Un script de verificación que espera una excepción tiene que marcar
+  FALLO explícito cuando NO sale ninguna. Se hace con la rama else: del
+  try, con un mensaje del tipo "la excepción se ha tragado". El motivo
+  es un caso real (D16): una guarda mal indentada dejó el raise dentro
+  del if y la excepción se suprimía en silencio; la comprobación "no es
+  InterfaceError" daba [OK] sobre ese fallo, porque si no sale nada,
+  tampoco sale un InterfaceError. El fallo silencioso es peor que el
+  error que se venía a arreglar, y solo esa rama else lo detecta.
+- La prueba en negativo se ejecuta contra TODAS las versiones
+  defectuosas conocidas, no solo contra la original. No basta con
+  revertir el arreglo (git stash) y ver que falla: si durante el
+  trabajo apareció otra versión rota —por ejemplo un intento previo mal
+  indentado que ya no está en disco—, hay que recrearla en una copia,
+  ejecutar el script contra ella y enseñar la salida literal, antes de
+  restaurar la buena y confirmarlo con git diff. Cada versión rota
+  demuestra que el script detecta un modo de fallo distinto.
+- Cuando un arreglo depende de la ESTRUCTURA del código y no solo de su
+  sintaxis, se verifica con ast.parse y se enseña la salida. py_compile
+  no basta: devuelve exit code 0 sobre código que compila pero que anida
+  las sentencias de forma equivocada. Es exactamente lo que ocurrió en
+  D16, con el raise atrapado dentro del if porque Python ignora los
+  comentarios al calcular los niveles de indentación.
 
 ## REGLA CRÍTICA: nunca arrancar uvicorn con --reload
 
@@ -172,9 +202,12 @@ SOLO REST.
 > check_mcp_calculate_estimate 19/19, check_migracion_iva_y_seguimiento
 > 17/17, y el resto de la suite sin fallos.
 >
-> **Siguiente bloque: el barrido de seguimiento de D13** (el flujo de n8n
+> **Bloque actual: el cierre determinista posterior a calculate_estimate
+> en n8n** (D17: Code node, rama False, casos de Gate).
+>
+> **Después, el barrido de seguimiento de D13** (el flujo de n8n
 > que consulta oportunidades.fecha_ultimo_contacto y marca
-> 'seguimiento_pendiente'), todavía sin empezar. Después, POST
+> 'seguimiento_pendiente'), todavía sin empezar. Luego, POST
 > /gate-decisions. Se aplica la misma regla de siempre: **no hacer merge
 > a `main` sin la confirmación explícita de Gabi**, y siempre con
 > `--ff-only`.
@@ -213,6 +246,21 @@ RESUELTO (2026-09-20): scripts/check_exception_handler.py daba 22/28
 porque no enviaba X-Webhook-Secret (el script es anterior a la
 autenticacion del webhook). Corregido: ahora 32/32. La causa no era el
 manejador de excepciones, que funcionaba bien.
+
+Guarda de conn.closed en get_transactional_connection() (D16),
+integrada en main el 2026-09-24 por fast-forward (commit 9c4197f): el
+rollback del bloque except ya no lanza InterfaceError encima del error
+original cuando la conexión ya está cerrada, que es la misma guarda que
+get_db_connection() tenía desde antes. Verificado con
+scripts/check_rollback_conn_cerrada.py 17/17 (tres casos: conexión
+cerrada + error, conexión viva + error, y sin error), y en negativo
+contra las DOS versiones rotas conocidas, 14/17 cada una: la original
+sin guarda (sale InterfaceError con el error real encadenado debajo) y
+una con la guarda mal indentada (no sale nada, la excepción se traga).
+Regresión sin cambios: check_create_lead_service 31/31 y
+check_leads_endpoint_http 12/12. Queda abierto el caso OperationalError,
+cuando psycopg2 todavía no ha detectado que la conexión murió y closed
+sigue valiendo 0.
 
 Pendiente: gate-decisions, visits, create-followup-task,
 get_business_rules y request_missing_information, la concurrencia
