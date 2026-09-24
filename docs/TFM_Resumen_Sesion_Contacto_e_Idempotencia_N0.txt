@@ -1,0 +1,450 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+RESUMEN DE SESIÓN: VALIDACIÓN DE CONTACTO, IDEMPOTENCIA DE POST /leads
+Y EMAIL SIN DISTINGUIR MAYÚSCULAS
+Fases 1 y 2 de la rama feat/n0-sesion-y-contacto (la Fase 3 queda sin
+empezar)
+
+Documento de contexto de proyecto · Nivel N0 · 2026-09-24
+
+Rama: feat/n0-sesion-y-contacto, creada desde main (1f361fa).
+  - Fase 1: COMMITEADA en la rama (7538273), con el visto bueno de Gabi.
+  - Fase 2: con el visto bueno de Gabi y el ajuste del código HTTP de la
+    repetición (200), commiteada en la rama.
+  - Cambio de plan: por la incompatibilidad descrita abajo, las Fases 1 y
+    2 se integran en main YA, sin esperar a la Fase 3 (merge --ff-only
+    solo tras la confirmación explícita de Gabi).
+
+ATENCIÓN: la migración paso8 YA ESTÁ APLICADA en la base de datos real.
+El código de main todavía usa ON CONFLICT (email), que desde paso8 no
+tiene restricción que lo respalde: cualquier POST /leads servido desde
+main responde 500 (InvalidColumnReference). No arrancar el servidor
+desde main hasta integrar esta rama.
+
+Fuente de todos los recuentos de este documento: ejecución real de los
+scripts check_*.py y de consultas SQL contra la base de datos de
+Supabase, lanzadas durante la sesión. No hay ninguna confirmación manual
+en paneles. Las líneas de salida citadas están copiadas de esas
+ejecuciones, no insertadas automáticamente desde archivos.
+
+
+================================================================
+1. HALLAZGOS QUE MOTIVARON LA RAMA
+================================================================
+
+(a) telefono solo se validaba por longitud: "telefono666555" se aceptaba
+    y se guardaba en clientes.telefono.
+(b) El comentario de D2 en leads_service.py afirmaba que el contacto de
+    cada llamada quedaba en leads.datos_estructurados. Era FALSO: solo se
+    guardaban los cuatro datos de la reforma, así que con un email
+    repetido el nombre y el teléfono nuevos se perdían.
+(c) lead_token era obligatorio en LeadCreate pero nunca se guardaba: un
+    reintento de n8n creaba un segundo lead.
+(d) CANAL_FORMULARIO_WEB y el comentario de mensaje_original estaban
+    obsoletos: el canal real es un chat (Agente 1 de n8n).
+(e) Añadido por Gabi al empezar la Fase 2: EmailStr solo pasa a
+    minúsculas el DOMINIO, así que "Pepe@gmail.com" y "pepe@gmail.com"
+    eran dos clientes distintos.
+
+
+================================================================
+2. ARCHIVOS TOCADOS
+================================================================
+
+Fase 1 (commit 7538273):
+  app/schemas/leads.py              validador de teléfono
+  app/services/leads_service.py     clave contacto, CANAL_CHAT_WEB,
+                                    comentarios de D2 y mensaje_original
+  app/api/leads.py                  docstring (chat, no formulario)
+  prompts/agente1_captura.md        NUEVO: prompt del Agente 1
+  scripts/check_schemas.py
+  scripts/check_create_lead_service.py
+  scripts/check_leads_endpoint_http.py
+
+Fase 2 (sin commitear):
+  app/schemas/leads.py              validador de email, lead_token
+                                    max_length=100, creado en la respuesta
+  app/services/leads_service.py     idempotencia, ON CONFLICT
+                                    ((lower(email)))
+  scripts/migraciones_ejecutadas/paso8_email_lower_y_lead_token.py  NUEVO
+  scripts/check_migracion_email_lower_y_lead_token.py              NUEVO
+  scripts/dump_schema.py            lee también pg_indexes; escribe LF
+  scripts/check_schemas.py
+  scripts/check_create_lead_service.py
+  scripts/check_leads_endpoint_http.py
+  docs/schema_actual.sql            regenerado
+  docs/Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt
+  docs/TFM_Resumen_Sesion_Contacto_e_Idempotencia_N0.txt  (este)
+
+
+================================================================
+3. FASE 1 — VALIDACIÓN Y CONTACTO (sin migración)
+================================================================
+
+3.1 Teléfono
+------------
+field_validator("telefono", mode="after") en LeadCreate:
+  1. Pydantic aplica primero Field(min_length=1, max_length=30) sobre el
+     texto tal como llega (30 = ancho de clientes.telefono).
+  2. Se borra la decoración con [\s\-.()]: espacios, y con \s también el
+     tabulador, el salto de línea y el espacio duro U+00A0; guiones,
+     puntos y paréntesis.
+  3. Se exige fullmatch de \+?[0-9]{9,15}.
+  4. Se devuelve el número limpio, que es lo que se guarda:
+     "+34 666-777-444" -> "+34666777444".
+Un teléfono inválido da 422 con loc ["body","telefono"] y el mensaje
+"teléfono no válido: ...".
+
+Dos trampas de Python evitadas a propósito:
+  - [0-9] y no \d: \d acepta dígitos Unicode (árabes, devanagari).
+  - fullmatch y no match con "$": "$" también encaja antes de un salto
+    de línea final. Hoy es defensa extra, porque \s ya borra ese salto.
+
+3.2 Contacto de cada llamada
+----------------------------
+leads.datos_estructurados lleva una clave "contacto" con nombre, email y
+telefono de ESA llamada. El ON CONFLICT de clientes no cambia: D2 sigue
+vigente y la ficha del cliente no se sobrescribe. El comentario de D2 se
+corrigió y deja escrito que antes era falso.
+
+3.3 Canal
+---------
+CANAL_FORMULARIO_WEB -> CANAL_CHAT_WEB = "chat_web". Consulta previa en
+la base de datos real:
+  - leads.canal: VARCHAR(50), admite NULL, sin DEFAULT.
+  - Ningún CHECK sobre canal (el único de leads es chk_leads_m2_rango).
+  - 17 filas, todas con 'formulario_web'.
+  - Ningún clientes.telefono existente incumplía el formato nuevo.
+Las 17 filas antiguas NO son fiables: algunas entraron por el chat con
+la constante obsoleta. No se reescriben.
+
+El comentario de mensaje_original dice ahora la verdad: sigue NULL
+porque la conversación vive en la memoria de n8n, no en el backend.
+
+3.4 Prompt del Agente 1
+-----------------------
+Guardado literalmente en prompts/agente1_captura.md. Sus reglas de
+teléfono coinciden con las del backend (9 a 15 dígitos, "+" opcional,
+misma decoración).
+
+
+================================================================
+4. FASE 2 — EMAIL EN MINÚSCULAS E IDEMPOTENCIA
+================================================================
+
+4.1 Consulta previa (enseñada antes de migrar)
+----------------------------------------------
+  SELECT lower(email), count(*) FROM clientes GROUP BY 1
+  HAVING count(*) > 1;                                  -> 0 filas
+  Emails con alguna mayúscula (email <> lower(email))   -> 0 filas
+  UNIQUE existente: clientes_email_key. Ninguna FK depende de ella (la
+  única FK hacia clientes, leads_cliente_id_fkey, va a clientes_pkey).
+Sin duplicados, así que se siguió con la migración.
+
+4.2 Email en minúsculas (defensa doble)
+---------------------------------------
+  - LeadCreate: field_validator("email", mode="after") que devuelve
+    valor.lower().
+  - Base de datos: índice único clientes_email_lower_key sobre
+    lower(email), en lugar de la UNIQUE (email). Tiene que ser un índice
+    porque una CONSTRAINT UNIQUE solo admite nombres de columna.
+  - create_lead usa ON CONFLICT ((lower(email))). El doble paréntesis
+    indica una expresión, no una columna.
+
+4.3 Migración paso8
+-------------------
+Una transacción, idempotente (se ejecutó dos veces; la segunda no tocó
+nada):
+  0.  Repite la búsqueda de duplicados; si los hay, aborta con rollback.
+  1a. CREATE UNIQUE INDEX IF NOT EXISTS clientes_email_lower_key
+      ON clientes (lower(email)).
+  1b. DROP CONSTRAINT IF EXISTS clientes_email_key (después de 1a, para
+      que el email nunca quede sin protección).
+  2a. leads.lead_token VARCHAR(100) NULL.
+  2b. UNIQUE leads_lead_token_key (lead_token), solo si no existe.
+Las 17 filas antiguas quedan con lead_token NULL. UNIQUE admite varios
+NULL, y el script de verificación lo comprueba con inserciones reales.
+
+4.4 Mecanismo de idempotencia: por qué "UNIQUE + captura"
+---------------------------------------------------------
+Hecho que condiciona el diseño: create_lead escribe primero el cliente
+(upsert) y después el lead, porque leads.cliente_id es una FK. Cuando se
+detecta el token repetido, el upsert del cliente ya se ha ejecutado, y
+cualquier solución tiene que deshacerlo.
+
+Opciones evaluadas:
+  A. ON CONFLICT (lead_token) DO NOTHING (el patrón de D8). No lanza
+     error, así que la transacción confirmaría el upsert del cliente. Una
+     repetición con otro email dejaría un cliente huérfano. Habría que
+     forzar el rollback con una excepción propia.
+  B. Bloqueo consultivo + SELECT. Sigue siendo un SELECT previo, lo que
+     Gabi pidió evitar. La UNIQUE quedaría solo como segunda red.
+  C. ELEGIDA: INSERT normal del lead y captura de UniqueViolation fuera
+     del "with". get_transactional_connection() deshace TODA la
+     transacción (upsert incluido), y después se lee el lead existente.
+     Solo se trata la violación de leads_lead_token_key; cualquier otra
+     se relanza.
+Motivo: reutiliza la garantía de rollback ya verificada (D16) sin código
+de rollback nuevo. Con peticiones simultáneas, la segunda espera en el
+índice hasta que la primera confirma y entonces recibe la violación.
+Nunca pueden existir dos leads con el mismo token.
+
+Consecuencias aceptadas:
+  - Cada repetición gasta números de las secuencias SERIAL (quedan
+    huecos en los ids) y deja una línea ERROR en el log de Postgres.
+  - Una repetición con el mismo token y datos distintos devuelve el lead
+    original e ignora los datos nuevos.
+
+4.5 Otras decisiones de la Fase 2
+---------------------------------
+  - Código HTTP de una repetición: 200 con creado=false (un alta nueva
+    sigue siendo 201). Primero se implementó 201 en los dos casos, como
+    en las APIs con clave de idempotencia (Stripe). Gabi pidió usar el
+    mismo código que POST /calculate-estimate en su repetición, por
+    coherencia entre endpoints de la misma API. Ese código es 200 (P8 de
+    Plan_calculate_estimate.txt: "un 201 mentiría en los reintentos").
+    Matiz: calculate-estimate responde 200 SIEMPRE, y P8 descartó la
+    variante 201/200 para ese endpoint por ser una llamada de tipo
+    "calcula". POST /leads sí crea un recurso, así que un alta real
+    conserva el 201. Lo resuelve el adaptador app/api/leads.py con un
+    parámetro Response: si creado es False, response.status_code = 200.
+    Prueba en negativo: con el adaptador anterior (201 fijo),
+    check_leads_endpoint_http da 22/23.
+  - VARCHAR(100) y no VARCHAR sin límite (se aparta del enunciado, y se
+    dijo expresamente): un índice btree admite unos 2.700 bytes por
+    entrada, y un token enorme daría 500. Con max_length=100 en Pydantic
+    da 422.
+  - LeadCreateResponse gana creado: bool, obligatorio. status en una
+    repetición es el estado ACTUAL de la oportunidad (puede ser, por
+    ejemplo, 'pendiente_aprobacion').
+  - dump_schema.py solo leía information_schema, que no conoce los
+    índices de expresión: schema_actual.sql habría dejado de mostrar que
+    el email es único. Ahora lee también pg_indexes (antes de paso8 había
+    0 índices de ese tipo) y escribe con newline="\n".
+  - La Adenda se actualizó en el mismo bloque: fila 1 del contrato y, en
+    la tabla 5.1, el 422 del teléfono, el 422 del token y el 201 con
+    creado=false, además de párrafos sobre idempotencia, email y
+    contacto.
+
+
+================================================================
+5. VERIFICACIÓN (fuente: scripts check_*.py, ejecución real)
+================================================================
+
+Fase 1 (antes del commit 7538273):
+  check_schemas                 54/54  (antes 37)
+  check_create_lead_service     34/34  (antes 31)
+  check_leads_endpoint_http     18/18  (antes 12)
+
+Fase 2 (suite completa sobre la versión restaurada):
+  check_schemas                             59/59
+  check_create_lead_service                 52/52
+  check_leads_endpoint_http                 23/23
+  check_migracion_email_lower_y_lead_token  13/13  (nuevo)
+  check_webhook_auth_http                   15/15
+  check_exception_handler                   32/32  (tras limpiar restos)
+  check_calculate_estimate_http             24/24
+  check_estimate_service                    129/129
+  check_mcp_calculate_estimate              19/19
+  check_migracion_m2_leads                  23/23  (tras limpiar restos)
+  check_rollback_conn_cerrada               17/17
+  check_rls_estado                          sin errores
+
+Líneas clave:
+  Respuesta D: {'lead_id': 337, ..., 'creado': False}
+    (mismo token que A, OTRO email a propósito)
+  [OK] 0 filas nuevas en clientes, leads y oportunidades
+       ((14, 20, 20) -> (14, 20, 20))
+  [OK] El email de la repeticion NO se guardo (el upsert del cliente se
+       deshizo) (n=0)
+  8 hilos simultáneos: respuestas: 8, errores: [], creado=True: 1,
+       lead_ids distintos: {344}
+  [OK] E6 ON CONFLICT (email) del código antiguo -> FALLA
+       (InvalidColumnReference)
+  HTTP, el mismo cuerpo repetido: 201 {"lead_id":352,...,"creado":false},
+       0 filas nuevas (antes del ajuste del código HTTP). Tras el ajuste:
+       alta -> HTTP 201 {"lead_id":450,...,"creado":true};
+       repetición -> HTTP 200 {"lead_id":450,...,"creado":false}
+
+Pruebas en negativo:
+  Fase 1, contra el esquema de main (sin validador):
+    check_schemas 39/54 ("la excepcion se ha tragado");
+    check_leads_endpoint_http 13/18 ("telefono666555" -> HTTP 201).
+  Fase 2, versión rota 1 (el código de la Fase 1 contra la base migrada):
+    check_create_lead_service termina con código 1 (InvalidColumnReference);
+    check_leads_endpoint_http da HTTP 500 en la primera alta.
+  Fase 2, versión rota 2 (el código actual SIN validador de email):
+    check_schemas 58/59; check_create_lead_service 51/52 (tras corregir
+    la prueba, ver 6.6).
+  En todas: los archivos buenos se restauraron y se confirmaron idénticos
+  a las copias con cmp.
+
+Estructura (ast.parse):
+  - validar_telefono está DENTRO de LeadCreate, con el raise dentro del if.
+  - create_lead: try -> return _crear_lead_nuevo(data); except
+    UniqueViolation -> [If(Raise), Return]. El raise está dentro del if y
+    el return de la búsqueda va después.
+
+
+================================================================
+6. ERRORES ENCONTRADOS Y SOLUCIONES
+================================================================
+
+6.1 Heredoc de Git Bash convirtió "\n" en un salto de línea real
+     (dos veces)
+  Síntoma: SyntaxError "unterminated string literal" en
+    check_leads_endpoint_http.py; en dump_schema.py, un newline="..."
+    partido en dos líneas.
+  Causa: se escribió código Python con secuencias de escape dentro de un
+    heredoc de Bash.
+  Solución: corregido con el editor. No se vuelven a escribir secuencias
+    de escape dentro de heredocs.
+
+6.2 Path.write_text dejó un archivo en CRLF
+  Síntoma: `file` informaba "with CRLF line terminators" en
+    check_create_lead_service.py.
+  Causa: en Windows, write_text sin newline convierte "\n" en "\r\n" (el
+    problema que ya documenta .gitattributes).
+  Solución: sed -i 's/\r$//'. Las ediciones siguientes usan write_bytes,
+    y dump_schema.py escribe ahora con newline="\n".
+
+6.3 El test esperaba que "666777444\n" se rechazara, y se aceptaba
+  Causa: la expectativa era errónea. \s borra el salto de línea al
+    limpiar, y se guarda "666777444" limpio.
+  Decisión: se mantiene \s (también limpia el espacio duro que aparece
+    al copiar un número de una web o de WhatsApp). El caso pasó a la
+    lista de aceptados, junto con el del espacio duro.
+
+6.4 OperationalError "server closed the connection unexpectedly"
+     (tres veces en la sesión)
+  Síntoma: POST /leads devolvió 500 tras más de 3 minutos colgado; en
+    otra ejecución, murió check_exception_handler; una vez falló al
+    abrir la conexión.
+  Diagnóstico: cayeron a la vez la conexión del pool del servidor y la
+    conexión aparte del script, así que la causa es Supabase o la red,
+    no el código. check_connection respondió en 2,9 s después, con los
+    recuentos intactos: el rollback funcionó y no quedó nada a medias.
+  Solución: ninguna en esta rama, por decisión de Gabi. Queda como
+    PENDIENTE PRIORITARIO: no hay timeout de conexión, y la petición
+    llegó a colgar más de 3 minutos.
+
+6.5 Fallo de DNS
+  Síntoma: could not translate host name
+    "aws-0-eu-central-1.pooler.supabase.com".
+  Causa: corte momentáneo de red de la máquina (falló en 1,9 s, antes de
+    ejecutar código del proyecto). nslookup resolvió poco después.
+  Solución: repetir la prueba; pasó.
+
+6.6 Una prueba que no detectaba su propio defecto (encontrado con la
+     prueba en negativo)
+  Síntoma: sin el validador de email, check_create_lead_service seguía
+    dando 51/51.
+  Causa: la prueba leía el email al final. La segunda llamada (ya en
+    minúsculas) choca con el índice y su DO UPDATE SET email =
+    EXCLUDED.email reescribe el email guardado. Leído al final, salía en
+    minúsculas aunque faltara el validador.
+  Solución: leer el email justo después de la PRIMERA llamada. Con eso
+    la versión rota da 51/52.
+  Efecto colateral documentado: ese upsert reescribe las mayúsculas del
+    email con las de la última llamada. Con el validador no cambia nada.
+
+6.7 Restos de una ejecución interrumpida contaminaron otros scripts
+  Síntoma: check_migracion_m2_leads 22/23 y, al repetirlo,
+    check_exception_handler 31/32.
+  Causa: el OperationalError de 6.4 mató check_exception_handler antes
+    de limpiar. Dejó 3 filas 'sistema' en logs y un cliente, lead y
+    oportunidad con handler@example.com / tokHANDLER.
+      - check_migracion_m2_leads hace max(detalle->>'tipo') sobre TODAS
+        las filas 'sistema', y "ZeroDivisionError" gana alfabéticamente.
+      - La prueba B de check_exception_handler encontró el cliente viejo
+        (n=1).
+  Solución: confirmado con SELECT sobre logs y clientes. Los scripts
+    limpiaron sus restos al volver a ejecutarse, y después dieron 23/23 y
+    32/32 con el estado base de siempre (12 clientes, 17 leads, 17
+    oportunidades, 9 logs).
+
+6.8 Contradicción de documentación
+  D17, D18 y "D16.10" no existen en ningún archivo de docs/. Solo hay
+  menciones a D16 y D17 en CLAUDE.md. Gabi pasará el texto para
+  sincronizarlos en el commit de docs final.
+
+6.9 Omisión propia corregida
+  El 422 del teléfono (Fase 1) no se reflejó en la Adenda en su momento.
+  Se añadió en la Fase 2 junto con los demás cambios de contrato.
+
+
+================================================================
+7. LECCIÓN DE PROCESO: EXPAND/CONTRACT
+================================================================
+
+Qué pasó. La migración paso8 creó el índice único sobre lower(email) y,
+en la MISMA migración, eliminó la UNIQUE clientes_email_key. La base de
+datos es una sola, compartida por todas las ramas, pero el código de
+main seguía usando ON CONFLICT (email). Desde que se ejecutó paso8, main
+quedó roto: cualquier POST /leads servido desde main responde 500
+(InvalidColumnReference), hasta integrar la rama. Eso obligó a cambiar
+el plan e integrar las Fases 1 y 2 antes de hacer la Fase 3.
+
+Lo correcto habría sido partirla en DOS migraciones:
+  1. EXPANDIR (paso8a): crear el índice único sobre lower(email) y la
+     columna lead_token con su UNIQUE, MANTENIENDO clientes_email_key.
+     main sigue funcionando: su ON CONFLICT (email) aún tiene la UNIQUE
+     vieja, y el índice nuevo solo añade una restricción que ningún dato
+     existente viola.
+  2. CONTRAER (paso8b): eliminar clientes_email_key en una migración
+     aparte, DESPUÉS de integrar en main el código que ya usa
+     ON CONFLICT ((lower(email))).
+Entre los dos pasos, el código viejo y el nuevo funcionan a la vez
+contra la misma base de datos.
+
+Regla desde ahora: toda migración que RETIRE algo (una restricción, una
+columna, un índice, un valor de un CHECK) que el código de main todavía
+use se parte en expandir y contraer, y el plan lo dice explícitamente.
+Las migraciones puramente aditivas (como la columna lead_token sola) no
+lo necesitan.
+
+
+================================================================
+8. SUGERENCIAS Y PENDIENTES
+================================================================
+
+Prioritario:
+  - Timeout de conexión a la base de datos: connect_timeout en la
+    conexión y statement_timeout en la sesión. Hoy una conexión muerta
+    cuelga la petición más de 3 minutos. Enlaza con el caso
+    OperationalError que D16 dejó abierto (psycopg2 no detecta a tiempo
+    que la conexión murió y closed sigue valiendo 0).
+  - No arrancar el servidor desde main hasta integrar esta rama (ver la
+    advertencia del principio).
+
+Decisiones abiertas para Gabi:
+  - ¿Detectar un token repetido con DATOS DISTINTOS y responder 409, en
+    vez de devolver el original en silencio?
+  - Las 17 filas con canal 'formulario_web' no son fiables. Si interesa
+    unificarlas, hace falta una migración y una decisión sobre qué valor
+    darles.
+  - oportunidades.lead_id no tiene UNIQUE: el esquema permite varias
+    oportunidades por lead. Se decide con gate-decisions y visits.
+
+Fragilidades de scripts ajenos (anotadas, no tocadas en esta rama):
+  - check_migracion_m2_leads: max(tipo) sobre todas las filas de logs;
+    debería filtrar por su propia ruta o por un id mayor que el anterior.
+  - check_exception_handler: no limpia al EMPEZAR, y su prueba D solo
+    mira el código 201. Con idempotencia, un 201 puede ser una
+    repetición (creado=false) de un resto anterior; debería comprobar
+    también creado=true.
+  - Tokens fijos compartidos entre scripts: "tok-estr" lo usan
+    check_calculate_estimate_http y check_mcp_calculate_estimate. Si uno
+    se corta antes de limpiar, el otro recibe el lead viejo. Convendría
+    un prefijo por script o un token aleatorio (uuid4).
+
+Siguientes pasos:
+  1. Integrar las Fases 1 y 2 en main (--ff-only, con confirmación
+     explícita de Gabi) y hacer push. Con eso, main vuelve a ser
+     compatible con la base de datos.
+  2. Fase 3: GET /leads/session/{lead_token} (sin empezar), en esta misma
+     rama reabierta desde main o en una nueva. Es aditiva: no rompe nada.
+  3. Commit de docs aparte: D16, D17 y D18 en docs/ (texto de Gabi) y
+     CLAUDE.md (Hecho y verificado, bloque actual, pendiente prioritario
+     del timeout, regla expand/contract).
