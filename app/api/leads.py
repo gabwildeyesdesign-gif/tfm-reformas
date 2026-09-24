@@ -17,7 +17,11 @@ entre las dos puertas.
 # relacionados en un archivo aparte para no tener main.py con cincuenta
 # funciones dentro. Luego se engancha a la aplicación principal con
 # app.include_router().
-from fastapi import APIRouter, Depends
+# Response: el objeto de la respuesta HTTP que FastAPI está preparando.
+# Si una función de endpoint declara un parámetro de tipo Response,
+# FastAPI se lo pasa, y la función puede cambiarle el código de estado
+# antes de que se envíe (lo usa post_leads en las repeticiones).
+from fastapi import APIRouter, Depends, Response
 
 from app.api.security import verificar_webhook_secret
 from app.schemas.leads import LeadCreate, LeadCreateResponse
@@ -40,7 +44,9 @@ router = APIRouter(tags=["leads"])
 #
 # status_code=201 es el código HTTP de "Created", la semántica correcta
 # cuando una petición crea un recurso nuevo. Por defecto FastAPI
-# devolvería 200 (OK genérico).
+# devolvería 200 (OK genérico). Es el código POR DEFECTO de este
+# endpoint: post_leads lo cambia a 200 cuando la llamada es una
+# repetición y no ha creado nada (ver dentro de la función).
 #
 # dependencies=[Depends(verificar_webhook_secret)] le dice a FastAPI que
 # ejecute esa comprobación ANTES de la función del endpoint. Si el
@@ -55,7 +61,7 @@ router = APIRouter(tags=["leads"])
     status_code=201,
     dependencies=[Depends(verificar_webhook_secret)],
 )
-def post_leads(data: LeadCreate) -> LeadCreateResponse:
+def post_leads(data: LeadCreate, response: Response) -> LeadCreateResponse:
     """
     Alta de un lead nuevo. La llama n8n cuando el Agente 1 del chat web
     ha recogido y confirmado con el cliente todos los datos.
@@ -73,6 +79,18 @@ def post_leads(data: LeadCreate) -> LeadCreateResponse:
     escenario para el que se eligió ThreadedConnectionPool en
     app/db/connection.py.
     """
-    # Una sola línea: delegar. Si esto creciera, sería señal de que
-    # lógica de negocio se está filtrando a la capa equivocada.
-    return create_lead(data)
+    # Delegar: toda la lógica (incluida la idempotencia por lead_token)
+    # vive en services/. Si esto creciera, sería señal de que lógica de
+    # negocio se está filtrando a la capa equivocada.
+    resultado = create_lead(data)
+
+    # Traducir el resultado a HTTP, que sí es trabajo de este adaptador:
+    # si la llamada es una REPETICIÓN (mismo lead_token, creado=False), no
+    # se ha creado nada, y un 201 "Created" mentiría. Se responde 200, el
+    # mismo código que devuelve POST /calculate-estimate en su repetición
+    # (decisión P8 de su plan: "un 201 mentiría en los reintentos"). Así
+    # los dos endpoints de la misma API responden igual a un reintento.
+    # Un alta real sigue siendo 201, porque POST /leads sí crea un recurso.
+    if not resultado.creado:
+        response.status_code = 200
+    return resultado

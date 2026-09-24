@@ -1,19 +1,19 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-09-20 20:43:26 UTC
+-- Generado por scripts/dump_schema.py el 2026-09-24 18:30:33 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
 -- table_constraints, key_column_usage, constraint_column_usage y
--- check_constraints), no copiado de ningun archivo previo.
+-- check_constraints) y pg_indexes, no copiado de ningun archivo previo.
 --
 -- Tablas: 9
 -- ==========================================================================
 
 
 -- ------------------------------------------------------------------------
--- Tabla: clientes   (0 filas en el momento del volcado)
+-- Tabla: clientes   (18 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE clientes (
     id                       SERIAL NOT NULL,
@@ -21,12 +21,11 @@ CREATE TABLE clientes (
     email                    VARCHAR(150) NOT NULL,
     telefono                 VARCHAR(30),
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT clientes_pkey PRIMARY KEY (id),
-    CONSTRAINT clientes_email_key UNIQUE (email)
+    CONSTRAINT clientes_pkey PRIMARY KEY (id)
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: leads   (0 filas en el momento del volcado)
+-- Tabla: leads   (23 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE leads (
     id                       SERIAL NOT NULL,
@@ -36,13 +35,15 @@ CREATE TABLE leads (
     fotos_urls               JSONB,
     datos_estructurados      JSONB,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    lead_token               VARCHAR(100),
     CONSTRAINT leads_cliente_id_fkey FOREIGN KEY (cliente_id) REFERENCES clientes(id),
     CONSTRAINT leads_pkey PRIMARY KEY (id),
+    CONSTRAINT leads_lead_token_key UNIQUE (lead_token),
     CONSTRAINT chk_leads_m2_rango CHECK ((((datos_estructurados ->> 'm2'::text))::numeric > (0)::numeric) AND (((datos_estructurados ->> 'm2'::text))::numeric <= (500)::numeric))
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: logs   (0 filas en el momento del volcado)
+-- Tabla: logs   (16 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE logs (
     id                       SERIAL NOT NULL,
@@ -55,7 +56,7 @@ CREATE TABLE logs (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: oportunidades   (0 filas en el momento del volcado)
+-- Tabla: oportunidades   (23 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE oportunidades (
     id                       SERIAL NOT NULL,
@@ -76,7 +77,7 @@ CREATE TABLE oportunidades (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: presupuestos   (0 filas en el momento del volcado)
+-- Tabla: presupuestos   (14 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE presupuestos (
     id                       SERIAL NOT NULL,
@@ -153,6 +154,11 @@ CREATE TABLE visitas (
     CONSTRAINT visitas_pkey PRIMARY KEY (id),
     CONSTRAINT visitas_estado_check CHECK ((estado)::text = ANY ((ARRAY['reservada'::character varying, 'confirmada'::character varying, 'completada'::character varying, 'cancelada'::character varying])::text[]))
 );
+
+-- ==========================================================================
+-- Indices que no respaldan ninguna restriccion (pg_indexes)
+-- ==========================================================================
+CREATE UNIQUE INDEX clientes_email_lower_key ON public.clientes USING btree (lower((email)::text));
 
 -- ==========================================================================
 -- Row Level Security

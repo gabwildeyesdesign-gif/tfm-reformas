@@ -11,6 +11,8 @@ y con un JOIN por las tres claves foraneas reales.
 """
 
 import sys
+# threading: para lanzar varias llamadas a create_lead a la vez (prueba G).
+import threading
 from pathlib import Path
 
 # Este script vive en scripts/, pero el paquete "app" esta en la raiz del
@@ -34,7 +36,14 @@ from app.services.leads_service import create_lead
 
 EMAIL_A = "prueba-a@example.com"
 EMAIL_B = "prueba-b@example.com"
-EMAILS = (EMAIL_A, EMAIL_B)
+# Fase 2. EMAIL_R es el email de una REPETICION: no deberia llegar a
+# guardarse nunca, pero si el rollback fallara quedaria un cliente con el,
+# y la limpieza tiene que poder borrarlo. EMAIL_E se guarda en minusculas
+# (el validador de LeadCreate lo baja), por eso se escribe asi aqui.
+EMAIL_R = "prueba-repeticion@example.com"
+EMAIL_E = "prueba-mayus@example.com"
+EMAIL_G = "prueba-concurrencia@example.com"
+EMAILS = (EMAIL_A, EMAIL_B, EMAIL_R, EMAIL_E, EMAIL_G)
 
 ok = 0
 fallos = []
@@ -264,6 +273,180 @@ fa = fila_completa(cur, cn, resp_a.lead_id)
 comprobar("Y el lead A sigue con SU contacto original",
           fa["datos_estructurados"].get("contacto", {}).get("telefono") == "+34600111222",
           f"({fa['datos_estructurados'].get('contacto')})")
+
+comprobar("creado == True en las altas nuevas (A, B y C)",
+          resp_a.creado is True and resp_b.creado is True and resp_c.creado is True,
+          f"(A={resp_a.creado} B={resp_b.creado} C={resp_c.creado})")
+
+
+def contar_tres_tablas():
+    """(clientes, leads, oportunidades): filas totales en este momento."""
+    cur.execute(
+        "SELECT (SELECT count(*) FROM clientes) AS c, (SELECT count(*) FROM leads) AS l, "
+        "(SELECT count(*) FROM oportunidades) AS o;"
+    )
+    r = cur.fetchone()
+    cn.commit()
+    return (r["c"], r["l"], r["o"])
+
+
+# ==================================================================
+print("\n" + "=" * 78)
+print("PRUEBA D - MISMO lead_token que A (repeticion de n8n): idempotencia")
+print("=" * 78)
+# Mismo token que A, pero con OTRO email y otros datos a proposito. Si
+# create_lead solo mirase el token DESPUES de escribir el cliente y no
+# deshiciera ese upsert, aparecería un cliente nuevo con EMAIL_R aunque el
+# lead no se creara. El recuento de las tres tablas lo delataría.
+antes_d = contar_tres_tablas()
+print(f"  Filas antes (clientes, leads, oportunidades): {antes_d}")
+datos_d = LeadCreate(
+    nombre="Otra Persona",
+    email=EMAIL_R,
+    telefono="+34611222333",
+    tipo_reforma="integral_vivienda",
+    m2=80,
+    nivel_acabados="alto",
+    incluye_cambios_estructurales=True,
+    lead_token="tokA",                   # MISMO token que la prueba A
+)
+resp_d = create_lead(datos_d)
+print(f"  Respuesta A: {resp_a.model_dump()}")
+print(f"  Respuesta D: {resp_d.model_dump()}")
+despues_d = contar_tres_tablas()
+print(f"  Filas despues: {despues_d}")
+
+print("\n  Comprobaciones:")
+comprobar("MISMO lead_id que A", resp_d.lead_id == resp_a.lead_id,
+          f"(A={resp_a.lead_id} D={resp_d.lead_id})")
+comprobar("MISMO cliente_id y oportunidad_id que A",
+          resp_d.cliente_id == resp_a.cliente_id
+          and resp_d.oportunidad_id == resp_a.oportunidad_id)
+comprobar("creado == False", resp_d.creado is False, f"({resp_d.creado!r})")
+comprobar("0 filas nuevas en clientes, leads y oportunidades",
+          despues_d == antes_d, f"({antes_d} -> {despues_d})")
+cur.execute("SELECT count(*) AS n FROM clientes WHERE email = %s;", (EMAIL_R,))
+n_r = cur.fetchone()["n"]
+cn.commit()
+comprobar("El email de la repeticion NO se guardo (el upsert del cliente se deshizo)",
+          n_r == 0, f"(n={n_r})")
+fa2 = fila_completa(cur, cn, resp_a.lead_id)
+comprobar("El lead A no se toco: sigue siendo bano con su contacto original",
+          fa2["datos_estructurados"]["tipo_reforma"] == "bano"
+          and fa2["datos_estructurados"]["contacto"]["email"] == EMAIL_A)
+
+# ==================================================================
+print("\n" + "=" * 78)
+print("PRUEBA E - La repeticion devuelve el estado ACTUAL de la oportunidad")
+print("=" * 78)
+# Se simula que la oportunidad de A ya avanzo (como si calculate-estimate
+# hubiera activado el Gate). La repeticion debe devolver ese estado, no
+# 'nueva'.
+cur.execute("UPDATE oportunidades SET estado = 'pendiente_aprobacion' WHERE id = %s;",
+            (resp_a.oportunidad_id,))
+cn.commit()
+resp_e = create_lead(datos_a)
+print(f"  Respuesta: {resp_e.model_dump()}")
+comprobar("status == 'pendiente_aprobacion' (el estado real, no 'nueva')",
+          resp_e.status == "pendiente_aprobacion", f"({resp_e.status!r})")
+comprobar("creado == False", resp_e.creado is False)
+
+# ==================================================================
+print("\n" + "=" * 78)
+print("PRUEBA F - 'Prueba-Mayus@Example.com' y 'prueba-mayus@example.com'")
+print("=" * 78)
+datos_f1 = LeadCreate(
+    nombre="Pepe Mayus", email="Prueba-Mayus@Example.com", telefono="600111222",
+    tipo_reforma="bano", m2=5, nivel_acabados="basico",
+    incluye_cambios_estructurales=False, lead_token="tokF1",
+)
+datos_f2 = LeadCreate(
+    nombre="Pepe Minus", email="prueba-mayus@example.com", telefono="600111222",
+    tipo_reforma="cocina", m2=9, nivel_acabados="medio",
+    incluye_cambios_estructurales=False, lead_token="tokF2",
+)
+resp_f1 = create_lead(datos_f1)
+# El email se lee JUSTO DESPUES de la primera llamada, no al final. Motivo
+# (descubierto en la prueba en negativo): la segunda llamada choca con el
+# indice lower(email) y ejecuta DO UPDATE SET email = EXCLUDED.email, que
+# reescribe el email guardado con el de la segunda, que ya va en
+# minusculas. Leido al final, el email saldria en minusculas aunque el
+# validador de LeadCreate no existiera, y la comprobacion no detectaria nada.
+cur.execute("SELECT email FROM clientes WHERE id = %s;", (resp_f1.cliente_id,))
+email_tras_f1 = cur.fetchone()["email"]
+cn.commit()
+comprobar("Tras la 1a llamada ('Prueba-Mayus@Example.com') el email ya esta en minusculas",
+          email_tras_f1 == EMAIL_E, f"({email_tras_f1!r})")
+resp_f2 = create_lead(datos_f2)
+print(f"  Respuesta 1: {resp_f1.model_dump()}")
+print(f"  Respuesta 2: {resp_f2.model_dump()}")
+comprobar("MISMO cliente_id", resp_f1.cliente_id == resp_f2.cliente_id,
+          f"({resp_f1.cliente_id} y {resp_f2.cliente_id})")
+comprobar("Dos leads distintos (tokens distintos)", resp_f1.lead_id != resp_f2.lead_id)
+cur.execute("SELECT email FROM clientes WHERE id = %s;", (resp_f1.cliente_id,))
+email_guardado = cur.fetchone()["email"]
+cn.commit()
+comprobar("El email se guardo entero en minusculas", email_guardado == EMAIL_E,
+          f"({email_guardado!r})")
+
+# ==================================================================
+print("\n" + "=" * 78)
+print("PRUEBA G - 8 llamadas SIMULTANEAS con el mismo lead_token")
+print("=" * 78)
+# threading.Barrier(N) es un punto de encuentro: cada hilo se queda
+# esperando en barrera.wait() hasta que han llegado los N, y entonces
+# salen todos a la vez. Asi las 8 llamadas a create_lead arrancan en el
+# mismo instante, que es el caso que un "SELECT y luego INSERT" no
+# resistiria.
+N_HILOS = 8
+barrera = threading.Barrier(N_HILOS)
+resultados = []          # lo que devuelve cada hilo
+errores_hilos = []       # excepciones, si alguna
+cerrojo = threading.Lock()  # para que dos hilos no escriban la lista a la vez
+
+datos_g = LeadCreate(
+    nombre="Concurrencia", email=EMAIL_G, telefono="600999888",
+    tipo_reforma="bano", m2=6, nivel_acabados="medio",
+    incluye_cambios_estructurales=False, lead_token="tokG-concurrente",
+)
+
+
+def trabajador():
+    barrera.wait()
+    try:
+        r = create_lead(datos_g)
+        with cerrojo:
+            resultados.append(r)
+    except Exception as e:
+        with cerrojo:
+            errores_hilos.append(repr(e))
+
+
+antes_g = contar_tres_tablas()
+hilos = [threading.Thread(target=trabajador) for _ in range(N_HILOS)]
+for h in hilos:
+    h.start()
+for h in hilos:
+    h.join(timeout=60)
+despues_g = contar_tres_tablas()
+
+creados = [r for r in resultados if r.creado]
+ids = {r.lead_id for r in resultados}
+print(f"  respuestas: {len(resultados)}   errores: {errores_hilos}")
+print(f"  creado=True: {len(creados)}   lead_ids distintos: {ids}")
+print(f"  filas: {antes_g} -> {despues_g}")
+comprobar("Las 8 llamadas respondieron sin error",
+          len(resultados) == N_HILOS and not errores_hilos,
+          f"({len(resultados)} ok, {len(errores_hilos)} errores)")
+comprobar("Exactamente UNA con creado=True", len(creados) == 1, f"({len(creados)})")
+comprobar("Las 8 devuelven el MISMO lead_id", len(ids) == 1, f"({ids})")
+cur.execute("SELECT count(*) AS n FROM leads WHERE lead_token = %s;", ("tokG-concurrente",))
+n_g = cur.fetchone()["n"]
+cn.commit()
+comprobar("Hay UN solo lead con ese token en la base de datos", n_g == 1, f"(n={n_g})")
+comprobar("Se creo exactamente 1 cliente, 1 lead y 1 oportunidad",
+          despues_g == (antes_g[0] + 1, antes_g[1] + 1, antes_g[2] + 1),
+          f"({antes_g} -> {despues_g})")
 
 # ==================================================================
 print("\n" + "=" * 78)

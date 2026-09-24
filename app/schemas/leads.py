@@ -209,7 +209,36 @@ class LeadCreate(BaseModel):
     # subidas antes. La comprobación de que las rutas de 'fotos'
     # pertenecen de verdad a este lead_token es lógica de negocio y va en
     # app/services/, no aquí.
-    lead_token: str = Field(min_length=1)
+    #
+    # Desde paso8 (2026-09-24) se GUARDA en leads.lead_token, con UNIQUE:
+    # es la clave de idempotencia de POST /leads. Si n8n reintenta con el
+    # mismo token, se devuelve el lead ya creado en vez de crear otro.
+    # max_length=100 replica el ancho de la columna (VARCHAR(100)): sin él,
+    # un token enorme no cabría en el índice único y daría un 500 en vez
+    # de un 422. Un UUID ocupa 36 caracteres.
+    lead_token: str = Field(min_length=1, max_length=100)
+
+    # ------------------------------------------------------------------
+    # Validación del email: todo a minúsculas
+    # ------------------------------------------------------------------
+    # EmailStr solo pasa a minúsculas el DOMINIO ("Pepe@GMAIL.Com" queda
+    # "Pepe@gmail.com"), no la parte de antes de la @. Así,
+    # "Pepe@gmail.com" y "pepe@gmail.com" se tratarían como dos clientes
+    # distintos, aunque en la práctica ningún proveedor de correo los
+    # distingue.
+    #
+    # Mismo mecanismo que validar_telefono (más abajo): mode="after" hace
+    # que EmailStr compruebe primero la forma del email, y lo que devuelve
+    # la función es lo que queda guardado. Es la primera mitad de una
+    # defensa doble: la segunda es el índice único sobre lower(email) de la
+    # tabla clientes (migración paso8), que lo impone también si un email
+    # entra por otra vía (un script, el editor SQL de Supabase).
+    @field_validator("email", mode="after")
+    @classmethod
+    def email_en_minusculas(cls, valor: str) -> str:
+        # .lower() devuelve una copia del texto con todas las letras en
+        # minúsculas; el texto original no se modifica.
+        return valor.lower()
 
     # ------------------------------------------------------------------
     # Validación del teléfono
@@ -292,7 +321,10 @@ class LeadCreateResponse(BaseModel):
     # services/ lo obtiene con RETURNING id, estado en el mismo INSERT,
     # así que el valor devuelto es literalmente el que Postgres acaba de
     # escribir en la fila, no una copia escrita aparte en Python que
-    # pudiera desincronizarse del dato. En N0 siempre vale 'nueva'.
+    # pudiera desincronizarse del dato. Un lead recién creado siempre
+    # vale 'nueva'; en una repetición con el mismo lead_token (creado =
+    # false) es el estado ACTUAL de la oportunidad, que puede haber
+    # avanzado (por ejemplo, a 'pendiente_aprobacion').
     # Se descartó una etiqueta propia ("completo"/"incompleto") porque
     # por la puerta REST todos los campos son obligatorios, así que ese
     # caso no puede darse.
@@ -302,3 +334,14 @@ class LeadCreateResponse(BaseModel):
     # repetir la lista aquí crearía una tercera copia de los estados que
     # habría que mantener sincronizada a mano.
     status: str
+
+    # True si ESTA llamada ha creado el lead; False si ya existía un lead
+    # con el mismo lead_token y se ha devuelto ese, sin escribir nada.
+    # Así n8n distingue un alta nueva de un reintento. El código HTTP lo
+    # decide el adaptador (app/api/leads.py): 201 si creado es True y 200
+    # si es False, el mismo código que devuelve POST /calculate-estimate
+    # en su repetición.
+    #
+    # Sin valor por defecto: es obligatorio, para que services/ tenga que
+    # decidirlo siempre de forma explícita.
+    creado: bool

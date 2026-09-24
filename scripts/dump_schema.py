@@ -15,6 +15,10 @@ Fuentes consultadas, todas de information_schema:
   - constraint_column_usage   -> a que columna apunta cada FK
   - check_constraints         -> la expresion de cada CHECK
 
+Y ademas, fuera de information_schema:
+  - pg_indexes + pg_constraint -> los indices que NO respaldan ninguna
+    restriccion (ver paso 3b en main()).
+
 Uso:
     .\\venv\\Scripts\\python.exe scripts\\dump_schema.py
 
@@ -183,6 +187,32 @@ def main():
     for tabla, nombre, clausula in cursor.fetchall():
         checks.setdefault(tabla, []).append((nombre, clausula))
 
+    # ---- 3b. Indices que no son restricciones ------------------------
+    # information_schema solo conoce RESTRICCIONES (PK, UNIQUE, FK,
+    # CHECK). Un indice unico sobre una EXPRESION, como el de
+    # lower(clientes.email) que crea la migracion paso8, no es una
+    # restriccion para el estandar SQL: es un indice, y no aparece en
+    # ninguna de las consultas de arriba. Sin esta seccion, el volcado
+    # diria que clientes.email ya no es unico, que es falso.
+    #
+    # pg_indexes es la vista de Postgres que lista TODOS los indices, con
+    # su definicion completa (indexdef) lista para ejecutar. Se excluyen
+    # los que respaldan una restriccion (cada PK y cada UNIQUE crean su
+    # propio indice con el mismo nombre), porque esos ya salen dentro del
+    # CREATE TABLE y aparecerian dos veces.
+    cursor.execute(
+        """
+        SELECT i.indexdef
+        FROM pg_indexes i
+        WHERE i.schemaname = 'public'
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_constraint k WHERE k.conname = i.indexname
+          )
+        ORDER BY i.tablename, i.indexname;
+        """
+    )
+    indices_sueltos = [fila[0] for fila in cursor.fetchall()]
+
     # ---- 4. Filas por tabla, solo como dato informativo --------------
     conteos = {}
     for tabla in tablas:
@@ -202,7 +232,7 @@ def main():
     lineas.append("--")
     lineas.append("-- Reconstruido leyendo information_schema (columns,")
     lineas.append("-- table_constraints, key_column_usage, constraint_column_usage y")
-    lineas.append("-- check_constraints), no copiado de ningun archivo previo.")
+    lineas.append("-- check_constraints) y pg_indexes, no copiado de ningun archivo previo.")
     lineas.append("--")
     lineas.append(f"-- Tablas: {len(tablas)}")
     lineas.append("-- " + "=" * 74)
@@ -253,6 +283,18 @@ def main():
 
     lineas.append("")
     lineas.append("-- " + "=" * 74)
+    lineas.append("-- Indices que no respaldan ninguna restriccion (pg_indexes)")
+    lineas.append("-- " + "=" * 74)
+    if indices_sueltos:
+        # indexdef ya viene como una sentencia CREATE INDEX completa; solo
+        # le falta el punto y coma final.
+        for definicion in indices_sueltos:
+            lineas.append(f"{definicion};")
+    else:
+        lineas.append("-- (ninguno)")
+
+    lineas.append("")
+    lineas.append("-- " + "=" * 74)
     lineas.append("-- Row Level Security")
     lineas.append("-- " + "=" * 74)
     cursor.execute(
@@ -273,7 +315,9 @@ def main():
 
     contenido = "\n".join(lineas)
     SALIDA.parent.mkdir(parents=True, exist_ok=True)
-    SALIDA.write_text(contenido, encoding="utf-8")
+    # newline="\n": sin el, en Windows write_text convierte cada salto de
+    # linea en CRLF (el problema que documenta .gitattributes).
+    SALIDA.write_text(contenido, encoding="utf-8", newline="\n")
 
     cursor.close()
     conexion.close()
@@ -285,6 +329,7 @@ def main():
     total_checks = sum(len(v) for v in checks.values())
     print(f"  Restricciones PK/UNIQUE/FK: {total_restricciones}")
     print(f"  CHECK: {total_checks}")
+    print(f"  Indices sin restriccion: {len(indices_sueltos)}")
 
     if len(contenido.strip()) == 0:
         print("ERROR: el archivo ha quedado vacio")

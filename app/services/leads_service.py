@@ -18,7 +18,14 @@ contrato de datos del proyecto, no un framework de entrada.
 # guardaría el resultado como TEXTO, no como JSONB.
 from psycopg2.extras import Json
 
-from app.db.connection import get_transactional_connection
+# psycopg2.errors contiene una clase de excepción por cada código de error
+# de Postgres. UniqueViolation es la del código 23505: "se ha intentado
+# repetir un valor que una restricción UNIQUE prohíbe". Capturar esa clase
+# concreta, y no Exception, garantiza que solo se trata ESE error y que
+# cualquier otro fallo sigue subiendo como hasta ahora.
+from psycopg2.errors import UniqueViolation
+
+from app.db.connection import get_db_connection, get_transactional_connection
 from app.schemas.leads import LeadCreate, LeadCreateResponse
 
 # Canal fijo de N0: el lead llega de un CHAT web (el Agente 1 de n8n
@@ -34,10 +41,117 @@ from app.schemas.leads import LeadCreate, LeadCreateResponse
 # que el valor nuevo no necesita migración.
 CANAL_CHAT_WEB = "chat_web"
 
+# Nombre de la restricción UNIQUE (lead_token) que crea la migración paso8.
+# create_lead() lo compara con el de la restricción que ha saltado, para
+# distinguir "este lead_token ya se usó" (repetición legítima de n8n) de
+# cualquier otra violación de unicidad, que sería un error de verdad.
+RESTRICCION_LEAD_TOKEN = "leads_lead_token_key"
+
 
 def create_lead(data: LeadCreate) -> LeadCreateResponse:
     """
+    Alta IDEMPOTENTE de un lead: si lead_token ya se usó, devuelve el lead
+    existente (creado=False) en vez de crear otro, sin escribir nada.
+
+    Cómo funciona (opción "UNIQUE + captura", elegida en la Fase 2):
+      1. Se intenta el alta completa con _crear_lead_nuevo().
+      2. Si lead_token ya existe, el INSERT en leads choca con la UNIQUE
+         leads_lead_token_key y Postgres lanza UniqueViolation.
+      3. Esa excepción sale del "with" de get_transactional_connection(),
+         que hace ROLLBACK de TODA la transacción. Eso incluye el upsert
+         del cliente, que ya se había ejecutado antes del lead, así que
+         no queda escrito nada de esta llamada.
+      4. Se captura aquí, ya fuera de la transacción, y se lee el lead que
+         ya existía.
+
+    Por qué resiste dos peticiones SIMULTÁNEAS con el mismo token: la
+    segunda no ve la fila de la primera mientras esta no haga commit,
+    pero el índice único sí. Postgres deja a la segunda ESPERANDO en su
+    INSERT hasta que la primera termina: si la primera hace commit, la
+    segunda recibe UniqueViolation; si hace rollback, la segunda inserta
+    sin problema. Nunca pueden existir dos leads con el mismo token,
+    porque quien lo impide es el índice, no una comprobación en Python.
+
+    Un "SELECT para ver si existe y, si no, INSERT" NO tendría esa
+    garantía: las dos peticiones harían el SELECT a la vez, las dos verían
+    "no existe" y las dos insertarían.
+
+    Si una repetición trae el mismo token pero DATOS DISTINTOS, se
+    devuelve el lead original y los datos nuevos se ignoran: eso es lo
+    que significa idempotente.
+    """
+    try:
+        return _crear_lead_nuevo(data)
+    except UniqueViolation as error:
+        # error.diag.constraint_name es el nombre de la restricción que ha
+        # saltado, tal como lo informa Postgres. Si NO es la del lead_token,
+        # es otra violación de unicidad que no sabemos tratar: "raise" sin
+        # nada detrás vuelve a lanzar la MISMA excepción, sin tocarla, y
+        # acaba en el manejador genérico (500), como cualquier error
+        # inesperado.
+        if error.diag.constraint_name != RESTRICCION_LEAD_TOKEN:
+            raise
+        return _buscar_lead_por_token(data.lead_token)
+
+
+def _buscar_lead_por_token(lead_token: str) -> LeadCreateResponse:
+    """
+    Devuelve el lead que ya existe con ese lead_token, con creado=False.
+
+    El guion bajo inicial del nombre es una convención de Python: indica
+    que la función es INTERNA de este módulo. Nadie de fuera debería
+    llamarla; la puerta de entrada es create_lead().
+
+    Usa get_db_connection() (solo lectura) porque no escribe nada.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # Se devuelve el estado ACTUAL de la oportunidad, que puede haber
+        # avanzado desde que se creó (por ejemplo, 'pendiente_aprobacion'
+        # si ya se calculó el presupuesto y activó el Gate).
+        #
+        # ORDER BY o.id LIMIT 1: oportunidades.lead_id NO tiene UNIQUE, así
+        # que el esquema permitiría varias oportunidades por lead. Hoy
+        # create_lead solo crea una; si algún día hubiera más, se devuelve
+        # la primera, que es la que nació con el lead.
+        cursor.execute(
+            """
+            SELECT l.id, l.cliente_id, o.id, o.estado
+            FROM leads l
+            JOIN oportunidades o ON o.lead_id = l.id
+            WHERE l.lead_token = %s
+            ORDER BY o.id
+            LIMIT 1;
+            """,
+            (lead_token,),
+        )
+        fila = cursor.fetchone()
+        cursor.close()
+
+    # Solo puede ser None si el lead se borró entre el choque y esta
+    # lectura: un caso que no debería darse nunca. Se lanza un error
+    # explícito en vez de devolver una respuesta inventada.
+    if fila is None:
+        raise RuntimeError(
+            f"lead_token {lead_token!r} chocó con la UNIQUE pero no se encuentra el lead"
+        )
+
+    lead_id, cliente_id, oportunidad_id, estado = fila
+    return LeadCreateResponse(
+        lead_id=lead_id,
+        cliente_id=cliente_id,
+        oportunidad_id=oportunidad_id,
+        status=estado,
+        creado=False,
+    )
+
+
+def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
+    """
     Da de alta un lead completo: cliente, lead y oportunidad.
+
+    Es la parte de ESCRITURA de create_lead(). Si lead_token ya existe,
+    lanza UniqueViolation (con todo deshecho) y create_lead() lo trata.
 
     Las tres filas se escriben dentro de UNA SOLA transacción. O se
     crean las tres, o no se crea ninguna: no puede quedar un cliente sin
@@ -70,11 +184,24 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
         # ------------------------------------------------------------
         # 2a. CLIENTE: se crea, o se reutiliza si el email ya existe.
         # ------------------------------------------------------------
-        # clientes.email tiene una restricción UNIQUE. Un INSERT normal
-        # fallaría si el cliente ya existe, y ese NO es un caso de error:
-        # que alguien pida una segunda reforma es negocio normal.
+        # clientes tiene un índice ÚNICO sobre lower(email) (migración
+        # paso8; antes era una UNIQUE sobre email a secas). Un INSERT
+        # normal fallaría si el cliente ya existe, y ese NO es un caso de
+        # error: que alguien pida una segunda reforma es negocio normal.
         #
-        # ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email es una
+        # ON CONFLICT ((lower(email))), con DOBLE paréntesis: el exterior
+        # es el de la sintaxis de ON CONFLICT y el interior indica que lo
+        # de dentro es una EXPRESIÓN y no un nombre de columna. Postgres
+        # busca entonces un índice único cuya expresión sea exactamente
+        # lower(email), que es clientes_email_lower_key. Si se escribiera
+        # ON CONFLICT (email), fallaría: desde paso8 no existe ninguna
+        # restricción única sobre la columna email tal cual.
+        #
+        # El email ya llega en minúsculas (validador de LeadCreate), así
+        # que en la práctica lower(email) y email coinciden. El índice es
+        # la segunda defensa, para emails que entren por otra vía.
+        #
+        # DO UPDATE SET email = EXCLUDED.email es una
         # actualización deliberadamente vacía: le asigna al email el
         # valor que ya tenía. Se hace así, y no con DO NOTHING, por un
         # motivo concreto: con DO NOTHING, la cláusula RETURNING no
@@ -99,7 +226,7 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
             """
             INSERT INTO clientes (nombre, email, telefono, created_at)
             VALUES (%s, %s, %s, now())
-            ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+            ON CONFLICT ((lower(email))) DO UPDATE SET email = EXCLUDED.email
             RETURNING id;
             """,
             (data.nombre, data.email, data.telefono),
@@ -147,15 +274,22 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
         cursor.execute(
             """
             INSERT INTO leads (
-                cliente_id, canal, mensaje_original,
+                cliente_id, canal, mensaje_original, lead_token,
                 fotos_urls, datos_estructurados, created_at
             )
-            VALUES (%s, %s, NULL, %s, %s, now())
+            VALUES (%s, %s, NULL, %s, %s, %s, now())
             RETURNING id;
             """,
             (
                 cliente_id,
                 CANAL_CHAT_WEB,
+                # lead_token: clave de idempotencia. Si ya existe, ESTE
+                # INSERT es el que lanza UniqueViolation (restricción
+                # leads_lead_token_key) y todo se deshace; lo trata
+                # create_lead(). Es un INSERT normal, sin ON CONFLICT, a
+                # propósito: se QUIERE que falle, para que el rollback
+                # arrastre también el upsert del cliente de arriba.
+                data.lead_token,
                 Json(list(data.fotos)),
                 Json(
                     {
@@ -248,4 +382,6 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
         cliente_id=cliente_id,
         oportunidad_id=oportunidad_id,
         status=estado,
+        # Esta llamada ha creado el lead: es la única ruta que llega aquí.
+        creado=True,
     )

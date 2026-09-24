@@ -181,6 +181,28 @@ for crudo, esperado in [
         # valor del bucle.
         lambda o, esperado=esperado: True if o.telefono == esperado else f"telefono={o.telefono!r}",
     )
+# --- Email en minusculas (Fase 2) ---
+# EmailStr solo baja el DOMINIO; el validador email_en_minusculas baja
+# tambien la parte de antes de la @.
+debe_aceptar(
+    "email 'Pepe@Gmail.com' -> se guarda como 'pepe@gmail.com' (entero en minusculas)",
+    LeadCreate,
+    con(email="Pepe@Gmail.com"),
+    lambda o: True if o.email == "pepe@gmail.com" else f"email={o.email!r}",
+)
+debe_aceptar(
+    "lead_token de 100 caracteres exactos (el limite es inclusivo)",
+    LeadCreate,
+    con(lead_token="t" * 100),
+    lambda o: True if len(o.lead_token) == 100 else f"len={len(o.lead_token)}",
+)
+debe_aceptar(
+    "LeadCreateResponse con creado = False (repeticion con el mismo token)",
+    LeadCreateResponse,
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1,
+     "status": "pendiente_aprobacion", "creado": False},
+    lambda o: True if o.creado is False else f"creado={o.creado!r}",
+)
 debe_aceptar(
     "PhotoUploadSlot valido",
     PhotoUploadSlot,
@@ -195,7 +217,7 @@ debe_aceptar(
 debe_aceptar(
     "LeadCreateResponse con los 3 ids enteros + status",
     LeadCreateResponse,
-    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1, "status": "nueva"},
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1, "status": "nueva", "creado": True},
     lambda o: True if o.oportunidad_id == 1 else f"oportunidad_id={o.oportunidad_id}",
 )
 
@@ -245,6 +267,15 @@ debe_rechazar(
 debe_rechazar("falta incluye_cambios_estructurales", LeadCreate, sin_clave("incluye_cambios_estructurales"), "missing")
 debe_rechazar("falta lead_token", LeadCreate, sin_clave("lead_token"), "missing")
 debe_rechazar("lead_token vacio", LeadCreate, con(lead_token=""), "at least 1")
+# Fase 2: lead_token se guarda en leads.lead_token VARCHAR(100).
+debe_rechazar("lead_token de 101 caracteres (ancho de la columna)", LeadCreate,
+              con(lead_token="t" * 101), "at most 100")
+debe_rechazar(
+    "LeadCreateResponse SIN creado (campo obligatorio)",
+    LeadCreateResponse,
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1, "status": "nueva"},
+    "missing",
+)
 debe_rechazar('campo de mas: "telefono_movil" (extra=forbid)', LeadCreate, con(telefono_movil="600"), "extra_forbidden")
 debe_rechazar("m2 no numerico ('mucho')", LeadCreate, con(m2="mucho"))
 debe_rechazar(
@@ -268,25 +299,25 @@ debe_rechazar(
 debe_rechazar(
     "LeadCreateResponse con lead_id no entero",
     LeadCreateResponse,
-    {"lead_id": "no-soy-un-numero", "cliente_id": 1, "oportunidad_id": 1, "status": "nueva"},
+    {"lead_id": "no-soy-un-numero", "cliente_id": 1, "oportunidad_id": 1, "status": "nueva", "creado": True},
 )
 
 # --- PASO 4: casos nuevos para oportunidad_id (ampliacion del contrato D1) ---
 debe_rechazar(
     "LeadCreateResponse SIN oportunidad_id (campo obligatorio)",
     LeadCreateResponse,
-    {"lead_id": 1, "cliente_id": 1, "status": "nueva"},
+    {"lead_id": 1, "cliente_id": 1, "status": "nueva", "creado": True},
     "missing",
 )
 debe_rechazar(
     "LeadCreateResponse con oportunidad_id = None",
     LeadCreateResponse,
-    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": None, "status": "nueva"},
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": None, "status": "nueva", "creado": True},
 )
 debe_rechazar(
     "LeadCreateResponse con oportunidad_id no entero",
     LeadCreateResponse,
-    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": "abc", "status": "nueva"},
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": "abc", "status": "nueva", "creado": True},
 )
 
 print("\n=== C. COMPROBACIONES DE COMPORTAMIENTO ===")

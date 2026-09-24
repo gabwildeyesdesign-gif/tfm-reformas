@@ -10,7 +10,7 @@ endpoints y revisión técnica final.
 
 | # | Endpoint | Input | Output | Trigger real |
 |---|---|---|---|---|
-| 1 | POST /leads | nombre, email, telefono, tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token | 201: lead_id, cliente_id, oportunidad_id, status | Webhook n8n, formulario web |
+| 1 | POST /leads | nombre, email (se guarda entero en minúsculas), telefono (se normaliza; ver 5.1), tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token (máx. 100 caracteres; clave de idempotencia, ver 5.1) | 201 (alta nueva) o 200 (repetición con el mismo lead_token): lead_id, cliente_id, oportunidad_id, status, creado (ver 5.1) | Webhook n8n, al confirmar el cliente los datos en el chat web (Agente 1) |
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
@@ -211,6 +211,39 @@ se completarán al trasladar la tabla.
 |---|---|---|---|---|
 | POST /leads | 401 No autorizado | Cabecera X-Webhook-Secret ausente, vacía o con valor distinto de WEBHOOK_SECRET | NO (4xx: fallo rápido; reintentar con el mismo secreto daría siempre 401) | Revisar la credencial "Header Auth" del nodo HTTP de n8n frente al .env del backend. No se escribe nada en la base de datos (ni en logs) |
 | POST /leads | 422 Dato inválido | m2 fuera de rango: 0, negativo o mayor que 500 (añadido el 2026-09-20). El error nombra el campo: "Input should be less than or equal to 500" / "Input should be greater than 0" | NO (4xx: el mismo cuerpo daría siempre 422) | Corregir el dato en el formulario. No se escribe nada en la base de datos. Defensa doble: si el dato entrara por otra vía (script, editor SQL de Supabase, nodo Postgres de n8n), lo rechaza el CHECK chk_leads_m2_rango |
+| POST /leads | 422 Dato inválido | telefono con forma inválida (añadido el 2026-09-24). Tras quitar espacios (incluidos salto de línea y espacio duro), guiones, puntos y paréntesis debe quedar un "+" opcional y de 9 a 15 dígitos [0-9]. Ejemplo rechazado: "telefono666555". El error nombra el campo: loc ["body","telefono"], "teléfono no válido: ..." | NO (4xx: el mismo cuerpo daría siempre 422) | El Agente 1 pide solo la corrección de ese campo. No se escribe nada en la base de datos. Si es válido, se guarda NORMALIZADO ("+34 666-777-444" -> "+34666777444") |
+| POST /leads | 422 Dato inválido | lead_token de más de 100 caracteres (añadido el 2026-09-24): "String should have at most 100 characters" | NO | Revisar cómo genera n8n el token. Replica el ancho de leads.lead_token VARCHAR(100) |
+| POST /leads | 200 con creado = false | Repetición: ya existe un lead con ese lead_token (añadido el 2026-09-24) | No aplica (no es un error) | Se devuelven lead_id, cliente_id, oportunidad_id y el estado ACTUAL de la oportunidad del lead original. No se escribe nada. Ver "Idempotencia" más abajo |
+
+Idempotencia de POST /leads (añadido el 2026-09-24, migración paso8).
+lead_token se guarda en leads.lead_token, con UNIQUE (leads_lead_token_key).
+Si n8n reintenta con el mismo token, la inserción del lead choca con esa
+UNIQUE, toda la transacción se deshace (incluido el upsert del cliente) y
+se devuelve el lead existente con creado = false. Lo resuelve la base de
+datos, no un SELECT previo, así que dos peticiones simultáneas con el
+mismo token no pueden crear dos leads (verificado con 8 llamadas
+simultáneas: un solo lead, un solo creado = true). Código HTTP: 201 en
+un alta nueva y 200 en una repetición, el mismo código que devuelve
+POST /calculate-estimate en su repetición (criterio: coherencia entre
+endpoints de la misma API; P8 de Plan_calculate_estimate.txt, "un 201
+mentiría en los reintentos"). A diferencia de calculate-estimate, que
+responde 200 siempre por ser una llamada de tipo "calcula", POST /leads
+sí crea un recurso, así que un alta real conserva el 201. n8n trata
+cualquier 2xx como éxito y lee creado del cuerpo. Si una repetición trae datos distintos con el mismo token,
+se devuelve el lead original y los datos nuevos se ignoran. Los leads
+anteriores a paso8 tienen lead_token NULL. Verificación:
+scripts/check_create_lead_service.py y scripts/check_leads_endpoint_http.py.
+
+Email sin distinguir mayúsculas (añadido el 2026-09-24, migración
+paso8). LeadCreate pasa el email entero a minúsculas (EmailStr solo baja
+el dominio), y clientes tiene un índice único sobre lower(email)
+(clientes_email_lower_key) en lugar de la antigua UNIQUE (email):
+"Pepe@Gmail.com" y "pepe@gmail.com" son el mismo cliente.
+
+Contacto de cada llamada (añadido el 2026-09-24). leads.datos_estructurados
+guarda, bajo la clave "contacto", el nombre, email y teléfono de ESA
+llamada. La ficha de clientes no se sobrescribe (D2), así que con un email
+repetido el contacto nuevo queda en su lead.
 
 Detalles del 401: la respuesta es idéntica haya faltado la cabecera o
 sea incorrecta (cuerpo {"detail": "No autorizado"} y cabecera

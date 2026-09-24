@@ -162,8 +162,9 @@ try:
 
     comprobar("Codigo HTTP 201 Created", resp.status_code == 201, f"({resp.status_code})")
     cuerpo_resp = resp.json()
-    comprobar("La respuesta trae las 4 claves del contrato",
-              set(cuerpo_resp) == {"lead_id", "cliente_id", "oportunidad_id", "status"},
+    # Fase 2: el contrato gana la clave "creado" (5 claves).
+    comprobar("La respuesta trae las 5 claves del contrato",
+              set(cuerpo_resp) == {"lead_id", "cliente_id", "oportunidad_id", "status", "creado"},
               f"({sorted(cuerpo_resp)})")
     comprobar("status == 'nueva'", cuerpo_resp.get("status") == "nueva")
     comprobar("Los 3 ids son enteros",
@@ -268,6 +269,29 @@ try:
     comprobar("El error apunta al campo 'telefono'",
               detalle4.get("loc", [])[-1:] == ["telefono"], f"({detalle4.get('loc')})")
     comprobar("No se creo ninguna fila", contar_todo() == antes4)
+
+    # ==============================================================
+    print("\n" + "=" * 78)
+    print("PRUEBA 5 - Reintento de n8n: el MISMO cuerpo de la prueba 1 otra vez")
+    print("=" * 78)
+    antes5 = contar_todo()
+    resp5 = requests.post(f"{BASE}/leads", json=cuerpo, headers=CABECERAS_AUTH, timeout=20)
+    print(f"  <- HTTP {resp5.status_code}")
+    print(f"  <- Cuerpo: {resp5.text}")
+    # Una repeticion responde 200, no 201: no ha creado nada. Es el mismo
+    # codigo que da POST /calculate-estimate en su repeticion. El cuerpo se
+    # lee con cualquier 2xx para que, si el codigo fuera otro, las
+    # comprobaciones de abajo sigan pudiendo informar.
+    cuerpo5 = resp5.json() if resp5.status_code in (200, 201) else {}
+    comprobar("Codigo HTTP 200 (repeticion: no se ha creado nada)",
+              resp5.status_code == 200, f"({resp5.status_code})")
+    comprobar("creado == false", cuerpo5.get("creado") is False, f"({cuerpo5.get('creado')!r})")
+    comprobar("MISMO lead_id que la prueba 1",
+              cuerpo5.get("lead_id") == cuerpo_resp["lead_id"],
+              f"({cuerpo_resp['lead_id']} y {cuerpo5.get('lead_id')})")
+    despues5 = contar_todo()
+    comprobar("0 filas nuevas en las 3 tablas", despues5 == antes5, f"({antes5} -> {despues5})")
+    comprobar("La prueba 1 dijo creado == true", cuerpo_resp.get("creado") is True)
 
 finally:
     # ---------- apagado ordenado --------------------------------------
