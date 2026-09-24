@@ -190,11 +190,25 @@ def get_transactional_connection():
         # escritura. rollback() deshace TODO lo hecho en esta
         # transacción, dejando la base de datos como estaba al empezar.
         #
-        # Nota: si la conexión se perdiera del todo, este rollback podría
-        # fallar; aun así el putconn() del finally se ejecuta igualmente,
-        # y se comprobó empíricamente que el pool descarta o limpia las
-        # conexiones rotas antes de reutilizarlas.
-        conn.rollback()
+        # conn.closed vale 0 mientras la conexión está viva; cualquier
+        # otro valor significa que psycopg2 ya la dio por cerrada. Si se
+        # perdió y aun así se le pidiera rollback(), psycopg2 lanzaría un
+        # InterfaceError ENCIMA de la excepción que ya venía subiendo, y
+        # esa sería la que vería quien llamó: el error original quedaría
+        # tapado (incidente real, documentado en D16). Por eso se
+        # comprueba antes. Es exactamente la misma guarda que ya tenía
+        # get_db_connection(); esta función era la única de las dos sin
+        # ella, y esa asimetría es la que provocó el incidente.
+        #
+        # LÍMITE CONOCIDO: la guarda solo cubre el caso en que psycopg2
+        # YA sabe que la conexión murió. Si murió y todavía no se ha
+        # detectado, closed sigue valiendo 0, se entra en el if y
+        # rollback() puede lanzar OperationalError, tapando otra vez el
+        # error original. Queda abierto A PROPÓSITO (pendiente de backend
+        # en D16): cerrarlo no es envolver esta línea en un try, sino
+        # decidir antes qué hacer con esa excepción secundaria.
+        if not conn.closed:
+            conn.rollback()
 
         # "raise" a secas vuelve a lanzar la MISMA excepción que se
         # acaba de capturar, con su traza original intacta. Sin esta
