@@ -20,6 +20,10 @@ from pathlib import Path
 # Misma tecnica que scripts/check_graceful_shutdown.py.
 RAIZ_REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ_REPO))
+# Los mensajes de error del telefono llevan tildes ("teléfono no válido")
+# y uno de los casos usa digitos arabes; sin esto, una consola cp1252
+# reventaria al imprimirlos. Misma linea que en los demas check_*.py.
+sys.stdout.reconfigure(encoding="utf-8")
 
 from pydantic import ValidationError
 
@@ -153,6 +157,30 @@ debe_aceptar(
     con(tipo_reforma="integral_vivienda", nivel_acabados="alto"),
     lambda o: True if o.nivel_acabados is NivelAcabados.ALTO else "enum mal",
 )
+# --- Telefono (2026-09-24): normalizacion + formato ^\+?[0-9]{9,15}$ ---
+# Lo que se comprueba en cada caso no es solo "se acepta", sino el valor
+# que queda GUARDADO en el modelo: debe salir ya limpio.
+for crudo, esperado in [
+    ("+34 666-777-444", "+34666777444"),   # el caso del enunciado
+    ("666 777 444", "666777444"),
+    ("(+34) 666.777.444", "+34666777444"),
+    ("666777444", "666777444"),            # 9 digitos: el minimo
+    ("+" + "1" * 15, "+" + "1" * 15),      # 15 digitos: el maximo
+    # \s cubre tambien el salto de linea, el tabulador y el espacio duro
+    # (U+00A0, el que aparece al copiar un numero de una web): se limpian
+    # como cualquier espacio y se guarda el numero limpio.
+    ("666777444\n", "666777444"),
+    ("666 777 444", "666777444"),
+]:
+    debe_aceptar(
+        f"telefono {crudo!r} -> se guarda normalizado como {esperado!r}",
+        LeadCreate,
+        con(telefono=crudo),
+        # Esta lambda "captura" esperado en el momento de crearla gracias
+        # a esperado=esperado; sin ese truco, todas usarian el ultimo
+        # valor del bucle.
+        lambda o, esperado=esperado: True if o.telefono == esperado else f"telefono={o.telefono!r}",
+    )
 debe_aceptar(
     "PhotoUploadSlot valido",
     PhotoUploadSlot,
@@ -191,6 +219,23 @@ debe_rechazar("email de mas de 150 caracteres", LeadCreate, con(email="a" * 145 
 debe_rechazar("nombre vacio", LeadCreate, con(nombre=""), "at least 1")
 debe_rechazar("nombre de mas de 150 caracteres", LeadCreate, con(nombre="x" * 151), "at most 150")
 debe_rechazar("telefono de mas de 30 caracteres", LeadCreate, con(telefono="9" * 31), "at most 30")
+# Telefonos con forma invalida. Se exige que el rechazo lleve el mensaje
+# propio del validador ("teléfono no válido"), para no dar por bueno un
+# rechazo por otro motivo. Que el error nombre el campo 'telefono' se
+# comprueba aparte, en la seccion C.
+for malo, motivo in [
+    ("telefono666555", "letras delante (el hallazgo original)"),
+    ("66677", "solo 5 digitos"),
+    ("666abc444", "letras en medio"),
+    ("12345678", "8 digitos, uno menos del minimo"),
+    ("+" + "1" * 16, "16 digitos, uno mas del maximo"),
+    ("++34666777444", "dos signos +"),
+    ("34+666777444", "+ en medio"),
+    ("٦٦٦٧٧٧٤٤٤", "digitos arabes (trampa de \\d)"),
+    ("- . ( )", "solo decoracion: queda vacio"),
+]:
+    debe_rechazar(f"telefono {malo!r} ({motivo})", LeadCreate, con(telefono=malo),
+                  "teléfono no válido")
 debe_rechazar(
     f"{MAX_FOTOS_LEAD + 1} fotos (una mas del maximo)",
     LeadCreate,
@@ -264,6 +309,26 @@ if serializado["tipo_reforma"] == "bano" and serializado["nivel_acabados"] == "m
 else:
     fallos.append(f"serializacion de enums inesperada: {serializado}")
     print(f"  [FALLO] serializacion -> {serializado}")
+
+# El error de un telefono invalido debe NOMBRAR el campo: es lo que el
+# Agente 1 usa para pedir solo esa correccion. e.errors() devuelve la
+# lista de errores como diccionarios; "loc" es la ruta del campo.
+try:
+    LeadCreate(**con(telefono="telefono666555"))
+except ValidationError as e:
+    locs = [err["loc"] for err in e.errors()]
+    if locs == [("telefono",)]:
+        ok += 1
+        print(f"  [OK]    El error de telefono invalido nombra el campo: loc={locs}")
+    else:
+        fallos.append(f"loc inesperado en error de telefono: {locs}")
+        print(f"  [FALLO] loc inesperado -> {locs}")
+else:
+    # Rama else del try: solo se ejecuta si NO salto ninguna excepcion.
+    # Sin ella, un validador desactivado haria que esta comprobacion no
+    # contara ni como OK ni como FALLO: pasaria en silencio (regla D16).
+    fallos.append("telefono666555 NO lanzo ValidationError: la excepcion se ha tragado")
+    print("  [FALLO] telefono666555 fue aceptado: no salto ninguna excepcion")
 
 print("\n" + "=" * 60)
 print(f"RESULTADO: {ok} comprobaciones correctas, {len(fallos)} fallos")

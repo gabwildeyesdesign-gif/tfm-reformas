@@ -67,18 +67,27 @@ cn = psycopg2.connect(DATABASE_URL)
 cur = cn.cursor(cursor_factory=RealDictCursor)
 
 
+# Todos los emails que usan las pruebas. Los de las pruebas 3 y 4 NO
+# deberian llegar a escribirse nunca (son 422), pero si una validacion se
+# rompe -como en la prueba en negativo- se crearian filas con ellos, y la
+# limpieza tiene que poder borrarlas igualmente.
+EMAILS_PRUEBA = [EMAIL_OK, "otro-" + EMAIL_OK, "tel-" + EMAIL_OK]
+
+
 def limpiar():
+    # "= ANY(%s)" compara con cada elemento de la lista: psycopg2 envia la
+    # lista de Python como un ARRAY de Postgres.
     cur.execute(
         """DELETE FROM oportunidades WHERE lead_id IN (
              SELECT l.id FROM leads l JOIN clientes c ON c.id=l.cliente_id
-             WHERE c.email = %s);""",
-        (EMAIL_OK,),
+             WHERE c.email = ANY(%s));""",
+        (EMAILS_PRUEBA,),
     )
     cur.execute(
-        "DELETE FROM leads WHERE cliente_id IN (SELECT id FROM clientes WHERE email=%s);",
-        (EMAIL_OK,),
+        "DELETE FROM leads WHERE cliente_id IN (SELECT id FROM clientes WHERE email = ANY(%s));",
+        (EMAILS_PRUEBA,),
     )
-    cur.execute("DELETE FROM clientes WHERE email=%s;", (EMAIL_OK,))
+    cur.execute("DELETE FROM clientes WHERE email = ANY(%s);", (EMAILS_PRUEBA,))
     cn.commit()
 
 
@@ -135,7 +144,9 @@ try:
     cuerpo = {
         "nombre": "Carmen Ruiz",
         "email": EMAIL_OK,
-        "telefono": "+34655443322",
+        # Con espacios y guiones A PROPOSITO (2026-09-24): debe llegar a
+        # la base de datos ya normalizado como "+34655443322".
+        "telefono": "+34 655-443-322",
         "tipo_reforma": "cocina",
         "m2": 14.0,
         "nivel_acabados": "alto",
@@ -167,7 +178,7 @@ try:
 
     cur.execute(
         """
-        SELECT c.email, l.canal, l.fotos_urls, l.datos_estructurados,
+        SELECT c.email, c.telefono, l.canal, l.fotos_urls, l.datos_estructurados,
                o.tipo_reforma, o.estado, o.datos_completos
         FROM leads l
         JOIN clientes c      ON c.id = l.cliente_id
@@ -184,6 +195,13 @@ try:
     comprobar("La fila de la base de datos corresponde al email enviado",
               fila["email"] == EMAIL_OK)
     comprobar("tipo_reforma llego intacto hasta la columna", fila["tipo_reforma"] == "cocina")
+    comprobar("clientes.telefono se guardo NORMALIZADO",
+              fila["telefono"] == "+34655443322", f"({fila['telefono']!r})")
+    comprobar("datos_estructurados.contacto trae el contacto de esta llamada",
+              fila["datos_estructurados"].get("contacto") == {
+                  "nombre": "Carmen Ruiz", "email": EMAIL_OK, "telefono": "+34655443322"},
+              f"({fila['datos_estructurados'].get('contacto')})")
+    comprobar("canal == 'chat_web'", fila["canal"] == "chat_web", f"({fila['canal']!r})")
 
     # ==============================================================
     print("\n" + "=" * 78)
@@ -228,6 +246,28 @@ try:
     print(f"  <- Cuerpo: {resp3.text[:300]}")
     comprobar("Codigo HTTP 422", resp3.status_code == 422, f"({resp3.status_code})")
     comprobar("Tampoco se creo ninguna fila", contar_todo() == antes3)
+
+    # ==============================================================
+    print("\n" + "=" * 78)
+    print("PRUEBA 4 - POST /leads con telefono 'telefono666555' (422 que nombra el campo)")
+    print("=" * 78)
+    antes4 = contar_todo()
+    cuerpo_tel = dict(cuerpo)
+    cuerpo_tel["email"] = "tel-" + EMAIL_OK
+    cuerpo_tel["telefono"] = "telefono666555"
+    resp4 = requests.post(
+        f"{BASE}/leads", json=cuerpo_tel, headers=CABECERAS_AUTH, timeout=20
+    )
+    print(f"  <- HTTP {resp4.status_code}")
+    print(f"  <- Cuerpo: {resp4.text[:400]}")
+    comprobar("Codigo HTTP 422", resp4.status_code == 422, f"({resp4.status_code})")
+    # Si la validacion estuviera desactivada, la respuesta seria un 201 y
+    # no traeria "detail"; .get(..., [{}]) evita que el script reviente
+    # ahi y deja que la comprobacion marque FALLO.
+    detalle4 = resp4.json().get("detail", [{}])[0] if resp4.status_code == 422 else {}
+    comprobar("El error apunta al campo 'telefono'",
+              detalle4.get("loc", [])[-1:] == ["telefono"], f"({detalle4.get('loc')})")
+    comprobar("No se creo ninguna fila", contar_todo() == antes4)
 
 finally:
     # ---------- apagado ordenado --------------------------------------

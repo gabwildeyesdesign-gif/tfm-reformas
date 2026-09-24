@@ -21,11 +21,18 @@ from psycopg2.extras import Json
 from app.db.connection import get_transactional_connection
 from app.schemas.leads import LeadCreate, LeadCreateResponse
 
-# Canal fijo de N0: el único disparador implementado es el formulario web
-# a través del webhook de n8n. Se escribe como constante y no como texto
-# suelto dentro del SQL para que, el día que exista un segundo canal
-# (chat, WhatsApp), el sitio donde cambiarlo sea evidente.
-CANAL_FORMULARIO_WEB = "formulario_web"
+# Canal fijo de N0: el lead llega de un CHAT web (el Agente 1 de n8n
+# conversa con el cliente y, al confirmar los datos, llama a POST /leads).
+# Antes valía "formulario_web", un nombre que ya no describe el canal real.
+# Se escribe como constante y no como texto suelto dentro del SQL para que,
+# el día que exista un segundo canal (WhatsApp), el sitio donde cambiarlo
+# sea evidente.
+#
+# OJO: los leads antiguos conservan canal = 'formulario_web' (17 filas el
+# 2026-09-24); no se reescriben, porque son la evidencia de cómo entraron.
+# La columna leads.canal no tiene CHECK (comprobado en pg_constraint), así
+# que el valor nuevo no necesita migración.
+CANAL_CHAT_WEB = "chat_web"
 
 
 def create_lead(data: LeadCreate) -> LeadCreateResponse:
@@ -79,11 +86,15 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
         # intentaba insertar y que provocó el conflicto.
         #
         # DECISIÓN DE NEGOCIO (D2): NO se actualizan nombre ni telefono
-        # del cliente existente. Los datos de contacto de ESTA llamada
-        # quedan reflejados en leads.datos_estructurados, pero nunca
-        # sobrescriben la ficha del cliente: un "Gabi" tecleado con
-        # prisa no debe pisar un "Gabriela Gómez" ya correcto. Es
-        # deliberado, no un descuido.
+        # del cliente existente: un "Gabi" tecleado con prisa no debe
+        # pisar un "Gabriela Gómez" ya correcto. Es deliberado, no un
+        # descuido.
+        #
+        # Los datos de contacto de ESTA llamada no se pierden: se guardan
+        # en leads.datos_estructurados, bajo la clave "contacto" (ver 2b).
+        # Hasta el 2026-09-24 este comentario ya lo afirmaba, pero era
+        # FALSO: solo se guardaban los cuatro datos de la reforma, así que
+        # con un email repetido el nombre y el teléfono nuevos se perdían.
         cursor.execute(
             """
             INSERT INTO clientes (nombre, email, telefono, created_at)
@@ -98,7 +109,7 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
         cliente_id = cursor.fetchone()[0]
 
         # ------------------------------------------------------------
-        # 2b. LEAD: la evidencia cruda de lo que llegó del formulario.
+        # 2b. LEAD: la evidencia cruda de lo que llegó en la petición.
         # ------------------------------------------------------------
         # fotos_urls: las rutas tal cual, como lista JSON. list(...) crea
         # una lista normal a partir de la de Pydantic; si no había fotos
@@ -106,9 +117,17 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
         # válido y distinto de NULL ("no mandó fotos" en vez de "no
         # sabemos").
         #
-        # datos_estructurados: los cuatro datos del formulario tal como
-        # llegaron, sin transformarlos. Es la evidencia inmutable de la
-        # petición original.
+        # datos_estructurados: los cuatro datos de la reforma tal como
+        # llegaron, más el contacto de ESTA llamada. Es la evidencia
+        # inmutable de la petición original.
+        #
+        # "contacto" guarda nombre, email y telefono de esta llamada
+        # aunque el cliente ya existiera (D2: la ficha de clientes no se
+        # toca). Así, si alguien repite email con otro teléfono, el número
+        # nuevo queda en SU lead y un técnico puede verlo. Los valores son
+        # los que ya validó Pydantic: el teléfono va normalizado
+        # ("+34666777444") y el email con el dominio en minúsculas, que es
+        # lo que hace EmailStr.
         #
         # Se usa .value en los dos enums para guardar el texto plano
         # ("bano", "medio") y no el objeto de Python. Aunque TipoReforma
@@ -121,11 +140,10 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
         # "lo que llegó" y la columna es "el dato de negocio consultable
         # con SQL normal".
         #
-        # mensaje_original se deja en NULL a propósito. NO es un dato que
-        # falte: en N0 el disparador es un formulario estructurado, no
-        # una conversación, así que no existe texto libre que guardar.
-        # La columna queda reservada para un canal futuro (chat,
-        # WhatsApp) que N0 no implementa.
+        # mensaje_original se deja en NULL a propósito. El canal es un
+        # chat, pero la conversación vive en la memoria de n8n, no en el
+        # backend: POST /leads solo recibe los datos ya confirmados, no el
+        # texto de la conversación, así que aquí no hay nada que guardar.
         cursor.execute(
             """
             INSERT INTO leads (
@@ -137,7 +155,7 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
             """,
             (
                 cliente_id,
-                CANAL_FORMULARIO_WEB,
+                CANAL_CHAT_WEB,
                 Json(list(data.fotos)),
                 Json(
                     {
@@ -162,6 +180,14 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
                         # leads anteriores.
                         "m2": float(data.m2),
                         "incluye_cambios_estructurales": data.incluye_cambios_estructurales,
+                        # Un diccionario dentro de otro: en el JSONB queda
+                        # como un objeto anidado y se consulta con
+                        # datos_estructurados -> 'contacto' ->> 'telefono'.
+                        "contacto": {
+                            "nombre": data.nombre,
+                            "email": data.email,
+                            "telefono": data.telefono,
+                        },
                     }
                 ),
             ),

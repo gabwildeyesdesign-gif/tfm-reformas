@@ -57,8 +57,8 @@ router = APIRouter(tags=["leads"])
 )
 def post_leads(data: LeadCreate) -> LeadCreateResponse:
     """
-    Alta de un lead nuevo. Disparado por el webhook de n8n desde el
-    formulario web.
+    Alta de un lead nuevo. La llama n8n cuando el Agente 1 del chat web
+    ha recogido y confirmado con el cliente todos los datos.
 
     El parámetro 'data' está anotado con el tipo LeadCreate, y eso es lo
     que hace toda la magia: FastAPI ve esa anotación, entiende que el

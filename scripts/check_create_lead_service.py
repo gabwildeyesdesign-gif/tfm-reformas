@@ -126,8 +126,9 @@ comprobar("cliente_id de la respuesta == el de la base de datos",
           f["cliente_id"] == resp_a.cliente_id, f"({f['cliente_id']})")
 comprobar("oportunidad_id de la respuesta == el de la base de datos",
           f["oportunidad_id"] == resp_a.oportunidad_id, f"({f['oportunidad_id']})")
-comprobar("canal = 'formulario_web'", f["canal"] == "formulario_web")
-comprobar("mensaje_original es NULL (no hay texto libre en N0)",
+# 2026-09-24: el canal pasa a ser 'chat_web' (CANAL_CHAT_WEB).
+comprobar("canal = 'chat_web'", f["canal"] == "chat_web", f"({f['canal']!r})")
+comprobar("mensaje_original es NULL (la conversacion vive en n8n)",
           f["mensaje_original"] is None)
 comprobar("fotos_urls guarda las 2 rutas", f["fotos_urls"] == datos_a.fotos,
           f"({f['fotos_urls']})")
@@ -147,6 +148,11 @@ comprobar("status de la respuesta == estado real de la fila",
           resp_a.status == f["estado"], f"('{resp_a.status}')")
 comprobar("El cliente guardo el nombre y telefono enviados",
           f["nombre"] == "Ana Martínez" and f["telefono"] == "+34600111222")
+# 2026-09-24: el contacto de ESTA llamada se guarda tambien en el lead.
+comprobar("datos_estructurados.contacto existe con nombre, email y telefono",
+          f["datos_estructurados"].get("contacto") == {
+              "nombre": "Ana Martínez", "email": EMAIL_A, "telefono": "+34600111222"},
+          f"({f['datos_estructurados'].get('contacto')})")
 
 # ==================================================================
 print("\n" + "=" * 78)
@@ -246,6 +252,18 @@ fc = fila_completa(cur, cn, resp_c.lead_id)
 comprobar("Pero los datos de ESA llamada si quedaron en el lead nuevo",
           fc["datos_estructurados"]["tipo_reforma"] == "cocina",
           f"({fc['datos_estructurados']})")
+# Lo que antes se perdia (hallazgo b): con email repetido, el nombre y el
+# telefono NUEVOS no quedaban en ningun sitio. Ahora estan en el lead C,
+# y el lead A conserva los suyos: cada lead guarda el contacto de su
+# propia llamada.
+comprobar("Email repetido: el lead nuevo conserva el contacto NUEVO",
+          fc["datos_estructurados"].get("contacto") == {
+              "nombre": "Ana M.", "email": EMAIL_A, "telefono": "+34699999999"},
+          f"({fc['datos_estructurados'].get('contacto')})")
+fa = fila_completa(cur, cn, resp_a.lead_id)
+comprobar("Y el lead A sigue con SU contacto original",
+          fa["datos_estructurados"].get("contacto", {}).get("telefono") == "+34600111222",
+          f"({fa['datos_estructurados'].get('contacto')})")
 
 # ==================================================================
 print("\n" + "=" * 78)

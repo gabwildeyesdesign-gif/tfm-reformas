@@ -22,7 +22,11 @@ sistema. Solo describe formas. La validación que sí depende del negocio
 #   comprueba que ese texto tiene forma de email de verdad.
 # Field: se usa cuando un campo necesita algo más que su tipo — un valor
 #   por defecto, un límite, o una descripción.
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+# re: el módulo de expresiones regulares de la biblioteca estándar. Se usa
+# para limpiar y comprobar el teléfono.
+import re
 
 # Decimal: el tipo de número decimal EXACTO de la biblioteca estándar. Se
 # usa para m2 por el mismo motivo que en los importes del presupuesto:
@@ -39,6 +43,26 @@ from app.schemas.common import (
     NivelAcabados,
     TipoReforma,
 )
+
+# Caracteres de "decoración" que una persona escribe en un teléfono y que
+# no forman parte del número: espacios, guiones, puntos y paréntesis.
+# \s cubre cualquier espacio en blanco: el normal, el tabulador, el salto
+# de línea y el espacio duro (U+00A0) que aparece al copiar un número de
+# una web. "+34 (666) 777-444" y "+34666777444" son el mismo teléfono; se
+# guardan del segundo modo.
+# re.compile prepara la expresión una sola vez al importar el archivo, en
+# vez de volver a interpretarla en cada petición.
+_DECORACION_TELEFONO = re.compile(r"[\s\-.()]")
+
+# Forma que debe tener el teléfono YA LIMPIO: un "+" opcional al principio
+# y después entre 9 y 15 dígitos (15 es el máximo del estándar
+# internacional E.164; 9 es el largo de un número español sin prefijo).
+#
+# Se escribe [0-9] y NO \d a propósito: en Python, \d acepta cualquier
+# dígito Unicode, incluidos los árabes ("٦٦٦") o los devanagari. Con \d,
+# un teléfono escrito con esos símbolos pasaría la validación y llegaría
+# a la base de datos. [0-9] son exactamente los diez dígitos de siempre.
+_FORMATO_TELEFONO = re.compile(r"\+?[0-9]{9,15}")
 
 
 class PhotoUploadSlot(BaseModel):
@@ -101,8 +125,8 @@ class LeadPhotoUploadResponse(BaseModel):
 
 class LeadCreate(BaseModel):
     """
-    Cuerpo de la petición POST /leads: lo que envía el formulario web a
-    través del webhook de n8n.
+    Cuerpo de la petición POST /leads: los datos que el Agente 1 del chat
+    web ha recogido y confirmado con el cliente, enviados por n8n.
 
     Es el único modelo de este archivo que describe datos que vienen de
     FUERA, así que es el único donde la validación protege de verdad.
@@ -134,6 +158,10 @@ class LeadCreate(BaseModel):
     # archivo.
     email: EmailStr = Field(max_length=150)
 
+    # Los límites de Field se aplican al texto TAL COMO LLEGA, antes de
+    # limpiarlo (max_length=30 es el ancho de clientes.telefono). La forma
+    # del número la comprueba después el validador validar_telefono, más
+    # abajo en esta misma clase.
     telefono: str = Field(min_length=1, max_length=30)
 
     # Al declarar el tipo como el Enum, Pydantic acepta el texto "bano" y
@@ -182,6 +210,47 @@ class LeadCreate(BaseModel):
     # pertenecen de verdad a este lead_token es lógica de negocio y va en
     # app/services/, no aquí.
     lead_token: str = Field(min_length=1)
+
+    # ------------------------------------------------------------------
+    # Validación del teléfono
+    # ------------------------------------------------------------------
+    # Hasta ahora telefono solo se validaba por LONGITUD, así que
+    # "telefono666555" se aceptaba y se guardaba en clientes.telefono.
+    #
+    # @field_validator("telefono") es un DECORADOR de Pydantic: registra la
+    # función de debajo como una comprobación extra del campo telefono.
+    # mode="after" significa que se ejecuta DESPUÉS de las comprobaciones
+    # normales (que sea texto, y los min_length/max_length de Field), así
+    # que aquí "valor" ya es seguro un str de 1 a 30 caracteres.
+    #
+    # @classmethod es obligatorio en los validadores de Pydantic v2: la
+    # función se llama sobre la CLASE, antes de que exista el objeto, y
+    # por eso recibe "cls" en vez de "self".
+    #
+    # Lo que la función DEVUELVE es lo que queda guardado en el campo. Por
+    # eso sirve también para normalizar: devuelve el número ya limpio.
+    # Si lanza ValueError, Pydantic lo convierte en un error de validación
+    # con loc = ["telefono"], y FastAPI responde 422 nombrando el campo.
+    @field_validator("telefono", mode="after")
+    @classmethod
+    def validar_telefono(cls, valor: str) -> str:
+        # sub("", valor) sustituye cada carácter de decoración por nada,
+        # es decir, lo borra: "+34 666-777-444" -> "+34666777444".
+        limpio = _DECORACION_TELEFONO.sub("", valor)
+
+        # fullmatch exige que la expresión cubra el texto ENTERO. No se usa
+        # match con un "$" al final porque, en Python, "$" también encaja
+        # justo antes de un salto de línea final. Hoy es una defensa extra:
+        # \s ya borra cualquier salto de línea en el paso anterior, así que
+        # "666777444\n" llega aquí como "666777444". Se mantiene para que
+        # la comprobación siga siendo correcta si algún día se cambia la
+        # lista de caracteres de decoración.
+        if _FORMATO_TELEFONO.fullmatch(limpio) is None:
+            raise ValueError(
+                "teléfono no válido: tras quitar espacios, guiones, puntos "
+                "y paréntesis debe quedar un '+' opcional y de 9 a 15 dígitos"
+            )
+        return limpio
 
 
 class LeadCreateResponse(BaseModel):
