@@ -1,0 +1,226 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+MÁSTER EN AGENTES DE IA E HIPERAUTOMATIZACIÓN DE PROCESOS
+
+RESUMEN DE SESIÓN: TIEMPOS LÍMITE Y VALIDACIÓN DE CONEXIONES DEL POOL
+
+Documento de contexto de proyecto · Nivel N0 · 2026-09-25
+
+Rama: fix/n0-timeouts-db, creada desde main (0bb8929, tras integrar
+feat/n0-sesion-y-contacto por fast-forward y hacer push).
+
+
+================================================================
+1. PROBLEMA
+================================================================
+
+Observado 4 veces; la última bloqueó POST /leads desde n8n. Las
+conexiones guardadas en el pool se quedaban muertas tras minutos
+ociosas y psycopg2 no lo detectaba (conn.closed seguía valiendo 0). La
+primera consulta fallaba con OperationalError "server closed the
+connection unexpectedly", a veces tras más de 3 minutos colgada. El
+registro en la tabla logs también fallaba, porque usaba otra conexión
+muerta del mismo pool.
+
+Diagnóstico (cerrado por Gabi antes de esta sesión; confirmación manual
+suya, no repetida aquí):
+  - Fallos intermitentes: /health/db dio 500 dos veces y, minutos
+    después, 4/4 OK con el mismo código y el mismo servidor.
+  - Los scripts con conexión nueva siempre funcionaban; morían las
+    conexiones guardadas en el pool.
+  - Sin procesos python huérfanos; pg_stat_activity sin conexiones
+    retenidas del día anterior.
+  - Logs de Postgres en Supabase: ningún reinicio ni caída del servidor.
+  - La gestión de conexiones no cambió desde 53060ff (solo la guarda de
+    conn.closed de D16).
+  - Causa: cortes de red o del pooler entre la máquina local y Supabase.
+    Ya existía en D16. El arreglo debe funcionar con cualquier causa de
+    corte.
+
+
+================================================================
+2. DECISIÓN (Regla de Tres hecha por Gabi): B + A
+================================================================
+
+Todo en app/db/connection.py y app/config.py; services/ no se toca.
+
+B) Parámetros de conexión, como constantes de app/config.py
+   sobrescribibles por .env:
+     DB_CONNECT_TIMEOUT_S      10     conectar mide ~1,3 s; sin límite
+                                      libpq espera indefinidamente
+     DB_KEEPALIVES             1      ya es el defecto de libpq
+     DB_KEEPALIVES_IDLE_S      30     Windows trae 2 h por defecto
+     DB_KEEPALIVES_INTERVAL_S  10
+     DB_KEEPALIVES_COUNT       3      SIN EFECTO EN WINDOWS (ver 4)
+     DB_STATEMENT_TIMEOUT_MS   30000  el rol postgres trae 2 min
+
+A) Validación al sacar la conexión del pool, en get_db_connection() y
+   en get_transactional_connection(): SELECT 1; si falla con
+   OperationalError o InterfaceError, la conexión se cierra
+   (putconn close=True), se avisa en consola (stderr, no en la tabla
+   logs) y se pide otra. No se reintenta ninguna operación de negocio.
+
+Dos ajustes sobre el planteamiento inicial, decididos por Gabi tras
+comprobarlos por ejecución (sección 3):
+
+  1. statement_timeout NO va por options="-c statement_timeout=...":
+     se fija con un SET dentro de una clase de conexión propia
+     (ConexionConTimeout, pasada como connection_factory, API pública
+     de psycopg2), confirmado con commit() para que un rollback
+     posterior no lo deshaga.
+     Alternativas descartadas: ALTER ROLE postgres (global: afecta al
+     panel de Supabase, migraciones y scripts, y vive fuera del código);
+     SET en cada préstamo (una ida y vuelta más por petición y frágil
+     frente al rollback).
+
+  2. "Máximo un reemplazo" se cambió por "descartar hasta encontrar una
+     viva, con tope DB_POOL_MAX". Un corte de red mata TODAS las
+     conexiones ociosas a la vez, y getconn() entrega otra ociosa antes
+     de abrir una nueva (psycopg2/pool.py, _getconn): con un solo
+     reemplazo, el segundo intento recibe otra muerta. Si falla una
+     conexión RECIÉN ABIERTA en ese mismo préstamo, se lanza el error
+     original de inmediato: el problema ya no es una conexión rancia.
+     Alternativa descartada: vaciar a mano la lista de ociosas
+     (_pool._pool, interno y privado de psycopg2).
+
+  "Recién abierta" se define por la hora de creación de la conexión
+  (creada_en, reloj monotónico) comparada con el inicio del préstamo, y
+  NO como "nunca prestada": las 2 conexiones que abre init_pool() al
+  arrancar nunca se han prestado, pero pueden llevar horas ociosas, y
+  son justo las que mueren en un corte.
+
+
+================================================================
+3. COMPROBACIONES PREVIAS AL CÓDIGO
+================================================================
+
+Fuente: scripts temporales ejecutados contra la base de datos real
+(fuera del repositorio).
+
+  psycopg2 2.9.13 | libpq 180004 | PostgreSQL 17.6
+  sin options:  statement_timeout = '2min' (rol postgres)
+  con options="-c statement_timeout=5000": sigue '2min'  <- Supavisor
+                                                          lo descarta
+  SET statement_timeout = '5s' + commit: se mantiene en la siguiente
+    transacción; pg_sleep(8) -> QueryCanceled a los 5,64 s.
+  Un SET en la conexión A no pasa a conexiones nuevas de otro cliente
+    (tres conexiones B, las tres con '2min').
+  Backend matado con pg_terminate_backend: closed = 0 antes de usarla;
+    SELECT 1 -> OperationalError en 0,001 s ("SSL connection has been
+    closed unexpectedly"); closed = 2 después.
+
+Fuente: documentación oficial de libpq (PostgreSQL 18,
+libpq-connect.html):
+  - keepalives_idle y keepalives_interval: "supported on systems where
+    TCP_KEEPIDLE [...] is available, and on Windows".
+  - keepalives_count: solo "where TCP_KEEPCNT or an equivalent socket
+    option is available"; Windows no se cita.
+  - tcp_user_timeout: solo "where TCP_USER_TIMEOUT is available"; no
+    existe en Windows.
+
+
+================================================================
+4. LÍMITES CONOCIDOS (anotados también en el código)
+================================================================
+
+  - Coste de la validación: SELECT 1 + rollback en cada préstamo. Medido
+    ~120 ms al empezar la sesión y ~190 ms más tarde el mismo día: depende
+    de la red. En check_conexion_muerta, entre 181 y 249 ms por préstamo
+    (dos valores sueltos de 910 y 741 ms en la primera ejecución, sin
+    investigar).
+  - Conexión medio abierta en Windows: si el otro extremo desaparece
+    sin cerrar TCP, el propio SELECT 1 puede esperar lo que tarde el
+    sistema operativo en rendirse reenviando paquetes (minutos).
+    statement_timeout no lo evita (lo aplica el servidor) y
+    tcp_user_timeout no existe en Windows. Lo reducen los keepalives,
+    que detectan la conexión muerta mientras está ociosa: ~130 s en
+    Windows (30 + 10 sondas x 10 s, número fijado por el sistema) y
+    ~60 s en Linux (30 + 3 x 10).
+  - statement_timeout se mide en el servidor: el cliente ve la
+    cancelación con el retraso de la red (con 2 s configurados se
+    midieron entre 2,12 y 3,44 s).
+
+
+================================================================
+5. VERIFICACIÓN
+================================================================
+
+Fuente: ejecución real de scripts contra la base de datos real y de
+uvicorn arrancado sin --reload.
+
+5.1 scripts/check_conexion_muerta.py (nuevo): 18/18
+  Caso 0 (proceso hijo con los valores por defecto): statement_timeout
+    '30s' y los cinco parámetros de libpq aplicados.
+  Caso A: 5 préstamos con conexiones vivas, 0 descartes.
+  Caso 1: pg_terminate_backend sobre las 2 conexiones ociosas del pool;
+    get_transactional_connection() funciona, entrega un pid nuevo y
+    descarta exactamente 2.
+  Caso 2: DB_STATEMENT_TIMEOUT_MS=2000 fijado por entorno antes de
+    importar app.config; '2s' antes y después de un rollback;
+    pg_sleep(5) -> QueryCanceled a los 3,44 s y 2,35 s en dos
+    ejecuciones.
+
+5.2 Prueba en negativo (restaurado después y confirmado con diff)
+  connection.py de main: FALLO. Timeouts no aplicados ('2min'); caso 1
+    -> OperationalError con 0 descartes; el caso 2 revienta con
+    traceback al recibir la OTRA conexión muerta.
+  Versión con un solo reemplazo: 16/17. Descarta las 2 muertas y se
+    rinde con OperationalError.
+
+5.3 Prueba real con uvicorn
+  Foto base A (17:05:19) -> uvicorn arrancado -> GET /health/db 200 ->
+  inactivo 8 minutos -> pg_terminate_backend sobre sus 2 backends
+  (1877924, 1877935; salvaguarda: consulta repetida justo antes, con el
+  mismo conjunto) -> POST /leads -> HTTP 201 en 1,76 s -> GET
+  /health/db 200. Log de uvicorn:
+    [AVISO] Conexión del pool descartada (intento 1, estaba ociosa):
+      OperationalError: SSL connection has been closed unexpectedly
+    [AVISO] Conexión del pool descartada (intento 2, estaba ociosa):
+      OperationalError: SSL connection has been closed unexpectedly
+    "POST /leads HTTP/1.1" 201 Created
+  Lead de prueba borrado: (clientes, leads, oportunidades) = (1, 1, 1)
+  antes y (0, 0, 0) después.
+
+5.4 Regresión: ver la salida del [PARA] final de la sesión.
+
+
+================================================================
+6. LECCIÓN: SUPAVISOR REUTILIZA BACKENDS
+================================================================
+
+En modo Session, Supavisor reutiliza backends de Postgres entre
+clientes: el pid no identifica a un cliente. Una lista blanca por pid
+previo no aísla las conexiones de un proceso; hay que combinarla con la
+actividad posterior (state_change).
+
+Caso real de esta sesión: el pid 1877924 ya estaba en la foto base A
+(backend creado a las 17:04:43, ocioso tras un DISCARD ALL) y Supavisor
+se lo asignó a una de las 2 conexiones del pool de uvicorn, que lo usó
+a las 17:05:35 en GET /health/db. La diferencia C − A solo daba
+1877935; matando solo ese, getconn() habría entregado la conexión viva
+1877924 y el POST habría dado 201 también con el código de main: la
+prueba no habría demostrado nada.
+
+Criterio usado: los filtros aprobados (datname = current_database(),
+backend_type = 'client backend', usename = 'postgres',
+application_name = 'Supavisor', pid <> pg_backend_pid()) más
+state_change posterior a la foto A.
+
+
+================================================================
+7. SUGERENCIAS Y PENDIENTES
+================================================================
+
+Fragilidades de scripts ajenos (anotadas, no tocadas en esta rama):
+  - check_tipo_reforma_constraint: exige que oportunidades esté vacía
+    (c3 == 0), y hoy tiene 17 filas reales. Obsoleto desde el paso 1.
+    Falla igual con el código de main (comprobado). Sus pruebas del
+    CHECK (3c y 3d) sí pasan.
+  - Las tres de la sesión anterior siguen abiertas
+    (TFM_Resumen_Sesion_Contacto_e_Idempotencia_N0.txt, sección 8).
+
+Abierto:
+  - El rollback() del except de get_transactional_connection() puede
+    seguir lanzando OperationalError encima del error original si la
+    conexión muere DURANTE la operación (el caso que D16 dejó abierto).
+    La validación previa reduce mucho la ventana, porque la conexión se
+    entrega viva, pero no la cierra.

@@ -103,6 +103,25 @@ SOLO REST.
 - Supavisor (Session pooler de Supabase) sustituye application_name
   por el suyo propio — filtrar por él en pg_stat_activity siempre da 0
   filas a través del pooler. No es un bug nuestro.
+- Supavisor ignora TODOS los parámetros de arranque, no solo
+  application_name: options="-c statement_timeout=..." tampoco llega
+  (comprobado: seguía en '2min'). Por eso statement_timeout se fija con
+  un SET + commit en ConexionConTimeout (connection_factory del pool,
+  app/db/connection.py). Además, en modo Session reutiliza backends de
+  Postgres entre clientes: el pid NO identifica a un cliente. Para
+  aislar las conexiones de un proceso en pg_stat_activity, una lista
+  blanca por pid previo no basta; hay que combinarla con la actividad
+  posterior (state_change). Detalle en
+  docs/TFM_Resumen_Sesion_Timeouts_DB_N0.txt, sección 6.
+- Cada préstamo del pool (get_db_connection y
+  get_transactional_connection) valida la conexión antes de entregarla:
+  SELECT 1 + rollback, y si está muerta la descarta ([AVISO] en stderr)
+  hasta encontrar una viva, con tope DB_POOL_MAX. Cuesta ~120-190 ms por
+  préstamo según la red. Los tiempos límite (connect_timeout, keepalives,
+  statement_timeout 30 s) son constantes DB_* de app/config.py,
+  sobrescribibles por .env. OJO: DB_KEEPALIVES_COUNT no tiene efecto en
+  Windows, y una conexión medio abierta puede seguir colgando el SELECT 1
+  minutos (tcp_user_timeout no existe en Windows).
 - El lifespan de FastAPI y el de fastmcp deben combinarse
   (combined_lifespan anidado), nunca uno reemplazar al otro — FastAPI
   solo acepta un lifespan.
@@ -261,6 +280,32 @@ Regresión sin cambios: check_create_lead_service 31/31 y
 check_leads_endpoint_http 12/12. Queda abierto el caso OperationalError,
 cuando psycopg2 todavía no ha detectado que la conexión murió y closed
 sigue valiendo 0.
+
+Tiempos límite y validación de conexiones del pool (rama
+fix/n0-timeouts-db, commit c1c075b, 2026-09-25): arregla el
+OperationalError en el primer execute tras un corte de red o del pooler
+(4 veces en dos días, la última bloqueando POST /leads desde n8n).
+Verificado con scripts/check_conexion_muerta.py 18/18 y con una prueba
+real: uvicorn inactivo 8 min, sus 2 conexiones matadas con
+pg_terminate_backend, POST /leads 201 con dos [AVISO] ... descartada, y
+GET /health/db 200. En negativo: main FALLO y la versión con un solo
+reemplazo 16/17. Suite completa 23/24 (el fallo es
+check_tipo_reforma_constraint, ver Pendiente). Gabi verificó además una
+conversación completa desde el chat de n8n con esta rama. Límites
+abiertos: la conexión medio abierta en Windows y la muerte de la
+conexión DURANTE una operación (el rollback del except puede tapar el
+error original: el caso OperationalError de D16 sigue abierto).
+Detalle: docs/TFM_Resumen_Sesion_Timeouts_DB_N0.txt.
+
+Scripts de verificación frágiles (anotados, sin arreglar):
+check_tipo_reforma_constraint exige que oportunidades esté vacía y hoy
+tiene filas reales, así que siempre da "HAY FALLOS" (obsoleto desde el
+paso 1; sus pruebas del CHECK sí pasan). Y hay tokens fijos compartidos
+entre scripts: "tok-estr" lo usan check_calculate_estimate_http y
+check_mcp_calculate_estimate, así que si uno se corta antes de limpiar,
+el otro recibe el lead viejo (convendría un prefijo por script o
+uuid4). Otras dos fragilidades, en
+docs/TFM_Resumen_Sesion_Contacto_e_Idempotencia_N0.txt, sección 8.
 
 Pendiente: gate-decisions, visits, create-followup-task,
 get_business_rules y request_missing_information, la concurrencia
