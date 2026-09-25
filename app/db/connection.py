@@ -1,10 +1,24 @@
 """Conexión a la base de datos (Supabase/PostgreSQL) mediante un pool."""
 
+import sys
+import time
 from contextlib import contextmanager
 
+import psycopg2
+from psycopg2.extensions import connection as ConexionPsycopg2
 from psycopg2.pool import ThreadedConnectionPool
 
-from app.config import DATABASE_URL, DB_POOL_MIN, DB_POOL_MAX
+from app.config import (
+    DATABASE_URL,
+    DB_CONNECT_TIMEOUT_S,
+    DB_KEEPALIVES,
+    DB_KEEPALIVES_COUNT,
+    DB_KEEPALIVES_IDLE_S,
+    DB_KEEPALIVES_INTERVAL_S,
+    DB_POOL_MAX,
+    DB_POOL_MIN,
+    DB_STATEMENT_TIMEOUT_MS,
+)
 
 # Etiqueta que cada conexión del pool envía a Postgres al conectarse.
 # Postgres la muestra en la columna application_name de pg_stat_activity.
@@ -18,6 +32,51 @@ APPLICATION_NAME = "reformas-backend-fastapi"
 # Empieza en None porque hasta que no se llame a init_pool() (en el
 # arranque del servidor) no existe ningún pool todavía.
 _pool: ThreadedConnectionPool | None = None
+
+
+class ConexionConTimeout(ConexionPsycopg2):
+    """
+    Conexión de psycopg2 que, nada más abrirse, fija su statement_timeout.
+
+    Por qué hace falta una clase propia: lo natural sería pasar
+    options="-c statement_timeout=..." al conectar, pero el Session pooler
+    de Supabase (Supavisor) descarta ese parámetro (comprobado: seguía
+    valiendo 2 min, el valor del rol). Lo que sí funciona es enviar un SET
+    después de conectar. psycopg2.connect() admite el argumento
+    connection_factory (API pública): la clase con la que construir la
+    conexión. init_pool() le pasa esta, así que TODAS las conexiones del
+    pool, las del arranque y las que se abran después, pasan por aquí.
+
+    "class ConexionConTimeout(ConexionPsycopg2)" significa que esta clase
+    HEREDA de la conexión normal de psycopg2: se comporta exactamente igual
+    que ella y solo añade lo que se escribe aquí.
+    """
+
+    def __init__(self, *args, **kwargs):
+        # __init__ se ejecuta al crear el objeto. super().__init__(...)
+        # ejecuta primero el __init__ de la clase madre, que es el que
+        # abre de verdad la conexión con Postgres. *args y **kwargs
+        # recogen todos los argumentos recibidos (dsn, keepalives...) y se
+        # los pasan tal cual, sin tener que enumerarlos.
+        super().__init__(*args, **kwargs)
+
+        # Momento en que se abrió esta conexión, con un reloj monotónico
+        # (time.monotonic): nunca retrocede aunque se cambie la hora del
+        # sistema, que es lo que se quiere para medir intervalos.
+        # _obtener_conexion_validada() lo usa para distinguir una conexión
+        # recién abierta de una que llevaba tiempo ociosa en el pool.
+        self.creada_en = time.monotonic()
+
+        # SET sin LOCAL cambia el valor para TODA la sesión, no solo para
+        # la transacción actual. %s lo rellena psycopg2 con el número de
+        # forma segura; sin unidad, Postgres lo interpreta en milisegundos.
+        with self.cursor() as cursor:
+            cursor.execute("SET statement_timeout = %s", (DB_STATEMENT_TIMEOUT_MS,))
+        # psycopg2 abre una transacción implícita incluso para un SET. Si
+        # después alguien hiciera rollback() SIN haber confirmado antes,
+        # Postgres desharía también el SET y la conexión volvería a los
+        # 2 min. El commit() lo hace definitivo para toda la sesión.
+        self.commit()
 
 
 def init_pool():
@@ -64,6 +123,18 @@ def init_pool():
         # el tamaño real del pool, usar scripts/check_graceful_shutdown.py,
         # que lo inspecciona desde el propio objeto pool.
         application_name=APPLICATION_NAME,
+        # Tiempos límite y keepalives (valores y motivo de cada uno en
+        # app/config.py). Son parámetros de libpq, la biblioteca en C que
+        # psycopg2 usa por debajo: actúan en el propio socket TCP, así que
+        # Supavisor no puede descartarlos como hace con options.
+        connect_timeout=DB_CONNECT_TIMEOUT_S,
+        keepalives=DB_KEEPALIVES,
+        keepalives_idle=DB_KEEPALIVES_IDLE_S,
+        keepalives_interval=DB_KEEPALIVES_INTERVAL_S,
+        keepalives_count=DB_KEEPALIVES_COUNT,  # sin efecto en Windows
+        # statement_timeout NO va aquí como options: lo fija la propia
+        # clase de conexión con un SET (ver ConexionConTimeout).
+        connection_factory=ConexionConTimeout,
     )
 
 
@@ -79,6 +150,106 @@ def close_pool():
     if _pool is not None:
         _pool.closeall()
         _pool = None
+
+
+def _obtener_conexion_validada():
+    """
+    Saca una conexión del pool y comprueba que está viva ANTES de
+    entregarla. Si está muerta, la descarta y pide otra.
+
+    El problema: una conexión que llevaba minutos ociosa en el pool puede
+    haber muerto (corte de red o del pooler) sin que psycopg2 lo sepa
+    (conn.closed sigue valiendo 0). El fallo aparecía en la primera
+    consulta de negocio, en mitad de POST /leads.
+
+    La solución: una consulta mínima (SELECT 1) antes de entregarla. Si
+    falla con OperationalError o InterfaceError, la conexión se cierra y
+    se sustituye. NO se reintenta ninguna operación de negocio: esto
+    ocurre antes de que el llamador haya ejecutado nada.
+
+    Por qué se sigue buscando tras el primer reemplazo: un corte de red
+    no mata una conexión, mata TODAS las que están ociosas a la vez, y
+    getconn() entrega otra ociosa antes de abrir una nueva (código fuente
+    de psycopg2, pool.py, _getconn). Con un único reemplazo, el segundo
+    intento recibiría casi seguro otra conexión muerta.
+
+    Cuándo se rinde:
+      - Si falla una conexión RECIÉN ABIERTA en este mismo préstamo: la
+        conexión estaba fresca, así que el problema no es una conexión
+        rancia sino la base de datos o la red. Seguir no arreglaría nada.
+      - Si getconn() no consigue ni abrir una conexión (base de datos
+        caída, connect_timeout agotado): su excepción sube tal cual.
+      - Tras DB_POOL_MAX intentos, como tope de seguridad. En la práctica
+        nunca se alcanza: el pool guarda como mucho DB_POOL_MIN
+        conexiones ociosas (putconn cierra el resto), así que tras
+        descartarlas todas la siguiente es una conexión nueva.
+    En los tres casos se lanza el error ORIGINAL: el de la primera
+    conexión muerta, que es el que explica qué pasó.
+
+    COSTE MEDIDO (2026-09-25, desde esta máquina a eu-central-1): unos
+    120 ms por préstamo, la ida y vuelta del SELECT 1 (~60 ms) más la del
+    rollback (~60 ms). Depende de la red: ese mismo día, en otra medición,
+    fueron ~190 ms. Se paga en cada petición, con la conexión viva o
+    muerta. Se acepta en N0: es pequeño frente a la latencia de n8n.
+
+    LÍMITE CONOCIDO: la conexión medio abierta en Windows. Si el otro
+    extremo desaparece sin avisar (no llega el cierre de TCP), el propio
+    SELECT 1 puede quedarse esperando lo que tarde el sistema operativo en
+    rendirse reenviando paquetes: minutos. statement_timeout no lo evita
+    (lo aplica el servidor, que ya no está), y el único parámetro de libpq
+    que lo acota, tcp_user_timeout, no existe en Windows. Lo que reduce
+    este caso son los keepalives: detectan la conexión muerta mientras
+    está ociosa (unos 130 s en Windows), antes de que se preste.
+    """
+    # Primer error encontrado. Empieza en None ("todavía ninguno").
+    error_original = None
+
+    for intento in range(1, DB_POOL_MAX + 1):
+        # Momento en que empieza este intento. Si la conexión que entrega
+        # getconn() se creó DESPUÉS de este instante, es que getconn()
+        # tuvo que abrirla ahora: es recién abierta. Si se creó antes,
+        # venía de la lista de ociosas del pool.
+        inicio = time.monotonic()
+        conn = _pool.getconn()
+        recien_abierta = conn.creada_en >= inicio
+
+        try:
+            # Si psycopg2 ya sabe que está cerrada (closed distinto de 0),
+            # cursor() lanza InterfaceError sin tocar la red. Si no lo
+            # sabe, es el SELECT 1 el que falla con OperationalError al
+            # encontrarse el socket cerrado.
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            # El SELECT 1 abrió una transacción implícita; se cierra para
+            # entregar la conexión limpia, como si nadie la hubiera usado.
+            conn.rollback()
+            return conn
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as error:
+            # Solo se guarda el PRIMER error; los siguientes no lo pisan.
+            if error_original is None:
+                error_original = error
+
+            # Aviso en consola (stderr), NO en la tabla logs: escribir en
+            # logs necesita otra conexión, justo lo que está fallando.
+            # Mismo formato que el aviso de app/main.py.
+            print(
+                f"[AVISO] Conexión del pool descartada (intento {intento}, "
+                f"{'recién abierta' if recien_abierta else 'estaba ociosa'}): "
+                f"{type(error).__name__}: {str(error).strip()}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+            # close=True: el pool la CIERRA y la olvida en vez de
+            # guardarla de nuevo entre las ociosas.
+            _pool.putconn(conn, close=True)
+
+            if recien_abierta:
+                raise error_original
+
+    # Solo se llega aquí si se agotaron los intentos sin encontrar una
+    # conexión viva (ver "Cuándo se rinde" en el docstring).
+    raise error_original
 
 
 @contextmanager
@@ -104,7 +275,12 @@ def get_db_connection():
     # getconn() saca una conexión ya abierta del pool (o crea una nueva
     # si hace falta y no se ha llegado a maxconn). Es un préstamo: la
     # conexión sigue siendo del pool, nosotros solo la usamos un rato.
-    conn = _pool.getconn()
+    # No se llama a getconn() directamente sino a través de
+    # _obtener_conexion_validada(), que comprueba que la conexión está
+    # viva antes de entregarla (ver su docstring). Va FUERA del try a
+    # propósito: si falla, esa función ya ha devuelto al pool (cerradas)
+    # las conexiones muertas, y aquí no hay ninguna que devolver.
+    conn = _obtener_conexion_validada()
     try:
         # yield entrega la conexión al bloque "with" que llamó a esta
         # función. La ejecución de get_db_connection() se queda aquí
@@ -172,7 +348,10 @@ def get_transactional_connection():
     difíciles de confundir de un vistazo, porque usar la de lectura para
     escribir no da ningún error — simplemente los datos no se guardan.
     """
-    conn = _pool.getconn()
+    # Misma validación previa que en get_db_connection(), y también fuera
+    # del try: si no hay conexión viva, no hay nada que confirmar,
+    # deshacer ni devolver.
+    conn = _obtener_conexion_validada()
     try:
         # Se entrega la conexión al bloque "with". Mientras ese bloque
         # se ejecuta, esta función está detenida justo en esta línea.

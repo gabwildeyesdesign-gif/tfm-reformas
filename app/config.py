@@ -58,3 +58,57 @@ DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "2"))
 # cómo se use el pool". Era falso y se corrigió: no hay ningún modo de
 # uso en el que espere.)
 DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "10"))
+
+# ---------------------------------------------------------------------------
+# Tiempos límite y keepalives de las conexiones a Postgres
+# ---------------------------------------------------------------------------
+# Motivo: las conexiones guardadas en el pool morían tras minutos ociosas
+# (cortes de red o del pooler entre esta máquina y Supabase), psycopg2 no
+# se enteraba, y la primera consulta fallaba con OperationalError o se
+# quedaba colgada más de 3 minutos. Estos valores se los pasa init_pool()
+# (app/db/connection.py) a cada conexión nueva. Todos se pueden cambiar
+# desde el .env sin tocar código; si la variable no existe, se usa el
+# valor por defecto que va como segundo argumento de os.getenv.
+#
+# El sufijo del nombre indica la unidad (_S = segundos, _MS =
+# milisegundos), porque libpq y Postgres no usan la misma para todo y
+# confundirlas daría un límite mil veces más largo o más corto.
+
+# Segundos máximos para ABRIR una conexión. Sin este parámetro libpq
+# espera indefinidamente. Conectar mide ~1,3 s (TLS + Session pooler en
+# eu-central-1, medido el 2026-09-25): 10 s dan unas 8 veces de margen.
+DB_CONNECT_TIMEOUT_S = int(os.getenv("DB_CONNECT_TIMEOUT_S", "10"))
+
+# 1 = activar los keepalives TCP: pequeñas sondas que el sistema operativo
+# envía por una conexión ociosa para comprobar que el otro extremo sigue
+# ahí. Ya es el valor por defecto de libpq; se escribe para que la
+# intención quede a la vista.
+DB_KEEPALIVES = int(os.getenv("DB_KEEPALIVES", "1"))
+
+# Segundos sin tráfico tras los que se envía la primera sonda. El defecto
+# de Windows es de 2 horas: con 30 s se mantiene viva la entrada del NAT
+# del router y del pooler, y una conexión muerta se detecta mientras está
+# ociosa, antes de que una petición la use. Coste: un paquete diminuto
+# cada 30 s por conexión.
+DB_KEEPALIVES_IDLE_S = int(os.getenv("DB_KEEPALIVES_IDLE_S", "30"))
+
+# Segundos entre sondas que no reciben respuesta.
+DB_KEEPALIVES_INTERVAL_S = int(os.getenv("DB_KEEPALIVES_INTERVAL_S", "10"))
+
+# Sondas perdidas tras las que se da la conexión por muerta.
+# OJO: EN WINDOWS NO TIENE EFECTO. La documentación de libpq solo cita
+# Windows para keepalives_idle y keepalives_interval; aquí el número de
+# sondas lo fija el sistema operativo (10, según Microsoft). Sí actúa en
+# Linux (Docker, producción). Detección de una conexión muerta ociosa:
+# ~30 + 3*10 = 60 s en Linux, ~30 + 10*10 = 130 s en Windows.
+DB_KEEPALIVES_COUNT = int(os.getenv("DB_KEEPALIVES_COUNT", "3"))
+
+# Milisegundos máximos que Postgres deja correr UNA sentencia antes de
+# cancelarla (QueryCanceled). El rol postgres de Supabase trae 2 min
+# (medido); las operaciones de N0 tardan milisegundos, así que 30 s
+# cortan un cuelgue sin rozar nada legítimo.
+# Se aplica con un SET al crear cada conexión, NO con el parámetro
+# options="-c statement_timeout=...": el Session pooler de Supabase
+# (Supavisor) descarta ese parámetro de arranque (comprobado: seguía
+# valiendo 2 min). Ver ConexionConTimeout en app/db/connection.py.
+DB_STATEMENT_TIMEOUT_MS = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "30000"))
