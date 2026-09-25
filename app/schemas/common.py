@@ -137,3 +137,19 @@ MAX_FOTOS_LEAD = 5
 # datos (defensa doble, mismo criterio que D5): si se cambia aquí, hay
 # que cambiarlo también allí.
 MAX_M2_LEAD = 500
+
+# Longitud admitida de lead_token, el identificador de la conversación del
+# chat. Es la clave de idempotencia de POST /leads y la clave de búsqueda
+# de GET /leads/session/{lead_token}.
+#
+# MAX_LEAD_TOKEN = 100 replica el ancho de la columna leads.lead_token
+# (VARCHAR(100)): un token más largo no cabría y daría un 500 en vez de un
+# 422. MIN_LEAD_TOKEN = 1 rechaza el texto vacío. Un UUID ocupa 36
+# caracteres.
+#
+# Constantes compartidas, y no números sueltos, porque las usan dos sitios
+# que tienen que coincidir: el cuerpo de POST /leads (LeadCreate) y el
+# parámetro de ruta de GET /leads/session. Si un día cambia el ancho de la
+# columna, se cambia aquí y los dos quedan iguales.
+MIN_LEAD_TOKEN = 1
+MAX_LEAD_TOKEN = 100

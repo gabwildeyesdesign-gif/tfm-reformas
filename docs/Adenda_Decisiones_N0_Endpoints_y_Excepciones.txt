@@ -15,6 +15,7 @@ endpoints y revisión técnica final.
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
 | 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md` |
+| 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
 autenticación del webhook): además del cuerpo, toda petición debe traer la
@@ -298,6 +299,67 @@ capturado tras agotar reintentos, que (1) registra en logs vía FastAPI,
 el fallo ocurre antes de responder al webhook síncrono, devuelve un
 mensaje de fallback controlado al cliente en vez de dejar la conexión
 sin respuesta.
+
+5.3 GET /leads/session/{lead_token} (añadido el 2026-09-25, en el mismo
+bloque que el código)
+
+Para qué: el router de n8n lo llama al inicio de cada turno del chat para
+decidir si el mensaje va al Agente 1 (captura: todavía no hay lead) o al
+Agente 2 (asesor: el lead ya existe). Solo REST; no hay tool MCP, porque
+quien lo usa es el router, no un agente.
+
+Autenticación: la misma cabecera X-Webhook-Secret que POST /leads (misma
+dependencia, app/api/security.py). La autenticación va ANTES que la
+validación de la ruta: un token de 101 caracteres sin cabecera da 401, no
+422 (verificado).
+
+Respuesta (200):
+  {
+    "existe": bool,
+    "lead_id": int | null,
+    "oportunidad_id": int | null,
+    "estado_oportunidad": str | null,
+    "presupuesto": {"existe": bool,
+                    "requiere_aprobacion": bool | null,
+                    "motivo_gate": str | null}
+  }
+  - presupuesto es siempre un objeto, nunca null.
+  - requiere_aprobacion vale null si no hay presupuesto; false significa
+    "hay presupuesto y no tiene Gate".
+  - motivo_gate: 'cambios_estructurales', 'importe_superior_umbral',
+    'ambos' o null.
+
+| Código / resultado | Causa | Reintento en n8n | Acción |
+|---|---|---|---|
+| 200 con existe=true | Hay un lead con ese lead_token | — | El router envía el mensaje al Agente 2 |
+| 200 con existe=false | No hay ningún lead con ese token (todos los demás campos null, presupuesto {false, null, null}) | — | No es un error: el router envía el mensaje al Agente 1 |
+| 401 | Falta X-Webhook-Secret o es incorrecto | NO | Revisar la credencial Header Auth |
+| 422 | lead_token de más de 100 caracteres: loc ["path","lead_token"], "String should have at most 100 characters" | NO | Revisar cómo genera n8n el token |
+| 500 | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff | Registrado por el manejador global |
+
+NUNCA devuelve importes (D18.5: el Agente 2 no debe tenerlos). Defensa
+doble: la consulta no selecciona importe_min_con_iva ni
+importe_max_con_iva, y el esquema de respuesta (LeadSessionResponse) no
+tiene ningún campo de importe; FastAPI construye el JSON solo con los
+campos del response_model. Prueba en negativo: una versión que lee los
+importes y los devuelve desde services/ sigue sin sacarlos (24/24); solo
+cuando además se añaden al esquema aparecen en el JSON, y la
+comprobación falla.
+
+Varias oportunidades para un mismo lead (oportunidades.lead_id no tiene
+UNIQUE): se devuelve la PRIMERA (ORDER BY o.id), el mismo criterio que la
+idempotencia de POST /leads, y el servidor deja un [AVISO] en stderr. La
+respuesta no cambia.
+
+Coste: una consulta (leads LEFT JOIN oportunidades LEFT JOIN presupuestos,
+por el índice único de lead_token) más la validación de la conexión del
+pool. Se paga en cada turno del chat.
+
+Implementación: app/services/leads_service.py (get_lead_session),
+app/api/leads.py, app/schemas/leads.py (LeadSessionResponse,
+PresupuestoSesion). Límites de lead_token: MIN_LEAD_TOKEN y
+MAX_LEAD_TOKEN en app/schemas/common.py, compartidos con LeadCreate.
+Verificación: scripts/check_lead_session_http.py.
 
 6. Revisión técnica final — hallazgos y resolución
 

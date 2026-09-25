@@ -39,7 +39,10 @@ from decimal import Decimal
 # proyecto sale cada nombre, sin tener que deducirlo.
 from app.schemas.common import (
     MAX_FOTOS_LEAD,
+    MAX_LEAD_TOKEN,
     MAX_M2_LEAD,
+    MIN_LEAD_TOKEN,
+    MotivoGate,
     NivelAcabados,
     TipoReforma,
 )
@@ -215,8 +218,10 @@ class LeadCreate(BaseModel):
     # mismo token, se devuelve el lead ya creado en vez de crear otro.
     # max_length=100 replica el ancho de la columna (VARCHAR(100)): sin él,
     # un token enorme no cabría en el índice único y daría un 500 en vez
-    # de un 422. Un UUID ocupa 36 caracteres.
-    lead_token: str = Field(min_length=1, max_length=100)
+    # de un 422. Un UUID ocupa 36 caracteres. Los dos límites son
+    # constantes de common.py porque GET /leads/session/{lead_token} tiene
+    # que aplicar exactamente las mismas reglas.
+    lead_token: str = Field(min_length=MIN_LEAD_TOKEN, max_length=MAX_LEAD_TOKEN)
 
     # ------------------------------------------------------------------
     # Validación del email: todo a minúsculas
@@ -345,3 +350,79 @@ class LeadCreateResponse(BaseModel):
     # Sin valor por defecto: es obligatorio, para que services/ tenga que
     # decidirlo siempre de forma explícita.
     creado: bool
+
+
+class PresupuestoSesion(BaseModel):
+    """
+    Resumen del presupuesto de un lead, tal como lo ve el router de n8n en
+    GET /leads/session/{lead_token}.
+
+    NO TIENE NINGÚN CAMPO DE IMPORTE, a propósito (D18.5: el Agente 2, el
+    asesor, no debe tener las cifras). Es la segunda de dos barreras: la
+    primera es que la consulta de services/ no selecciona los importes. La
+    segunda es este esquema: FastAPI construye el JSON de la respuesta
+    SOLO con los campos declarados en response_model, así que un importe
+    no puede salir por este endpoint sin añadirlo también aquí.
+
+    Ningún campo tiene valor por defecto: services/ tiene que rellenar los
+    tres siempre, también cuando no hay presupuesto.
+    """
+
+    # True si la oportunidad tiene una fila en presupuestos.
+    existe: bool
+
+    # Tres valores con significados distintos:
+    #   None  -> no hay presupuesto (existe = False).
+    #   False -> hay presupuesto y NO necesita aprobación (sin Gate).
+    #   True  -> hay presupuesto y está esperando la aprobación de una
+    #            persona (Gate HITL).
+    # Por eso vale None, y no False, cuando no hay presupuesto: False
+    # afirmaría "hay presupuesto sin Gate", que sería falso. Cuando el
+    # presupuesto existe nunca es None: la columna es NOT NULL DEFAULT
+    # false.
+    requiere_aprobacion: bool | None
+
+    # Motivo del Gate, o None si no hay Gate o no hay presupuesto. Se tipa
+    # con el Enum MotivoGate (copia del CHECK de la base de datos) y no con
+    # str: en el JSON sale igualmente como texto, pero Pydantic rechaza un
+    # valor que no esté en la lista.
+    motivo_gate: MotivoGate | None
+
+
+class LeadSessionResponse(BaseModel):
+    """
+    Respuesta de GET /leads/session/{lead_token}.
+
+    El router de n8n la pide al inicio de cada turno del chat para decidir
+    si el mensaje va al Agente 1 (captura: todavía no hay lead) o al
+    Agente 2 (asesor: el lead ya existe).
+
+    Un token que no existe NO es un error: la respuesta es 200 con
+    existe = False y los demás campos a None. Para el router, "este chat
+    aún no tiene lead" es un estado normal.
+
+    Como en PresupuestoSesion, ningún campo tiene valor por defecto:
+    "int | None" sin "= None" significa "obligatorio, aunque puede ser
+    None". Si services/ olvidara un campo, Pydantic daría error en vez de
+    mandar un null por descuido.
+    """
+
+    # True si hay un lead con ese lead_token.
+    existe: bool
+
+    # Ids del lead y de su oportunidad. None si el lead no existe. Si el
+    # lead tuviera varias oportunidades (el esquema lo permite, porque
+    # oportunidades.lead_id no tiene UNIQUE), es la PRIMERA: el mismo
+    # criterio que la idempotencia de POST /leads.
+    lead_id: int | None
+    oportunidad_id: int | None
+
+    # Estado actual de la oportunidad ('nueva', 'pendiente_aprobacion'...).
+    # str y no Enum por el mismo motivo que LeadCreateResponse.status: la
+    # lista ya la restringe el CHECK de la base de datos.
+    estado_oportunidad: str | None
+
+    # Siempre un objeto, nunca None, también si el lead no existe: así el
+    # router puede leer presupuesto.existe directamente, sin comprobar
+    # antes si presupuesto es null.
+    presupuesto: PresupuestoSesion

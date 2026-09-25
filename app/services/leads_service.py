@@ -12,6 +12,10 @@ Sí importa Pydantic a través de app/schemas/, porque los esquemas son el
 contrato de datos del proyecto, no un framework de entrada.
 """
 
+# sys da acceso a sys.stderr, el canal de errores y avisos de la consola.
+# get_lead_session() lo usa para el [AVISO] de "más de una oportunidad".
+import sys
+
 # Json es un adaptador de psycopg2: envuelve un diccionario o una lista
 # de Python y le dice a psycopg2 "esto va a una columna JSONB, conviértelo
 # a JSON tú". Sin él habría que llamar a json.dumps() a mano y psycopg2
@@ -26,7 +30,12 @@ from psycopg2.extras import Json
 from psycopg2.errors import UniqueViolation
 
 from app.db.connection import get_db_connection, get_transactional_connection
-from app.schemas.leads import LeadCreate, LeadCreateResponse
+from app.schemas.leads import (
+    LeadCreate,
+    LeadCreateResponse,
+    LeadSessionResponse,
+    PresupuestoSesion,
+)
 
 # Canal fijo de N0: el lead llega de un CHAT web (el Agente 1 de n8n
 # conversa con el cliente y, al confirmar los datos, llama a POST /leads).
@@ -384,4 +393,124 @@ def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
         status=estado,
         # Esta llamada ha creado el lead: es la única ruta que llega aquí.
         creado=True,
+    )
+
+
+def get_lead_session(lead_token: str) -> LeadSessionResponse:
+    """
+    Estado de la conversación de un lead, para el router de n8n
+    (GET /leads/session/{lead_token}).
+
+    Contesta a dos preguntas en UNA sola consulta: ¿existe ya un lead con
+    este lead_token? Y, si existe, ¿en qué estado está su oportunidad y
+    tiene presupuesto, con Gate o sin él?
+
+    Un token que no existe NO es un error: devuelve existe=False. Para el
+    router, "este chat todavía no tiene lead" es un estado normal.
+
+    NUNCA devuelve importes (D18.5: el Agente 2 no debe tenerlos). La
+    consulta no los selecciona y LeadSessionResponse no tiene dónde
+    ponerlos.
+
+    Usa get_db_connection() (solo lectura) porque no escribe nada.
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # LEFT JOIN y no JOIN: con un JOIN normal, un lead SIN presupuesto
+        # (o sin oportunidad) no devolvería ninguna fila y parecería que
+        # no existe. Con LEFT JOIN la fila del lead sale siempre, y lo que
+        # falta llega como NULL (None en Python).
+        #
+        # p.id IS NOT NULL: así se sabe si hay presupuesto. No se mira
+        # requiere_aprobacion, porque vale false también en un presupuesto
+        # que sí existe (sin Gate).
+        #
+        # count(*) OVER () es una FUNCIÓN DE VENTANA: cuenta todas las
+        # filas que produce la consulta ANTES de que LIMIT 1 se quede con
+        # una. Como presupuestos.oportunidad_id es UNIQUE (un presupuesto
+        # como mucho por oportunidad), ese total es el número de
+        # oportunidades del lead. Sirve para avisar si hay más de una sin
+        # hacer una segunda consulta.
+        #
+        # ORDER BY o.id LIMIT 1: oportunidades.lead_id no tiene UNIQUE; si
+        # hubiera varias, se devuelve la PRIMERA, el mismo criterio que
+        # _buscar_lead_por_token() (idempotencia de POST /leads). Así las
+        # dos lecturas por token devuelven la misma oportunidad.
+        #
+        # Los importes (importe_min_con_iva, importe_max_con_iva) NO se
+        # seleccionan, a propósito.
+        cursor.execute(
+            """
+            SELECT l.id,
+                   o.id,
+                   o.estado,
+                   p.id IS NOT NULL AS tiene_presupuesto,
+                   p.requiere_aprobacion,
+                   p.motivo_gate,
+                   count(*) OVER () AS filas
+            FROM leads l
+            LEFT JOIN oportunidades o ON o.lead_id = l.id
+            LEFT JOIN presupuestos p ON p.oportunidad_id = o.id
+            WHERE l.lead_token = %s
+            ORDER BY o.id
+            LIMIT 1;
+            """,
+            (lead_token,),
+        )
+        fila = cursor.fetchone()
+        cursor.close()
+
+    # Sin filas: no hay ningún lead con ese token.
+    if fila is None:
+        return LeadSessionResponse(
+            existe=False,
+            lead_id=None,
+            oportunidad_id=None,
+            estado_oportunidad=None,
+            # presupuesto va siempre como objeto, nunca como None.
+            presupuesto=PresupuestoSesion(
+                existe=False, requiere_aprobacion=None, motivo_gate=None
+            ),
+        )
+
+    # "Desempaquetado": reparte los siete valores de la fila en siete
+    # variables, en el mismo orden que el SELECT.
+    (
+        lead_id,
+        oportunidad_id,
+        estado,
+        tiene_presupuesto,
+        requiere_aprobacion,
+        motivo_gate,
+        filas,
+    ) = fila
+
+    # Aviso en consola si el lead tiene varias oportunidades. La respuesta
+    # no cambia (se devuelve la primera); el aviso deja rastro de un caso
+    # que hoy no debería darse, para decidirlo con gate-decisions y visits.
+    # Mismo formato que los demás avisos del proyecto (stderr, flush).
+    if filas > 1:
+        print(
+            f"[AVISO] El lead {lead_id} tiene {filas} oportunidades; "
+            f"GET /leads/session devuelve la primera ({oportunidad_id}).",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return LeadSessionResponse(
+        existe=True,
+        lead_id=lead_id,
+        oportunidad_id=oportunidad_id,
+        estado_oportunidad=estado,
+        presupuesto=PresupuestoSesion(
+            existe=tiene_presupuesto,
+            # Sin presupuesto, las columnas de p llegan como None por el
+            # LEFT JOIN, que es justo lo que pide el contrato: None, y no
+            # False, porque False significaría "hay presupuesto sin Gate".
+            requiere_aprobacion=requiere_aprobacion,
+            # El texto de la base de datos se convierte en el Enum
+            # MotivoGate; Pydantic lo hace solo y falla si el valor no está
+            # en la lista.
+            motivo_gate=motivo_gate,
+        ),
     )
