@@ -39,6 +39,13 @@ actual: Nivel N0 (núcleo mínimo aprobable).
   ejecutar el script contra ella y enseñar la salida literal, antes de
   restaurar la buena y confirmarlo con git diff. Cada versión rota
   demuestra que el script detecta un modo de fallo distinto.
+- Procesos: solo se terminan los procesos arrancados en la sesión, por el
+  PID guardado al arrancarlos (por ejemplo, el que uvicorn escribe en su
+  log con "Started server process [N]", comprobado contra el que escucha
+  en el puerto). Nunca se mata "lo que escuche en un puerto". Si el
+  puerto está ocupado por otro proceso, se para y se avisa. El 8000 no se
+  usa para pruebas: es el uvicorn de Gabi para n8n. Motivo: el
+  2026-09-25 un bucle de regresión mató así el servidor de Gabi.
 - Cuando un arreglo depende de la ESTRUCTURA del código y no solo de su
   sintaxis, se verifica con ast.parse y se enseña la salida. py_compile
   no basta: devuelve exit code 0 sobre código que compila pero que anida
@@ -89,7 +96,10 @@ Estado real del código a día de hoy: POST /leads y POST
 /calculate-estimate están implementados y verificados por HTTP real
 (dos include_router en main.py). calculate-estimate tiene además su
 tool MCP calculate_estimate (list_tools() devuelve solo esa), con /mcp
-autenticado por Bearer MCP_SECRET. gate-decisions, visits y
+autenticado por Bearer MCP_SECRET. Desde el 2026-09-25 existe también
+GET /leads/session/{lead_token} (solo REST, en el router de leads, para
+el router de n8n; no forma parte de los 5 endpoints originales).
+gate-decisions, visits y
 create-followup-task siguen siendo un docstring de una línea.
 Lo que sigue es la especificación completa, no el estado actual.
 
@@ -221,15 +231,15 @@ SOLO REST.
 > check_mcp_calculate_estimate 19/19, check_migracion_iva_y_seguimiento
 > 17/17, y el resto de la suite sin fallos.
 >
-> **Bloque actual: el cierre determinista posterior a calculate_estimate
-> en n8n** (D17: Code node, rama False, casos de Gate).
+> **Bloque actual: el router de n8n (D18.9).** Un solo workflow de
+> entrada: Chat Trigger → GET /leads/session/{lead_token} → Switch →
+> Agente 1 (captura) o Agente 2 (asesor). El endpoint ya está en main.
 >
-> **Después, el barrido de seguimiento de D13** (el flujo de n8n
-> que consulta oportunidades.fecha_ultimo_contacto y marca
-> 'seguimiento_pendiente'), todavía sin empezar. Luego, POST
-> /gate-decisions. Se aplica la misma regla de siempre: **no hacer merge
-> a `main` sin la confirmación explícita de Gabi**, y siempre con
-> `--ff-only`.
+> **Después, POST /visits y POST /gate-decisions**, con corte a mitad de
+> octubre: si para entonces no están, el Agente 2 baja a N1 (D18). El
+> barrido de seguimiento de D13 queda detrás, como WF3 (orden de D18).
+> Se aplica la misma regla de siempre: **no hacer merge a `main` sin la
+> confirmación explícita de Gabi**, y siempre con `--ff-only`.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -297,6 +307,18 @@ conexión DURANTE una operación (el rollback del except puede tapar el
 error original: el caso OperationalError de D16 sigue abierto).
 Detalle: docs/TFM_Resumen_Sesion_Timeouts_DB_N0.txt.
 
+GET /leads/session/{lead_token} (rama feat/n0-endpoint-sesion, commit
+5f0b92d, 2026-09-25): el endpoint del router de n8n. 200 siempre que la
+petición sea válida (un token inexistente da existe=false), 401 sin
+X-Webhook-Secret (antes que el 422), 422 con más de 100 caracteres, y
+NUNCA importes (D18.5: la consulta no los lee y el esquema no los
+tiene). Verificado con scripts/check_lead_session_http.py 24/24; prueba
+en negativo en dos niveles: con los importes solo en services/, 24/24
+(los quita el response_model); con los importes también en el esquema,
+14/24. Suite completa 24/25 (el fallo es check_tipo_reforma_constraint).
+Detalle: docs/Plan_Endpoint_Sesion_Lead.txt y la sección 5.3 de la
+Adenda.
+
 Scripts de verificación frágiles (anotados, sin arreglar):
 check_tipo_reforma_constraint exige que oportunidades esté vacía y hoy
 tiene filas reales, así que siempre da "HAY FALLOS" (obsoleto desde el
@@ -304,7 +326,10 @@ paso 1; sus pruebas del CHECK sí pasan). Y hay tokens fijos compartidos
 entre scripts: "tok-estr" lo usan check_calculate_estimate_http y
 check_mcp_calculate_estimate, así que si uno se corta antes de limpiar,
 el otro recibe el lead viejo (convendría un prefijo por script o
-uuid4). Otras dos fragilidades, en
+uuid4). check_graceful_shutdown y check_mcp_connection tienen el puerto
+8000 escrito en el código: deberían leerlo de una variable de entorno
+(fue la causa del incidente del 2026-09-25; mientras tanto, se ejecutan
+desde una copia con otro puerto). Otras dos fragilidades, en
 docs/TFM_Resumen_Sesion_Contacto_e_Idempotencia_N0.txt, sección 8.
 
 Pendiente: gate-decisions, visits, create-followup-task,
@@ -346,6 +371,15 @@ rápida, no sustituye esa documentación. Contiene:
 - TFM_Resumen_Sesion_Autenticacion_Webhook_y_Notas_N0.txt — narrativa
   de la sesión de autenticación del webhook, RLS y notas N0, con las
   salidas reales de verificación.
+- Decisiones_D16_Agente_Conversacional_Captura_n8n.md — D16: agente
+  conversacional de captura en n8n (revisa D11).
+- Decisiones_D17_Cierre_MCP_Client_Gate_Determinista.md — D17: cierre
+  del nodo MCP Client y paso determinista posterior al cálculo.
+- Decisiones_D18_Agente2_en_N0_Arquitectura_Post_Calculo.md — D18: el
+  Agente 2 entra en N0 (revisa D16.5); router de chat (D18.9), sin
+  importes para el agente (D18.5) y plazos.
+- Plan_Endpoint_Sesion_Lead.txt — plan aprobado de GET
+  /leads/session/{lead_token}.
 
 ## Esquema de la base de datos: cuál de los dos .sql manda
 

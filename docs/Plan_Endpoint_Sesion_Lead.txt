@@ -1,0 +1,213 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: GET /leads/session/{lead_token}
+
+Documento de plan · Nivel N0 · 2026-09-25 · Rama feat/n0-endpoint-sesion
+Estado: PENDIENTE DE APROBACIÓN DE GABI. No hay código escrito.
+
+
+================================================================
+1. PARA QUÉ SIRVE
+================================================================
+
+El router de n8n lo llama al inicio de cada turno del chat para decidir
+a qué agente va el mensaje: sin lead todavía, al Agente 1 (captura);
+con lead, al Agente 2 (asesor). Solo es REST, no se expone por MCP:
+quien lo usa es el router, no un agente.
+
+
+================================================================
+2. CONTRATO (fijado por Gabi)
+================================================================
+
+  GET /leads/session/{lead_token}
+  Cabecera X-Webhook-Secret obligatoria (misma dependencia que POST
+  /leads, verificar_webhook_secret). Sin ella o con otro valor: 401.
+
+  200 siempre que la petición sea válida:
+    {
+      "existe": bool,
+      "lead_id": int | null,
+      "oportunidad_id": int | null,
+      "estado_oportunidad": str | null,
+      "presupuesto": {
+        "existe": bool,
+        "requiere_aprobacion": bool | null,
+        "motivo_gate": str | null
+      }
+    }
+
+  Token inexistente: 200 con existe=false. Para el router, "sin lead"
+  es un estado normal, no un error; un 404 obligaría a n8n a tratar un
+  código de error como flujo normal.
+  lead_token de 1 a 100 caracteres, igual que en LeadCreate; fuera de
+  rango: 422.
+  NUNCA importes en la respuesta (D18.5: el Agente 2 no debe tenerlos).
+
+
+================================================================
+3. ESQUEMA DE RESPUESTA (app/schemas/leads.py)
+================================================================
+
+  class PresupuestoSesion(BaseModel):
+      existe: bool
+      requiere_aprobacion: bool | None
+      motivo_gate: MotivoGate | None
+
+  class LeadSessionResponse(BaseModel):
+      existe: bool
+      lead_id: int | None
+      oportunidad_id: int | None
+      estado_oportunidad: str | None
+      presupuesto: PresupuestoSesion
+
+Criterios:
+  - Ningún campo tiene valor por defecto: "int | None" sin "= None"
+    obliga a services/ a rellenar cada campo de forma explícita. Si
+    alguien olvida uno, Pydantic falla en vez de mandar un null por
+    descuido.
+  - presupuesto es SIEMPRE un objeto, nunca null, también cuando el
+    lead no existe ({existe: false, requiere_aprobacion: null,
+    motivo_gate: null}). El router puede leer presupuesto.existe sin
+    comprobar antes si presupuesto es null.
+  - requiere_aprobacion vale null cuando no hay presupuesto; cuando lo
+    hay nunca es null, porque la columna es NOT NULL DEFAULT false.
+  - estado_oportunidad es str y no un Enum: no existe un Enum de estados
+    en el código (el comentario de LeadCreateResponse explica por qué no
+    se crea una tercera copia de la lista del CHECK).
+  - DEFENSA DOBLE frente a los importes: (1) la consulta SQL no los
+    selecciona; (2) el esquema no tiene ningún campo de importe, y
+    FastAPI serializa la respuesta SOLO con los campos de response_model.
+    Aunque algún día services/ leyera los importes, no podrían salir por
+    este endpoint sin cambiar también el esquema. Por eso la prueba en
+    negativo tiene que modificar el esquema Y la consulta: si solo tocara
+    la consulta, la comprobación seguiría pasando, y eso también es un
+    resultado (demuestra la segunda defensa).
+
+
+================================================================
+4. CONSULTA SQL (app/services/leads_service.py, get_db_connection)
+================================================================
+
+  SELECT l.id,
+         o.id,
+         o.estado,
+         p.id IS NOT NULL AS tiene_presupuesto,
+         p.requiere_aprobacion,
+         p.motivo_gate
+  FROM leads l
+  LEFT JOIN oportunidades o ON o.lead_id = l.id
+  LEFT JOIN presupuestos  p ON p.oportunidad_id = o.id
+  WHERE l.lead_token = %s
+  ORDER BY o.id
+  LIMIT 1;
+
+  - Sin filas: el token no existe, así que existe=false y todo null.
+  - Con fila: existe=true. Los LEFT JOIN hacen que un lead sin
+    oportunidad o una oportunidad sin presupuesto sigan devolviendo la
+    fila, con NULL en las columnas que faltan. Con JOIN normal, un lead
+    sin presupuesto desaparecería y el router lo vería como "no existe".
+  - tiene_presupuesto se calcula con p.id IS NOT NULL, no mirando
+    requiere_aprobacion: requiere_aprobacion puede valer false en un
+    presupuesto que sí existe.
+  - Búsqueda por el índice único leads_lead_token_key: no recorre la
+    tabla. presupuestos.oportunidad_id es UNIQUE, así que hay como mucho
+    un presupuesto por oportunidad.
+  - Las 17 filas antiguas tienen lead_token NULL: "= %s" nunca encaja con
+    NULL, así que no pueden aparecer.
+  - Los importes (importe_min_con_iva, importe_max_con_iva) no se
+    seleccionan.
+
+
+================================================================
+5. DECISIONES CON MÁS DE UNA OPCIÓN
+================================================================
+
+5.1 Varias oportunidades para un mismo lead
+  oportunidades.lead_id no tiene UNIQUE (pendiente anotado; se decide
+  con gate-decisions y visits). Hoy create_lead crea exactamente una.
+  a) ORDER BY o.id LIMIT 1, la primera (RECOMENDADA). Es el mismo
+     criterio que ya usa _buscar_lead_por_token en la idempotencia de
+     POST /leads: las dos lecturas por token devuelven la misma
+     oportunidad. Contra: si algún día hay varias, puede no ser la más
+     reciente.
+  b) ORDER BY o.id DESC LIMIT 1, la más reciente. Contra: rompe la
+     coherencia con POST /leads (el reintento devolvería una y la sesión
+     otra).
+  c) Error si hay más de una. Contra: convierte un caso que hoy no se da
+     en un 500 que tumbaría el chat en cada turno.
+
+5.2 Dónde viven las reglas de longitud de lead_token
+  LeadCreate tiene hoy Field(min_length=1, max_length=100) escrito a mano.
+  a) Constantes MIN_LEAD_TOKEN = 1 y MAX_LEAD_TOKEN = 100 en
+     app/schemas/common.py (junto a MAX_M2_LEAD), usadas por LeadCreate y
+     por el parámetro de ruta (RECOMENDADA). Una sola fuente, así que el
+     "mismas reglas que en LeadCreate" queda garantizado. Contra: toca
+     una línea de LeadCreate (se comprueba con check_schemas).
+  b) Repetir 1 y 100 en el endpoint. Contra: dos copias que pueden
+     divergir en silencio si un día cambia el ancho de la columna.
+  c) Un tipo Annotated compartido. Contra: FastAPI trata distinto un
+     parámetro de ruta (Path) y un campo de cuerpo (Field); habría que
+     verificar que el mismo Annotated sirve para los dos, y no aporta
+     nada frente a a).
+
+5.3 Tipo de motivo_gate en la respuesta
+  a) MotivoGate | None (RECOMENDADA). Se serializa como texto, así que
+     el JSON cumple el contrato (str | null), y además Pydantic rechaza
+     un valor que no esté en el Enum, que es copia del CHECK.
+  b) str | None. Contra: pierde esa validación sin ganar nada.
+
+Ubicación: función pública get_lead_session() en leads_service.py (es
+una lectura del dominio de leads por token, como _buscar_lead_por_token);
+esquemas en schemas/leads.py; endpoint en api/leads.py, en el mismo
+router. No se crean archivos nuevos salvo el script de verificación.
+
+
+================================================================
+6. ORDEN 401 / 422
+================================================================
+
+Lo que se espera, por cómo FastAPI resuelve las peticiones: primero las
+dependencias del decorador y después la validación de los parámetros de
+ruta. Si es así, un token de 101 caracteres sin cabecera da 401, no 422,
+igual que POST /leads da 401 antes de validar el cuerpo. No se da por
+supuesto: el script lo comprueba.
+
+
+================================================================
+7. COSTE
+================================================================
+
+Se llama en CADA turno del chat. Por petición: validación de la conexión
+(~120-190 ms, sección de gotchas de CLAUDE.md) más una consulta (~60 ms
+de ida y vuelta). Aceptable en N0; si pesara, la palanca es la validación
+del pool, no esta consulta.
+
+
+================================================================
+8. VERIFICACIÓN (scripts/check_lead_session_http.py)
+================================================================
+
+uvicorn real sin --reload, tokens con uuid4 (ninguno fijo), datos de
+prueba creados por el propio script y borrados al empezar y al terminar.
+
+  1. Sin cabecera: 401.
+  2. Token de 101 caracteres sin cabecera: 401 (orden, sección 6).
+  3. Token inexistente: 200, existe=false, todo null y presupuesto
+     {false, null, null}.
+  4. Lead sin presupuesto (creado con POST /leads): existe=true, ids
+     correctos, estado 'nueva', presupuesto.existe=false.
+  5. Lead con presupuesto normal (POST /calculate-estimate por debajo
+     del umbral): presupuesto {true, false, null}.
+  6. Lead con Gate (cambios estructurales): {true, true,
+     'cambios_estructurales'}, estado 'pendiente_aprobacion'.
+  7. Token de 101 caracteres con cabecera: 422.
+  8. En TODAS las respuestas 200: ninguna clave, a ningún nivel de
+     anidamiento, contiene "importe". Recorrido recursivo del JSON.
+
+Prueba en negativo: versión que selecciona los importes y los añade al
+esquema; la comprobación 8 debe fallar. Se enseñan las dos salidas y se
+restaura el código con diff.
+Regresión: suite completa (esperado 24/25, único fallo conocido
+check_tipo_reforma_constraint).
+Adenda: nueva sección 5.3 con el contrato, los códigos (200/401/422 y
+el 500 genérico) y la regla de los importes.
