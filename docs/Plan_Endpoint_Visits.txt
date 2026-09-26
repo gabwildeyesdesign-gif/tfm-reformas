@@ -3,8 +3,19 @@ PLAN: POST /visits (solicitud de visita técnica desde el chat)
 
 Documento de plan · Nivel N0 · 2026-09-26 · Rama feat/n0-visits (desde
 main = ac6ae05)
-Estado: APROBADO por Gabi el 2026-09-26, con P1-P5 decididos (sección
-3.0) y dos añadidos (sección 8). Bloque B en curso.
+Estado: IMPLEMENTADO Y VERIFICADO el 2026-09-26 en la rama feat/n0-visits
+(pendiente de merge a main). Aprobado por Gabi con P1-P5 decididos
+(sección 3.0) y los añadidos de la sección 8. Commits:
+  41c3420  Bloque B: migración paso9 y check_migracion_visitas (28/28)
+  6bde841  los checks solo borran los logs que crean (previo al Bloque C)
+  6bf9c1d  Bloque C: esquemas, servicio y endpoint
+  9ddf148  Bloque D: check_visits_http (54/54) y check_visits_service (16/16)
+  d3df19a  check_visits_http: 201 <-> creado en todas las respuestas (55/55)
+  (Bloque E, documentación: el commit que marca este plan como implementado)
+Resultados finales: check_visits_http 55/55, check_visits_service 16/16,
+check_migracion_visitas 28/28, suite completa 27/28 (único fallo,
+check_tipo_reforma_constraint, ya conocido). Contrato y limitaciones: Adenda,
+fila 4 y sección 5.4.
 
 
 ================================================================

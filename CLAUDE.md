@@ -46,6 +46,19 @@ actual: Nivel N0 (núcleo mínimo aprobable).
   puerto está ocupado por otro proceso, se para y se avisa. El 8000 no se
   usa para pruebas: es el uvicorn de Gabi para n8n. Motivo: el
   2026-09-25 un bucle de regresión mató así el servidor de Gabi.
+- Borrados en scripts: un script solo borra las filas que ha creado él,
+  identificadas por una marca propia (emails del dominio reservado
+  @example.com, ids sacados de ellos, o un valor aleatorio de la
+  ejecución), nunca por accion, ruta o estado a secas. Para leer lo que
+  ha escrito, la marca se combina con id > id_base (el id máximo anotado
+  al empezar), para que lo que escriba otro proceso no cambie los
+  recuentos. Una prueba en negativo que provoque errores 500 deja logs del
+  manejador global sin marca: se borran por id exacto al terminar, tras
+  comprobar que son los esperados. Motivo: el 2026-09-26 se descubrió que
+  check_exception_handler borraba con accion = 'error_no_controlado' los
+  errores 500 REALES del uvicorn de n8n (75 filas en 39 ejecuciones, según
+  pg_stat_statements); corregido en 6bde841 y verificado con un log
+  centinela.
 - Cuando un arreglo depende de la ESTRUCTURA del código y no solo de su
   sintaxis, se verifica con ast.parse y se enseña la salida. py_compile
   no basta: devuelve exit code 0 sobre código que compila pero que anida
@@ -79,7 +92,9 @@ SIEMPRE así: uvicorn app.main:app (sin --reload).
 
 Versiones instaladas (verificadas en el venv): Python 3.12.10,
 fastmcp==4.0.3, mcp==2.2.0 (dependencia de fastmcp), fastapi==0.141.1,
-pydantic==2.13.5, starlette==1.6.0, psycopg2-binary==2.9.13.
+pydantic==2.13.5, starlette==1.6.0, psycopg2-binary==2.9.13,
+tzdata==2026.4 (desde el 2026-09-26: en Windows, ZoneInfo("Europe/Madrid")
+falla sin él con ZoneInfoNotFoundError).
 
 ## Estructura de carpetas (regla de disciplina)
 
@@ -99,7 +114,8 @@ tool MCP calculate_estimate (list_tools() devuelve solo esa), con /mcp
 autenticado por Bearer MCP_SECRET. Desde el 2026-09-25 existe también
 GET /leads/session/{lead_token} (solo REST, en el router de leads, para
 el router de n8n; no forma parte de los 5 endpoints originales).
-gate-decisions, visits y
+Desde el 2026-09-26, en la rama feat/n0-visits (pendiente de merge),
+POST /visits (solo REST, tercer include_router). gate-decisions y
 create-followup-task siguen siendo un docstring de una línea.
 Lo que sigue es la especificación completa, no el estado actual.
 
@@ -110,6 +126,12 @@ SOLO REST.
 
 ## Gotchas ya resueltos (no los reinvestigues)
 
+- En Git Bash, cualquier argumento que empiece por "/" (por ejemplo
+  /leads) se convierte en una ruta de Windows (C:/Program Files/Git/leads)
+  antes de llegar al programa, salvo con MSYS_NO_PATHCONV=1 delante del
+  comando. Pasó el 2026-09-26 en la verificación con centinelas: el log
+  que debía imitar uno de /leads se guardó con la ruta convertida. Es el
+  mismo motivo por el que Docker se maneja desde PowerShell.
 - Supavisor (Session pooler de Supabase) sustituye application_name
   por el suyo propio — filtrar por él en pg_stat_activity siempre da 0
   filas a través del pooler. No es un bug nuestro.
@@ -235,8 +257,10 @@ SOLO REST.
 > entrada: Chat Trigger → GET /leads/session/{lead_token} → Switch →
 > Agente 1 (captura) o Agente 2 (asesor). El endpoint ya está en main.
 >
-> **Después, POST /visits y POST /gate-decisions**, con corte a mitad de
-> octubre: si para entonces no están, el Agente 2 baja a N1 (D18). El
+> **POST /visits está implementado y verificado en la rama
+> feat/n0-visits, pendiente de merge.** Después, POST /gate-decisions,
+> con corte a mitad de octubre: si para entonces no está, el Agente 2
+> baja a N1 (D18). El
 > barrido de seguimiento de D13 queda detrás, como WF3 (orden de D18).
 > Se aplica la misma regla de siempre: **no hacer merge a `main` sin la
 > confirmación explícita de Gabi**, y siempre con `--ff-only`.
@@ -319,6 +343,27 @@ en negativo en dos niveles: con los importes solo en services/, 24/24
 Detalle: docs/Plan_Endpoint_Sesion_Lead.txt y la sección 5.3 de la
 Adenda.
 
+POST /visits (rama feat/n0-visits, 2026-09-26; commits 41c3420
+migración, 6bde841 borrados de logs, 6bf9c1d código, 9ddf148 y d3df19a
+verificación): registra la SOLICITUD de visita técnica que el Agente 2
+pide desde el chat (no es una reserva). Entrada lead_token, fecha, hora
+(Europe/Madrid) y texto_cliente, nunca oportunidad_id; franjas y duración
+en reglas_negocio. Migración paso9 (estado 'solicitada', texto_cliente,
+updated_at, fecha_propuesta NOT NULL, índice único parcial de una visita
+activa por oportunidad, 5 reglas): check_migracion_visitas 28/28 (en
+negativo, sin índice ni CHECK, 24/28). check_visits_service 16/16 (cambio
+de hora 23/10 -> +02:00 y 26/10 -> +01:00; con un desfase fijo +02:00,
+4/6; configuración incompleta -> 503 con el log conservado).
+check_visits_http 55/55 (401, 404, 409 x4, 422 de formato y de negocio,
+201 nueva, 200 repetición, 201 sustitución, concurrencia, 409
+visita_confirmada, 0 importes, 201 <-> creado en todas, y "no toca nada
+ajeno"). En negativo: sin la comprobación del Gate 51/54, sin la del final
+de la franja 44/54, sin FOR UPDATE 50/54 (el índice parcial frena el
+duplicado, pero con un 500). Suite completa 27/28 (el fallo es
+check_tipo_reforma_constraint). Detalle: docs/Plan_Endpoint_Visits.txt y
+la sección 5.4 de la Adenda (códigos y limitaciones: Gate permanente,
+festivos, hora exacta, visita confirmada).
+
 Scripts de verificación frágiles (anotados, sin arreglar):
 check_tipo_reforma_constraint exige que oportunidades esté vacía y hoy
 tiene filas reales, así que siempre da "HAY FALLOS" (obsoleto desde el
@@ -329,10 +374,13 @@ el otro recibe el lead viejo (convendría un prefijo por script o
 uuid4). check_graceful_shutdown y check_mcp_connection tienen el puerto
 8000 escrito en el código: deberían leerlo de una variable de entorno
 (fue la causa del incidente del 2026-09-25; mientras tanto, se ejecutan
-desde una copia con otro puerto). Otras dos fragilidades, en
-docs/TFM_Resumen_Sesion_Contacto_e_Idempotencia_N0.txt, sección 8.
+desde una copia con otro puerto). De las dos fragilidades anotadas en
+docs/TFM_Resumen_Sesion_Contacto_e_Idempotencia_N0.txt, sección 8, la de
+check_migracion_m2_leads (max(tipo) sobre todos los logs) quedó corregida
+el 2026-09-26 (6bde841); en check_exception_handler sigue abierta la de
+su prueba D, que solo mira el código 201.
 
-Pendiente: gate-decisions, visits, create-followup-task,
+Pendiente: gate-decisions, create-followup-task,
 get_business_rules y request_missing_information, la concurrencia
 del Session pooler bajo carga, la tabla de excepciones de la Adenda
 (hoy un error no controlado de services/ sale como 500 genérico), y la

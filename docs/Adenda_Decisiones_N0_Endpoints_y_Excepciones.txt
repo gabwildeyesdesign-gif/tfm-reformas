@@ -13,7 +13,7 @@ endpoints y revisión técnica final.
 | 1 | POST /leads | nombre, email (se guarda entero en minúsculas), telefono (se normaliza; ver 5.1), tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token (máx. 100 caracteres; clave de idempotencia, ver 5.1) | 201 (alta nueva) o 200 (repetición con el mismo lead_token): lead_id, cliente_id, oportunidad_id, status, creado (ver 5.1) | Webhook n8n, al confirmar el cliente los datos en el chat web (Agente 1) |
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | presupuesto_id, decision, operador_id | presupuesto_id, nuevo_status | Botones inline de Telegram (aprobar/rechazar), reanuda nodo Wait de n8n |
-| 4 | POST /visits | oportunidad_id, fecha_propuesta, franja_horaria | visita_id, status | Cliente elige franja tras recibir presupuesto (paso separado, no la misma llamada síncrona del presupuesto) |
+| 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md` |
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST |
 
@@ -360,6 +360,103 @@ app/api/leads.py, app/schemas/leads.py (LeadSessionResponse,
 PresupuestoSesion). Límites de lead_token: MIN_LEAD_TOKEN y
 MAX_LEAD_TOKEN en app/schemas/common.py, compartidos con LeadCreate.
 Verificación: scripts/check_lead_session_http.py.
+
+5.4 POST /visits (añadido el 2026-09-26, en el mismo bloque que el código)
+
+Para qué: registra la SOLICITUD de visita técnica que el cliente pide en
+el chat al Agente 2 (D18.5.4: visita = solicitud, no reserva). El backend
+no habla con ningún calendario; administración llama siempre al cliente
+para confirmar. Solo REST, sin tool MCP. Plan completo y decisiones P1-P5:
+docs/Plan_Endpoint_Visits.txt.
+
+Autenticación: la misma cabecera X-Webhook-Secret que POST /leads (misma
+dependencia). Va antes que la validación del cuerpo: sin cabecera, 401
+aunque el cuerpo esté mal.
+
+Resolución de la oportunidad: a partir de lead_token, con el mismo
+criterio que GET /leads/session (la primera por ORDER BY o.id). El cuerpo
+NUNCA lleva oportunidad_id: un LLM no aporta identificadores (1.1a).
+
+Reglas de la fecha (fecha + hora se interpretan en Europe/Madrid, con el
+cambio de hora; en Windows necesita tzdata==2026.4):
+  - en el futuro, comparado con el now() de Postgres;
+  - de lunes a viernes;
+  - la visita (duracion_visita_min) debe EMPEZAR y TERMINAR dentro de una
+    franja: mañana 08:30-13:30 o tarde 17:00-20:00. Con 60 min, inicios
+    válidos de 08:30 a 12:30 y de 17:00 a 19:00, extremos incluidos.
+  Las franjas y la duración viven en reglas_negocio (visita_manana_inicio_min,
+  visita_manana_fin_min, visita_tarde_inicio_min, visita_tarde_fin_min,
+  duracion_visita_min), en minutos desde medianoche. No están en el código.
+
+Efectos, en UNA transacción: con una visita activa (solicitada o
+confirmada) de la MISMA fecha, se devuelve esa, creado=false, 200, sin
+escribir nada (el texto_cliente nuevo se ignora); con una 'solicitada' de
+OTRA fecha, se cancela y se crea la nueva (sustitución, sustituye_a); la
+visita nueva queda 'solicitada' con texto_cliente; la oportunidad pasa a
+'visita_agendada'; se registra en logs visita_solicitada o
+visita_sustituida (con la visita anterior en el detalle).
+
+Formato de los errores de negocio (404, 409, 422 de fecha, 503):
+  {"detail": {"motivo": "<código estable>", "mensaje": "<texto para el
+  cliente>"}}, y en el 503 también "faltan". n8n debe pasarle al agente el
+  CUERPO de los 4xx para que se lo explique al cliente.
+
+DOS FORMAS DE 422:
+  - De formato (Pydantic): el cuerpo está mal formado. detail es una LISTA
+    con loc, msg y type (por ejemplo loc ["body","hora"]).
+  - De negocio: la fecha incumple una regla. detail es un OBJETO
+    {motivo, mensaje} (fecha_pasada, fin_de_semana, fuera_de_franja).
+
+| Código | motivo | Cuándo | Reintento en n8n |
+|---|---|---|---|
+| 201 | — | Visita nueva o sustitución (sustituye_a relleno) | — |
+| 200 | — | Repetición: ya hay una activa con la misma fecha_propuesta (creado=false) | — |
+| 401 | — | Falta X-Webhook-Secret o es incorrecto | NO |
+| 422 | (Pydantic) | Cuerpo mal formado: falta un campo; fecha no YYYY-MM-DD; hora no HH:MM (tampoco "10:00:00" ni "10:00Z"); texto vacío o de más de 1000 caracteres; lead_token fuera de 1-100; campos de más (oportunidad_id) | NO |
+| 404 | lead_no_encontrado | No hay lead con ese lead_token | NO |
+| 409 | sin_presupuesto | La oportunidad no tiene presupuesto | NO |
+| 409 | presupuesto_con_gate | requiere_aprobacion = true (defensa del backend, aunque el agente se equivoque) | NO |
+| 409 | estado_no_permitido | Estado fuera de presupuesto_enviado, seguimiento_pendiente y visita_agendada | NO |
+| 409 | visita_confirmada | Ya hay una visita CONFIRMADA y se pide otra fecha (P4) | NO |
+| 503 | configuracion_incompleta | Falta o es incoherente una fila de reglas_negocio; se registra en logs (visita_configuracion_incompleta) aunque la petición falle | Inútil, pero inofensivo |
+| 422 | fecha_pasada / fin_de_semana / fuera_de_franja | La fecha incumple una regla; el mensaje nombra las franjas reales | NO |
+| 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+Orden de las comprobaciones: 401 -> 422 de formato -> 404 -> 409
+(sin_presupuesto, presupuesto_con_gate, estado_no_permitido) -> 503 ->
+422 de fecha -> 409 visita_confirmada.
+
+NUNCA devuelve importes (D18.5). Defensa doble, como en GET /leads/session:
+la consulta no los lee y VisitaResponse no tiene campos de importe.
+
+Concurrencia: la consulta inicial bloquea la fila de la oportunidad (FOR
+UPDATE OF o); dos peticiones simultáneas se serializan y la segunda ve lo
+que escribió la primera. Segunda barrera: índice único parcial
+visitas_una_activa_por_oportunidad. Verificado: 5 peticiones simultáneas
+con la misma fecha -> un 201 y cuatro 200, una sola visita; sin el FOR
+UPDATE, el índice frena el duplicado pero una petición recibe 500.
+
+LIMITACIONES (asumidas en N0):
+  - Gate permanente (P5): requiere_aprobacion no vuelve a false cuando se
+    aprueba el Gate (POST /gate-decisions solo escribirá aprobado_por). Un
+    cliente con Gate, aprobado o no, no puede pedir visita desde el chat.
+    Coherente con D18 (el resultado del Gate va por email y la visita la
+    gestiona administración). Revisar con /gate-decisions.
+  - Festivos no detectados: solo se excluyen sábados y domingos.
+    Administración lo corrige al llamar.
+  - Hora exacta (C7): D18.5.4 dice "día o franja", pero el endpoint exige
+    una hora de inicio HH:MM. El Agente 2 debe pedirla (o proponer una
+    concreta y confirmarla) antes de llamar a la herramienta.
+  - 409 visita_confirmada (P4): una visita que administración ya confirmó
+    por teléfono no se cambia desde el chat; el agente remite a
+    administración. Hoy ningún endpoint confirma visitas.
+
+Implementación: app/services/visits_service.py (solicitar_visita,
+combinar_fecha_hora_madrid, validar_fecha, _leer_reglas), app/api/visits.py,
+app/schemas/visits.py; migración
+scripts/migraciones_ejecutadas/paso9_visitas_solicitud.py. Verificación:
+scripts/check_migracion_visitas.py, scripts/check_visits_service.py y
+scripts/check_visits_http.py.
 
 6. Revisión técnica final — hallazgos y resolución
 
