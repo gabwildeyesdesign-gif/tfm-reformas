@@ -153,3 +153,14 @@ MAX_M2_LEAD = 500
 # columna, se cambia aquí y los dos quedan iguales.
 MIN_LEAD_TOKEN = 1
 MAX_LEAD_TOKEN = 100
+
+# Longitud máxima de visitas.texto_cliente: lo que dijo el cliente en el
+# chat sobre cuándo le viene bien la visita. Es una frase, no la
+# descripción del proyecto: un turno de chat normal ronda los 300
+# caracteres, y 1000 son dos párrafos largos. El tope evita que un texto
+# pegado (o un bucle del agente) meta decenas de KB en visitas y en logs.
+#
+# Defensa doble (mismo criterio que MAX_M2_LEAD): el mismo valor está en
+# el CHECK chk_visitas_texto_cliente_longitud de la base de datos
+# (migración paso9). Si se cambia aquí, hay que cambiarlo también allí.
+MAX_TEXTO_VISITA = 1000

@@ -8,6 +8,7 @@ from psycopg2.extras import Json
 
 from app.api import estimates as estimates_api
 from app.api import leads as leads_api
+from app.api import visits as visits_api
 from app.db.connection import (
     close_pool,
     get_db_connection,
@@ -76,6 +77,11 @@ app.include_router(leads_api.router)
 # montada más arriba bajo /mcp. Las dos llaman a la misma función de
 # app/services/estimate_service.py.
 app.include_router(estimates_api.router)
+
+# Tercer router: POST /visits (app/api/visits.py). Solo REST, sin tool MCP:
+# lo llama la herramienta HTTP del Agente 2 en n8n para registrar la
+# SOLICITUD de visita técnica de un cliente (no es una reserva).
+app.include_router(visits_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna
