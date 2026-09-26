@@ -54,6 +54,10 @@ fallos = []
 # Todos los cuerpos JSON recibidos de POST /visits, para el caso de los
 # importes.
 cuerpos_visits = []
+# (código HTTP, creado, descripción) de cada respuesta de ÉXITO (200 o 201)
+# de POST /visits, para comprobar al final que 201 <-> creado=true y
+# 200 <-> creado=false en todas.
+pares_exito = []
 
 
 def comprobar(titulo, condicion, detalle=""):
@@ -177,14 +181,16 @@ def calcular(oportunidad_id):
 
 def visita(token, fecha, hora, texto="Me viene bien a esa hora", cabeceras=AUTH, extra=None):
     """POST /visits. fecha es un date; hora, un texto "HH:MM"."""
-    cuerpo = {"lead_token": token, "fecha": fecha.isoformat(), "hora": hora, "texto_cliente": texto}
+    peticion = {"lead_token": token, "fecha": fecha.isoformat(), "hora": hora, "texto_cliente": texto}
     if extra:
-        cuerpo.update(extra)
-    r = requests.post(f"{BASE}/visits", headers=cabeceras, json=cuerpo, timeout=40)
+        peticion.update(extra)
+    r = requests.post(f"{BASE}/visits", headers=cabeceras, json=peticion, timeout=40)
     try:
         cuerpos_visits.append(r.json())
     except ValueError:
         pass
+    if r.status_code in (200, 201):
+        pares_exito.append((r.status_code, cuerpo(r).get("creado"), f"{fecha} {hora}"))
     return r
 
 
@@ -408,6 +414,9 @@ try:
     creados = [cuerpo(r).get("creado") for r in respuestas]
     ids = {cuerpo(r).get("visita_id") for r in respuestas}
     print(f"      misma fecha x5 -> códigos {codigos}, creado {creados}, visita_id {ids}")
+    # Cada par sale de UNA misma respuesta. map() devuelve las respuestas en
+    # el orden en que se lanzaron las peticiones (no en el que terminaron).
+    print(f"      misma fecha x5, pares (código, creado) por petición: {[(r.status_code, cuerpo(r).get('creado')) for r in respuestas]}")
     comprobar("misma fecha x5: un 201 y cuatro 200", codigos == [200, 200, 200, 200, 201])
     comprobar("misma fecha x5: exactamente un creado=true y todas con el mismo visita_id", creados.count(True) == 1 and len(ids) == 1)
     comprobar("misma fecha x5: una sola visita en la BD", len(visitas_de(op_c1)) == 1, f"({visitas_de(op_c1)})")
@@ -439,6 +448,14 @@ try:
     print("\nCASO 14 - Ningún importe en ninguna respuesta de POST /visits")
     con_importe = [(i, claves_con_importe(c)) for i, c in enumerate(cuerpos_visits) if claves_con_importe(c)]
     comprobar(f"0 claves 'importe' en {len(cuerpos_visits)} respuestas (éxitos y errores)", not con_importe, f"({con_importe[:3]})")
+
+    # ------------------------------------------------------------------
+    print("\nCASO 15 - Coherencia entre el código HTTP y creado")
+    incoherentes = [p for p in pares_exito if not ((p[0] == 201 and p[1] is True) or (p[0] == 200 and p[1] is False))]
+    print(f"      respuestas de éxito revisadas: {len(pares_exito)} "
+          f"({sum(1 for p in pares_exito if p[0] == 201)} con 201, {sum(1 for p in pares_exito if p[0] == 200)} con 200)")
+    comprobar("201 <-> creado=true y 200 <-> creado=false en TODAS las respuestas de éxito",
+              not incoherentes, f"(incoherentes: {incoherentes})")
 
 finally:
     servidor.should_exit = True
