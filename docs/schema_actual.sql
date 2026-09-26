@@ -1,7 +1,7 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-09-24 18:30:33 UTC
+-- Generado por scripts/dump_schema.py el 2026-09-26 16:55:34 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
@@ -13,7 +13,7 @@
 
 
 -- ------------------------------------------------------------------------
--- Tabla: clientes   (18 filas en el momento del volcado)
+-- Tabla: clientes   (15 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE clientes (
     id                       SERIAL NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE clientes (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: leads   (23 filas en el momento del volcado)
+-- Tabla: leads   (20 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE leads (
     id                       SERIAL NOT NULL,
@@ -43,7 +43,7 @@ CREATE TABLE leads (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: logs   (16 filas en el momento del volcado)
+-- Tabla: logs   (12 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE logs (
     id                       SERIAL NOT NULL,
@@ -56,7 +56,7 @@ CREATE TABLE logs (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: oportunidades   (23 filas en el momento del volcado)
+-- Tabla: oportunidades   (20 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE oportunidades (
     id                       SERIAL NOT NULL,
@@ -77,7 +77,7 @@ CREATE TABLE oportunidades (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: presupuestos   (14 filas en el momento del volcado)
+-- Tabla: presupuestos   (12 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE presupuestos (
     id                       SERIAL NOT NULL,
@@ -98,7 +98,7 @@ CREATE TABLE presupuestos (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: reglas_negocio   (6 filas en el momento del volcado)
+-- Tabla: reglas_negocio   (11 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE reglas_negocio (
     id                       SERIAL NOT NULL,
@@ -147,18 +147,22 @@ CREATE TABLE umbrales_gate (
 CREATE TABLE visitas (
     id                       SERIAL NOT NULL,
     oportunidad_id           INTEGER NOT NULL,
-    fecha_propuesta          TIMESTAMPTZ,
-    estado                   VARCHAR(30) NOT NULL DEFAULT 'reservada'::character varying,
+    fecha_propuesta          TIMESTAMPTZ NOT NULL,
+    estado                   VARCHAR(30) NOT NULL DEFAULT 'solicitada'::character varying,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    texto_cliente            TEXT NOT NULL,
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT visitas_oportunidad_id_fkey FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
     CONSTRAINT visitas_pkey PRIMARY KEY (id),
-    CONSTRAINT visitas_estado_check CHECK ((estado)::text = ANY ((ARRAY['reservada'::character varying, 'confirmada'::character varying, 'completada'::character varying, 'cancelada'::character varying])::text[]))
+    CONSTRAINT chk_visitas_texto_cliente_longitud CHECK ((char_length(texto_cliente) >= 1) AND (char_length(texto_cliente) <= 1000)),
+    CONSTRAINT visitas_estado_check CHECK ((estado)::text = ANY ((ARRAY['solicitada'::character varying, 'confirmada'::character varying, 'completada'::character varying, 'cancelada'::character varying])::text[]))
 );
 
 -- ==========================================================================
 -- Indices que no respaldan ninguna restriccion (pg_indexes)
 -- ==========================================================================
 CREATE UNIQUE INDEX clientes_email_lower_key ON public.clientes USING btree (lower((email)::text));
+CREATE UNIQUE INDEX visitas_una_activa_por_oportunidad ON public.visitas USING btree (oportunidad_id) WHERE ((estado)::text = ANY ((ARRAY['solicitada'::character varying, 'confirmada'::character varying])::text[]));
 
 -- ==========================================================================
 -- Row Level Security

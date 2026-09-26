@@ -1,0 +1,491 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: POST /visits (solicitud de visita técnica desde el chat)
+
+Documento de plan · Nivel N0 · 2026-09-26 · Rama feat/n0-visits (desde
+main = ac6ae05)
+Estado: APROBADO por Gabi el 2026-09-26, con P1-P5 decididos (sección
+3.0) y dos añadidos (sección 8). Bloque B en curso.
+
+
+================================================================
+0. COMPROBACIONES HECHAS ANTES DE ESCRIBIR ESTE PLAN
+================================================================
+
+Fuente: ejecución real (solo lectura) contra el venv y la base de datos.
+
+  - ZoneInfo("Europe/Madrid") en el venv de Windows: FALLA.
+      zoneinfo._common.ZoneInfoNotFoundError:
+        'No time zone found with key Europe/Madrid'
+    Windows no trae la base de datos de zonas horarias (IANA) que usa
+    Python; en Linux viene del sistema. Hace falta el paquete tzdata, que
+    NO está instalado. Versión actual en PyPI: 2026.4 (pip index versions
+    tzdata). Ver decisión P1.
+  - SELECT count(*) FROM visitas -> 0 filas.
+  - reglas_negocio hoy: dias_espera_decision_post_visita, iva_estandar_pct,
+    margen_empresa_pct, max_fotos_lead, recargo_informe_tecnico,
+    umbral_aprobacion_manual. Ninguna de las cinco filas nuevas existe.
+  - TimeZone de la sesión de Postgres (a través del pooler): UTC.
+  - oportunidades por estado: nueva 8, pendiente_aprobacion 5,
+    presupuesto_enviado 7. Ninguna en visita_agendada.
+  - El código de main NO usa el valor 'reservada' en ningún sitio (grep en
+    app/ y scripts/). app/api/visits.py y app/services/visits_service.py
+    existen, pero solo contienen su docstring de una línea, y main.py no
+    incluye ningún router de visitas.
+
+
+================================================================
+1. CONTRADICCIONES Y PROBLEMAS ENCONTRADOS (decisión de Gabi)
+================================================================
+
+C1. La fila 4 de la Adenda describe un contrato antiguo: entrada
+    oportunidad_id, fecha_propuesta, franja_horaria; salida visita_id,
+    status. Las decisiones cerradas lo sustituyen (lead_token, fecha,
+    hora, texto_cliente; nunca oportunidad_id). Se actualiza en el
+    Bloque E. No hay que decidir nada: es para dejarlo dicho.
+
+C2. tzdata no está instalado (sección 0). Ver P1.
+
+C3. EL GATE ES PERMANENTE. presupuestos.requiere_aprobacion dice "este
+    presupuesto NECESITÓ aprobación", y ningún paso lo vuelve a poner a
+    false: cuando exista POST /gate-decisions, escribirá aprobado_por,
+    pero requiere_aprobacion seguirá en true. Con la regla 5 tal como
+    está, un cliente cuyo Gate se aprueba NUNCA podrá pedir visita desde
+    el chat. Es coherente con D18 (en un caso de Gate el resultado va por
+    email y el chat ya está cerrado; la visita la gestiona
+    administración), pero conviene que sea una decisión consciente y no
+    un efecto secundario.
+      a) Mantener la regla tal cual (RECOMENDADA para N0) y anotarla en
+         la Adenda como limitación, para revisarla con /gate-decisions.
+      b) Bloquear solo mientras el Gate está pendiente:
+         requiere_aprobacion = true AND aprobado_por IS NULL. Contra: hoy
+         aprobado_por siempre es NULL (nadie lo escribe), así que en N0
+         funciona igual que a), pero promete un comportamiento que
+         depende de un endpoint que aún no existe.
+
+C4. SUSTITUIR UNA VISITA 'confirmada'. La regla 6 cancela cualquier
+    visita activa, también una 'confirmada'. Pero 'confirmada' significa
+    que administración ya llamó al cliente y acordó la fecha: un cambio
+    pedido por el chat la anularía en silencio. En N0 ningún endpoint
+    pone una visita en 'confirmada', así que hoy no puede pasar; importa
+    para cuando exista.
+      a) Solo se sustituye una 'solicitada'; con una 'confirmada', 409
+         'visita_confirmada' y el agente dice que administración le
+         llamará (RECOMENDADA).
+      b) Sustituir también la 'confirmada' (la regla tal como está).
+         Contra: deshace desde el chat un acuerdo hecho por teléfono.
+
+C5. CÓDIGO HTTP SI FALTA UNA FILA DE reglas_negocio. El prompt pide un
+    "error controlado", sin fijar el código. La Adenda manda a n8n
+    REINTENTAR los 5xx y no los 4xx.
+      a) 503 con motivo 'configuracion_incompleta', qué claves faltan,
+         y una fila en logs (RECOMENDADA). Es la semántica honesta: el
+         fallo es del servidor, no de la petición. Contra: si el nodo de
+         n8n reintenta, repetirá la llamada unas cuantas veces sin
+         arreglar nada (inofensivo, no escribe nada).
+      b) 409 'configuracion_incompleta'. n8n no reintenta. Contra: un
+         4xx dice "la petición está mal", y no lo está.
+      c) Lo que hace calculate-estimate (200 + requiere_revision). Aquí
+         no sirve: habría que registrar una visita sin haber validado la
+         franja.
+
+C6. visitas.fecha_propuesta es hoy NULL-able. Ver P3.
+
+C7. D18.5.4 dice "el cliente indica día o franja". El endpoint exige una
+    hora exacta de inicio (HH:MM). El Agente 2 tendrá que preguntar una
+    hora concreta; si el cliente dice "por la tarde", el agente propone
+    una (p. ej. 17:00) y la confirma antes de llamar. Afecta al prompt
+    del Agente 2, no al backend.
+
+C8. Expand/contract: la migración RETIRA 'reservada' del CHECK. La regla
+    del proyecto obliga a partirla en dos solo si el código de main usa
+    lo que se retira. No lo usa (sección 0) y la tabla está vacía, así
+    que va en una sola migración, y lo digo explícitamente.
+
+
+================================================================
+2. DISEÑO
+================================================================
+
+2.1 Entrada (app/schemas/visits.py, nuevo)
+
+  class VisitaCreate(BaseModel):
+      model_config = ConfigDict(extra="forbid")
+      lead_token: str      Field(min_length=MIN_LEAD_TOKEN,
+                                 max_length=MAX_LEAD_TOKEN)
+      fecha: date          "YYYY-MM-DD"
+      hora: str            patrón ^([01]\d|2[0-3]):[0-5]\d$ ("HH:MM"), y se
+                           convierte a time en un validador
+      texto_cliente: str   min_length=1, max_length=MAX_TEXTO_VISITA (1000)
+
+  - extra="forbid": si llega oportunidad_id (o cualquier campo de más),
+    422. Es la regla de la Adenda 1.1a: un LLM no aporta identificadores.
+  - hora como texto con patrón, no como time directamente: el tipo time
+    de Pydantic acepta también "10:00:00.5" y otras formas; el contrato
+    dice HH:MM. Cualquier minuto vale (10:07 también); la regla es la
+    franja, no una rejilla de medias horas.
+  - fecha: se comprueba en Bloque C que Pydantic rechaza formas que no
+    sean YYYY-MM-DD (por ejemplo un número). Si no las rechaza, se usa el
+    mismo truco del patrón.
+  - MAX_TEXTO_VISITA = 1000 caracteres, en schemas/common.py. Por qué:
+    es la frase del cliente sobre cuándo le viene bien, no una
+    descripción del proyecto. Un turno de chat normal tiene menos de 300
+    caracteres; 1000 son dos párrafos largos. El límite evita que un
+    texto pegado (o un bucle del agente) meta decenas de KB en la tabla
+    y en logs. Defensa doble con un CHECK en la base de datos (P3).
+    Se recortan los espacios de los extremos; un texto solo de espacios
+    da 422.
+
+2.2 Reglas de negocio (app/services/visits_service.py)
+
+  Orden de las comprobaciones, de la más barata y general a la más
+  concreta. Cada una solo se evalúa si las anteriores han pasado:
+
+    1. 401  Cabecera (dependencia, antes de leer el cuerpo).
+    2. 422  Forma del cuerpo (Pydantic).
+    3. 404  No hay lead con ese lead_token.
+    4. 409  sin_presupuesto
+    5. 409  presupuesto_con_gate      (antes que el estado: en un Gate
+                                        pendiente el estado también falla,
+                                        y el motivo útil para el agente es
+                                        el del Gate)
+    6. 409  estado_no_permitido       (fuera de presupuesto_enviado,
+                                        seguimiento_pendiente,
+                                        visita_agendada)
+    7. 503  configuracion_incompleta  (P2 / C5)
+    8. 422  fecha_pasada / fin_de_semana / fuera_de_franja
+    9. 409  visita_confirmada         (solo si se aprueba C4-a)
+
+  Por qué el estado (409) va antes que la fecha (422): a un cliente con
+  Gate no se le debe decir "ese día es sábado, elige otro"; hay que
+  decirle que no puede pedir visita por el chat.
+
+  Reglas de la fecha, con los valores leídos de reglas_negocio:
+    - fecha y hora se interpretan en Europe/Madrid.
+    - fecha_pasada: el inicio no es posterior a now(). El "ahora" es el
+      now() de Postgres, leído en la misma consulta del bloqueo: el reloj
+      de la base de datos es la referencia, no el del portátil.
+    - fin_de_semana: sábado o domingo. Los festivos NO se detectan
+      (limitación asumida).
+    - fuera_de_franja: inicio y fin (inicio + duracion_visita_min) dentro
+      de UNA franja: [manana_inicio, manana_fin] o [tarde_inicio,
+      tarde_fin], ambos extremos incluidos. Con 60 min: 8:30-12:30 y
+      17:00-19:00. Una visita que empieza en una franja y termina en la
+      otra es imposible con estas cifras, pero la regla lo cubre igual.
+    - Los valores llegan como NUMERIC(10,2) (Decimal('510.00')); si alguno
+      no es entero, o las franjas son incoherentes (inicio >= fin), se
+      trata como configuracion_incompleta, no se adivina.
+    - El mensaje de cada 422 nombra la regla y las franjas reales, para
+      que el agente lo explique: "La visita debe empezar y terminar
+      dentro de una franja: mañana de 08:30 a 13:30 o tarde de 17:00 a
+      20:00 (duración 60 min). Las 12:45 terminarían a las 13:45."
+
+2.3 Transacción (get_transactional_connection, una sola)
+
+  a) Bloqueo y lectura, en una consulta:
+       SELECT o.id, o.estado, p.id, p.requiere_aprobacion, now()
+       FROM leads l
+       JOIN oportunidades o ON o.lead_id = l.id
+       LEFT JOIN presupuestos p ON p.oportunidad_id = o.id
+       WHERE l.lead_token = %s
+       ORDER BY o.id
+       LIMIT 1
+       FOR UPDATE OF o;
+     - Misma oportunidad que get_lead_session (la primera por o.id).
+     - FOR UPDATE OF o bloquea SOLO la fila de la oportunidad (no la del
+       presupuesto ni la del lead). Postgres no permite FOR UPDATE sobre
+       el lado opcional de un LEFT JOIN; oportunidades va con JOIN normal,
+       así que puede bloquearse.
+     - Sin fila -> 404 (un lead sin oportunidad no puede crearse por la
+       API; si apareciera, también 404).
+     - NO se lee ningún importe.
+  b) Comprobaciones 4 a 8.
+  c) Visita activa de esa oportunidad (como mucho una, por el índice):
+       SELECT id, fecha_propuesta, estado FROM visitas
+       WHERE oportunidad_id = %s AND estado IN ('solicitada','confirmada');
+     - Misma fecha_propuesta -> se devuelve esa visita, creado=false, 200,
+       sin escribir nada. El texto_cliente nuevo se ignora (mismo criterio
+       que POST /leads con un token repetido).
+     - Otra fecha -> UPDATE estado='cancelada', updated_at=now() (si C4-a:
+       solo si es 'solicitada'; si es 'confirmada', 409).
+  d) INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado,
+     texto_cliente) VALUES (..., 'solicitada', ...) RETURNING id,
+     fecha_propuesta, estado.
+  e) UPDATE oportunidades SET estado='visita_agendada', updated_at=now().
+  f) INSERT INTO logs: entity_type 'oportunidad', entity_id =
+     oportunidad_id (el mismo criterio que calculate-estimate: la historia
+     de una oportunidad se consulta en un solo sitio), accion
+     'visita_solicitada' o 'visita_sustituida', detalle {visita_id,
+     fecha_propuesta, texto_cliente, y en la sustitución sustituye_a y
+     fecha_anterior}.
+  Todo o nada: si falla cualquier paso, rollback y no queda ni la
+  cancelación ni la visita nueva a medias.
+
+2.4 Concurrencia: dos peticiones simultáneas con el mismo lead_token
+
+  Primera barrera, el bloqueo (FOR UPDATE OF o): la segunda petición se
+  queda esperando en el paso a) hasta que la primera hace commit. En el
+  nivel de aislamiento de Postgres por defecto (READ COMMITTED), cada
+  sentencia posterior de la segunda transacción ve lo que la primera ya
+  confirmó. Así que la segunda:
+    - con la misma fecha, encuentra la visita recién creada -> 200,
+      creado=false (idempotencia real frente a reintentos de n8n);
+    - con otra fecha, la sustituye -> 201 con sustituye_a.
+  La espera está acotada por statement_timeout (30 s).
+  Segunda barrera, el índice único parcial (P3): aunque un camino futuro
+  olvidara el bloqueo, la base de datos no admite dos visitas activas
+  para la misma oportunidad. Con el bloqueo no debería saltar nunca; si
+  saltara, es un fallo del código y saldría como 500 visible, no como un
+  dato duplicado silencioso.
+  Efecto secundario aceptado: el bloqueo también serializa POST /visits
+  con cualquier otra escritura sobre la misma oportunidad
+  (calculate-estimate, el futuro /gate-decisions), que es lo deseable.
+
+2.5 Respuesta (app/schemas/visits.py)
+
+  class VisitaResponse(BaseModel):
+      visita_id: int
+      estado: str                 ('solicitada')
+      fecha_propuesta: datetime   en hora de Madrid, con su desfase:
+                                  "2026-10-01T10:00:00+02:00"
+      sustituye_a: int | None
+      creado: bool
+
+  - 201 si se crea (nueva o sustitución), 200 si es repetición: el
+    adaptador cambia el código como hace POST /leads.
+  - fecha_propuesta vuelve de Postgres en UTC (la sesión está en UTC); se
+    convierte a Europe/Madrid antes de responder, para que el agente no
+    tenga que hacer cuentas de husos horarios.
+  - NUNCA importes (D18.5). Defensa doble como en GET /leads/session: la
+    consulta no los lee y VisitaResponse no tiene dónde ponerlos.
+
+2.6 Formato de los errores
+
+  404, 409, 422 de negocio y 503: detail = {"motivo": "<código>",
+  "mensaje": "<texto para el agente>"}. El motivo es estable (para n8n y
+  para las pruebas); el mensaje es para el cliente.
+  OJO: los 422 de FORMATO los genera Pydantic con su propio formato (una
+  lista con loc/msg/type). Habrá dos formas de 422: la de Pydantic (el
+  cuerpo está mal formado) y la de negocio (la fecha no cumple una
+  regla). Se documenta en la Adenda.
+
+
+================================================================
+3. DECISIONES CON MÁS DE UNA OPCIÓN
+================================================================
+
+3.0 DECIDIDO por Gabi (2026-09-26), en los cinco casos la opción a):
+  P1  tzdata==2026.4 instalado en el venv y fijado en requirements.txt.
+  P2  503 configuracion_incompleta, con las claves que faltan y un
+      registro en logs.
+  P3  fecha_propuesta NOT NULL; texto_cliente NOT NULL con CHECK de 1 a
+      1000 caracteres; updated_at NOT NULL DEFAULT now().
+  P4  Solo se sustituye una visita 'solicitada'; con una 'confirmada',
+      409 visita_confirmada.
+  P5  La regla del Gate se mantiene y se anota en la Adenda como
+      limitación, para revisarla con /gate-decisions.
+  Lo que sigue en esta sección es el análisis previo a la decisión.
+
+P1. Zona horaria en Windows.
+  a) Instalar tzdata==2026.4 en el venv y fijarlo en requirements.txt
+     (RECOMENDADA). Es el paquete oficial que Python usa cuando el
+     sistema no trae la base IANA; puro Python, sin compilar, unos cientos
+     de KB. La lógica de fechas queda en Python y se puede probar sin
+     base de datos. Contra: una dependencia más, y hay que actualizarla
+     si España cambia su horario (tzdata publica varias versiones al año).
+  b) Convertir en Postgres ((fecha + hora) AT TIME ZONE 'Europe/Madrid'),
+     que ya trae la base IANA. Contra: parte de la regla de negocio pasa
+     al SQL, y comprobarla exige base de datos.
+  c) Desfase fijo (+01:00/+02:00 a mano). Descartada: falla en los
+     cambios de hora.
+
+P2. Código si falta una regla: ver C5 (recomendada a, 503).
+
+P3. Restricciones de la tabla visitas (la tabla está vacía, así que no
+    hay datos que migrar):
+  a) Además de lo pedido: fecha_propuesta NOT NULL; texto_cliente TEXT
+     NOT NULL con CHECK (char_length(texto_cliente) BETWEEN 1 AND 1000);
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now() (como oportunidades)
+     (RECOMENDADA). Defensa doble, el mismo criterio que D5 y el tope de
+     m2: una visita sin fecha o sin texto no tiene sentido, y la base de
+     datos lo garantiza aunque se escriba por otra vía.
+  b) Solo lo pedido (texto_cliente TEXT y updated_at TIMESTAMPTZ, ambas
+     NULL-ables). Contra: la garantía queda solo en Pydantic.
+
+  Índice único parcial (pedido):
+    CREATE UNIQUE INDEX visitas_una_activa_por_oportunidad
+      ON visitas (oportunidad_id)
+      WHERE estado IN ('solicitada', 'confirmada');
+  Se comprueba en Bloque B que scripts/dump_schema.py lo recoge con su
+  cláusula WHERE (lee pg_indexes desde paso8).
+
+P4. Sustitución de una 'confirmada': ver C4 (recomendada a, 409).
+P5. Gate permanente: ver C3 (recomendada a, mantener y anotar).
+
+
+================================================================
+4. MIGRACIÓN (Bloque B)
+================================================================
+
+scripts/migraciones_ejecutadas/paso9_visitas_solicitud.py, en UNA
+transacción, idempotente (cada paso mira antes si ya está hecho):
+  0. SELECT count(*) FROM visitas: si no es 0, ABORTA sin tocar nada.
+  1. CHECK visitas_estado_check: DROP y CREATE con
+     ('solicitada','confirmada','completada','cancelada').
+  2. DEFAULT de estado: 'solicitada'.
+  3. ADD COLUMN texto_cliente, updated_at (con P3 según lo que se apruebe).
+  4. (P3-a) fecha_propuesta SET NOT NULL y CHECK de longitud.
+  5. Índice único parcial visitas_una_activa_por_oportunidad.
+  6. INSERT en reglas_negocio (ON CONFLICT (clave) DO NOTHING):
+       visita_manana_inicio_min  510   (08:30)
+       visita_manana_fin_min     810   (13:30)
+       visita_tarde_inicio_min   1020  (17:00)
+       visita_tarde_fin_min      1200  (20:00)
+       duracion_visita_min       60
+     con descripción en cada fila ("minutos desde medianoche, hora de
+     Madrid").
+  Después: regenerar docs/schema_actual.sql con scripts/dump_schema.py.
+
+scripts/check_migracion_visitas.py: cada violación en su propio
+SAVEPOINT (patrón de check_migracion_email_lower_y_lead_token.py), todo
+dentro de una transacción que se deshace al final:
+  - estado 'reservada' -> rechazado; 'solicitada' -> aceptado; DEFAULT =
+    'solicitada';
+  - dos visitas activas para la misma oportunidad -> rechazado por el
+    índice; una activa + una cancelada -> aceptado; dos canceladas ->
+    aceptado;
+  - (P3-a) fecha_propuesta NULL, texto_cliente NULL, vacío y de 1001
+    caracteres -> rechazados;
+  - las cinco reglas existen con sus valores;
+  - la migración es idempotente (segunda ejecución: no cambia nada).
+
+
+================================================================
+5. ARCHIVOS
+================================================================
+
+  Nuevos:
+    app/schemas/visits.py
+    scripts/migraciones_ejecutadas/paso9_visitas_solicitud.py
+    scripts/check_migracion_visitas.py
+    scripts/check_visits_http.py
+    scripts/check_visits_service.py   (casos que no se pueden provocar
+                                       por HTTP sin tocar datos
+                                       compartidos: falta una regla)
+  Modificados:
+    app/services/visits_service.py    (hoy solo el docstring)
+    app/api/visits.py                 (hoy solo el docstring)
+    app/main.py                       (include_router de visitas)
+    app/schemas/common.py             (MAX_TEXTO_VISITA)
+    requirements.txt                  (tzdata==2026.4, si P1-a)
+    docs/schema_actual.sql            (regenerado)
+    docs/Adenda_...                   (fila 4 y sección 5.4, Bloque E)
+    CLAUDE.md                         (Bloque E)
+
+
+================================================================
+6. TABLA DE CÓDIGOS
+================================================================
+
+| Código | motivo | Cuándo | Reintento n8n |
+|---|---|---|---|
+| 201 | — | Visita nueva o sustitución (sustituye_a relleno) | — |
+| 200 | — | Repetición: ya hay una activa con la misma fecha_propuesta (creado=false) | — |
+| 401 | — | Falta X-Webhook-Secret o es incorrecto | NO |
+| 422 | (Pydantic) | Cuerpo mal formado: falta un campo, hora no HH:MM, texto vacío o > 1000, lead_token fuera de 1-100, campos de más (oportunidad_id) | NO |
+| 404 | lead_no_encontrado | No hay lead con ese lead_token | NO |
+| 409 | sin_presupuesto | La oportunidad no tiene presupuesto | NO |
+| 409 | presupuesto_con_gate | requiere_aprobacion = true | NO |
+| 409 | estado_no_permitido | Estado fuera de presupuesto_enviado, seguimiento_pendiente, visita_agendada | NO |
+| 409 | visita_confirmada | (si C4-a) Ya hay una visita confirmada con otra fecha | NO |
+| 422 | fecha_pasada | El inicio no es posterior a ahora (hora de Madrid) | NO |
+| 422 | fin_de_semana | Sábado o domingo | NO |
+| 422 | fuera_de_franja | Empieza o termina fuera de las franjas | NO |
+| 503 | configuracion_incompleta | (si C5-a) Falta o es incoherente una fila de reglas_negocio; se registra en logs | Inútil, pero inofensivo |
+| 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+
+================================================================
+7. PRUEBAS
+================================================================
+
+scripts/check_visits_http.py (uvicorn en el puerto 8018, nunca el 8000;
+el script solo apaga el servidor que arranca; tokens uuid4; datos de
+prueba creados por POST /leads y POST /calculate-estimate y borrados al
+empezar y al terminar, visitas y logs incluidos). Las fechas se calculan
+relativas a hoy (el próximo lunes, etc.), para que el script no caduque.
+
+  Autenticación y forma:
+    1. 401 sin cabecera (y con un cuerpo inválido: 401, no 422).
+    2. 422 Pydantic: hora "10:00:00", texto de 1001 caracteres, campo
+       oportunidad_id de más.
+  Estado:
+    3. 404 lead_token inexistente.
+    4. 409 sin_presupuesto (lead recién creado, sin calcular).
+    5. 409 presupuesto_con_gate (lead con cambios estructurales).
+    6. 409 estado_no_permitido (lead normal con estado forzado a 'ganada'
+       desde el script).
+  Fecha (lead normal, estado presupuesto_enviado):
+    7. 422 fecha_pasada (ayer), fin_de_semana (el próximo sábado),
+       fuera_de_franja a las 08:29, 12:45 (terminaría a las 13:45), 16:59
+       y 19:30. Cada uno comprueba el motivo y que el mensaje nombra la
+       franja.
+    8. Límites válidos: 08:30, 12:30, 17:00 y 19:00 dan 201/sustitución
+       (se ejercitan encadenados en el mismo lead).
+  Efectos:
+    9. 201 nueva: estado 'solicitada', sustituye_a null, creado true,
+       fecha_propuesta con +01:00/+02:00; en la base de datos, la visita
+       con texto_cliente, oportunidades.estado = 'visita_agendada' y un
+       log 'visita_solicitada'.
+   10. 200 repetición (misma fecha): mismo visita_id, creado false, y 0
+       filas nuevas en visitas y en logs.
+   11. 201 sustitución (otra fecha): sustituye_a = la anterior; la
+       anterior queda 'cancelada'; una sola activa; log
+       'visita_sustituida' con la visita anterior en el detalle.
+   12. Concurrencia: 5 peticiones simultáneas con el mismo lead_token y la
+       misma fecha -> 1 visita activa, exactamente un creado=true; y 5
+       simultáneas con fechas distintas -> exactamente 1 visita activa.
+   13. Ninguna clave con "importe" en ninguna respuesta (recorrido
+       recursivo, como en check_lead_session_http).
+
+scripts/check_visits_service.py (sin servidor): falta una regla ->
+configuracion_incompleta, provocándolo al cambiar EN MEMORIA el nombre de
+una clave a uno que no existe (no se borra ni se toca ninguna fila
+compartida de reglas_negocio), y comprobación de que queda el log.
+
+Pruebas en negativo (cada versión rota en una copia, salida literal,
+restauración y diff):
+  - sin la comprobación del Gate -> el caso 5 FALLA (sale 201);
+  - sin la comprobación del FINAL de la franja -> el 12:45 y el 19:30
+    FALLAN (salen 201);
+  - (propuesta) sin el FOR UPDATE -> el caso 12 debe fallar o, si el
+    índice parcial lo para, salir 500: demuestra que la segunda barrera
+    existe. Si el resultado no es reproducible, se dice.
+Regresión: suite completa de scripts/check_*.py con el procedimiento
+seguro (sin el 8000, solo se terminan los PID propios). Hoy hay 25
+scripts; con los 3 nuevos (check_migracion_visitas, check_visits_http y
+check_visits_service) serán 28. Esperado: 27/28, con
+check_tipo_reforma_constraint como único fallo conocido.
+
+
+================================================================
+8. AÑADIDOS DE GABI AL APROBAR EL PLAN (2026-09-26)
+================================================================
+
+8.1 Prueba del cambio de hora (el motivo de instalar tzdata)
+  La función que combina fecha + hora en Europe/Madrid se prueba
+  directamente en scripts/check_visits_service.py, con fechas FIJAS (no
+  relativas a hoy, porque lo que se prueba es el calendario, no "el
+  próximo lunes"):
+    2026-10-23 08:30 -> +02:00 (horario de verano)
+    2026-10-26 08:30 -> +01:00 (horario de invierno; el cambio es el
+                                25/10/2026)
+  Prueba en negativo: con un desfase fijo +02:00 escrito a mano, el caso
+  del 26/10 debe FALLAR.
+
+8.2 Notas para n8n (no son trabajo del backend)
+  - El Agente 2 debe pedir una hora EXACTA de inicio (C7): si el cliente
+    dice "por la tarde", propone una hora concreta y la confirma antes de
+    llamar a la herramienta.
+  - La herramienta HTTP del Agente 2 debe pasarle al agente el CUERPO de
+    los errores 4xx ({motivo, mensaje}), para que se lo explique al
+    cliente, en lugar de tratar cualquier 4xx como un fallo genérico.
