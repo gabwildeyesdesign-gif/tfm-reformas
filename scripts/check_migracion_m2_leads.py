@@ -33,6 +33,7 @@ su cuenta con uvicorn.Server (sin --reload) y apaga al terminar.
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 RAIZ_REPO = Path(__file__).resolve().parents[1]
@@ -53,6 +54,24 @@ PUERTO = 8015
 BASE = f"http://127.0.0.1:{PUERTO}"
 AUTH = {"X-Webhook-Secret": WEBHOOK_SECRET}
 EMAIL = "check-m2@example.com"
+
+# CORRECCIÓN 2026-09-26: que el script solo lea y borre SU log de error.
+# Antes borraba todos los logs 'sistema' de la ruta /calculate-estimate, y
+# esos los escribe el manejador global para CUALQUIER 500 real de esa
+# ruta, también los del uvicorn que sirve a n8n.
+#
+# La prueba C corrompe un campo del lead con un texto que no es booleano, y
+# Postgres copia ese texto en el mensaje del error
+# (invalid input syntax for type boolean: "..."). En vez de "abc", el texto
+# es ahora MARCA_M2 + 8 caracteres al azar de esta ejecución. Así:
+#   - leer: el log de ESTA ejecución es el que contiene VALOR_CORRUPTO;
+#   - borrar: cualquier log cuyo mensaje contenga MARCA_M2, de esta
+#     ejecución o de una anterior que se cortara antes de limpiar.
+# Ningún log real puede contener "m2check-": solo lo escribe este script.
+MARCA_M2 = "m2check-"
+# uuid4().hex son 32 caracteres hexadecimales al azar; con 8 basta para
+# que dos ejecuciones no coincidan.
+VALOR_CORRUPTO = MARCA_M2 + uuid.uuid4().hex[:8]
 
 ok = 0
 fallos = []
@@ -132,6 +151,14 @@ def limpiar():
         (EMAIL,),
     )
     cur.execute("DELETE FROM clientes WHERE email=%s;", (EMAIL,))
+    # Logs de error de la prueba C (de esta ejecución o de una anterior
+    # interrumpida), reconocidos por la marca propia. Ver MARCA_M2.
+    # "%%" es un % literal dentro de un texto con parámetros de psycopg2.
+    cur.execute(
+        """DELETE FROM logs WHERE entity_type='sistema' AND accion='error_no_controlado'
+             AND detalle->>'mensaje' LIKE '%%' || %s || '%%';""",
+        (MARCA_M2,),
+    )
     cn.commit()
 
 
@@ -310,9 +337,11 @@ try:
     cur.execute(
         """UPDATE leads
            SET datos_estructurados = jsonb_set(datos_estructurados,
-                                               '{incluye_cambios_estructurales}', '"abc"')
+                                               '{incluye_cambios_estructurales}', to_jsonb(%s::text))
            WHERE cliente_id = (SELECT id FROM clientes WHERE email=%s) RETURNING id;""",
-        (EMAIL,),
+        # to_jsonb(texto) convierte el texto en un valor JSON de tipo
+        # cadena ("m2check-..."), igual que antes lo era '"abc"'.
+        (VALOR_CORRUPTO, EMAIL),
     )
     print(f"  leads corrompidos a mano (incluye_cambios_estructurales): {cur.rowcount}")
     cur.execute(
@@ -321,8 +350,11 @@ try:
         (EMAIL,),
     )
     oportunidad_id = cur.fetchone()[0]
-    cur.execute("SELECT count(*) FROM logs WHERE entity_type='sistema';")
-    logs_antes = cur.fetchone()[0]
+    # Id más alto de logs antes de la petición: el log de la prueba C
+    # tendrá un id mayor. Se combina con VALOR_CORRUPTO al leer, para que
+    # un error real que llegue a la vez no cuente como el de la prueba.
+    cur.execute("SELECT COALESCE(max(id), 0) FROM logs;")
+    id_base = cur.fetchone()[0]
     cn.commit()
 
     r = requests.post(f"{BASE}/calculate-estimate", headers=AUTH,
@@ -331,21 +363,21 @@ try:
     comprobar("C  el cliente recibe 500 genérico", r.status_code == 500)
     comprobar("C  el cuerpo no filtra traceback ni el error interno",
               r.json() == {"status": "error", "detail": "Error interno"}
-              and "abc" not in r.text and "Traceback" not in r.text)
+              and VALOR_CORRUPTO not in r.text and "Traceback" not in r.text)
     time.sleep(0.5)  # margen para el INSERT del manejador
     cur.execute(
         """SELECT count(*), max(detalle->>'tipo'), max(detalle->>'ruta')
-           FROM logs WHERE entity_type='sistema';"""
+           FROM logs WHERE id > %s AND entity_type='sistema' AND accion='error_no_controlado'
+             AND detalle->>'mensaje' LIKE '%%' || %s || '%%';""",
+        (id_base, VALOR_CORRUPTO),
     )
     n_logs, tipo, ruta = cur.fetchone()
     cn.commit()
     comprobar("C  el manejador global dejó la fila en logs",
-              n_logs == logs_antes + 1, f"({logs_antes} -> {n_logs})")
+              n_logs == 1, f"(filas propias con {VALOR_CORRUPTO}: {n_logs})")
     comprobar("C  el log dice qué error fue y en qué ruta",
               tipo is not None and "DataError" in tipo or tipo == "InvalidTextRepresentation",
               f"(tipo={tipo}, ruta={ruta})")
-    cur.execute("DELETE FROM logs WHERE entity_type='sistema' AND detalle->>'ruta'='/calculate-estimate';")
-    cn.commit()
 
 finally:
     limpiar()

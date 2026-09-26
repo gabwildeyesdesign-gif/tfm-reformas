@@ -489,3 +489,19 @@ check_tipo_reforma_constraint como único fallo conocido.
   - La herramienta HTTP del Agente 2 debe pasarle al agente el CUERPO de
     los errores 4xx ({motivo, mensaje}), para que se lo explique al
     cliente, en lugar de tratar cualquier 4xx como un fallo genérico.
+
+8.3 Limpieza de check_visits_http (añadido 2026-09-26, tras corregir los
+    borrados de logs demasiado amplios en check_exception_handler y
+    check_migracion_m2_leads)
+  - Orden de borrado por las claves foráneas: logs -> visitas ->
+    presupuestos -> oportunidades -> leads -> clientes. visitas.oportunidad_id
+    apunta a oportunidades, así que las visitas se borran ANTES que las
+    oportunidades; si no, la limpieza falla con ForeignKeyViolation.
+  - Mismo criterio de "solo lo propio": todo se identifica a partir de los
+    clientes de prueba (email LIKE 'http-visits-%@example.com', dominio
+    reservado) y de los ids de oportunidad que salen de ellos. Los logs se
+    borran por entity_type = 'oportunidad' AND entity_id IN (esos ids), y las
+    visitas por oportunidad_id IN (esos ids). Ningún DELETE por accion, por
+    ruta ni por estado a secas.
+  - Si el script necesitara leer logs (visita_solicitada, visita_sustituida),
+    lee solo los de sus oportunidades, nunca "todos los de esa acción".

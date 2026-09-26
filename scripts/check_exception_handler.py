@@ -93,12 +93,38 @@ def comprobar(titulo, condicion, detalle=""):
         print(f"    [FALLO] {titulo}  {detalle}")
 
 
+# ---- marcas propias: que este script solo lea y borre SUS logs --------
+# CORRECCIÓN 2026-09-26. Antes el script leía y borraba TODAS las filas
+# con accion = 'error_no_controlado'. Esa acción la escribe el manejador
+# global de app/main.py para CUALQUIER 500 real, también los del uvicorn
+# que sirve a n8n, así que cada ejecución borraba errores reales de
+# producción (pg_stat_statements: 75 filas en 39 llamadas).
+#
+# Ahora cada log propio se reconoce por una de dos marcas que NINGÚN log
+# real puede tener:
+#   - RUTA_PROPIA: la ruta temporal que este script añade a SU app, dentro
+#     de SU proceso. En cualquier otro servidor no existe: una petición a
+#     ella da 404, y un 404 no pasa por el manejador ni se registra.
+#   - MENSAJE_PROPIO: el texto del error que lanza la versión rota de
+#     create_lead que este script inyecta (prueba B).
+RUTA_PROPIA = "/__prueba_boom"
+MENSAJE_PROPIO = "fallo simulado dentro de services/"
+
+# Condición SQL de "log de este script". Los %(nombre)s son parámetros con
+# nombre: psycopg2 los rellena desde un diccionario, de forma segura.
+FILTRO_PROPIO = """
+    accion = 'error_no_controlado' AND entity_type = 'sistema'
+    AND (detalle->>'ruta' = %(ruta)s OR detalle->>'mensaje' = %(mensaje)s)
+"""
+PARAMS_PROPIOS = {"ruta": RUTA_PROPIA, "mensaje": MENSAJE_PROPIO}
+
+
 # ---- endpoint temporal que revienta (solo existe en esta prueba) -----
 def endpoint_que_revienta():
     return 1 / 0
 
 
-app_main.app.add_api_route("/__prueba_boom", endpoint_que_revienta, methods=["GET"])
+app_main.app.add_api_route(RUTA_PROPIA, endpoint_que_revienta, methods=["GET"])
 
 # ---- conexion de observacion, ajena al pool del servidor -------------
 cn = psycopg2.connect(DATABASE_URL)
@@ -106,11 +132,17 @@ cur = cn.cursor(cursor_factory=RealDictCursor)
 
 
 def logs_de_error():
+    """
+    Logs de error de ESTA ejecución: posteriores a id_base y con una marca
+    propia. Un error real que llegue durante la prueba (por ejemplo, del
+    uvicorn de n8n) no cambia los recuentos del script.
+    """
     cur.execute(
-        """
+        f"""
         SELECT id, entity_type, entity_id, accion, detalle, created_at
-        FROM logs WHERE accion = 'error_no_controlado' ORDER BY id;
-        """
+        FROM logs WHERE id > %(base)s AND {FILTRO_PROPIO} ORDER BY id;
+        """,
+        {**PARAMS_PROPIOS, "base": id_base},
     )
     filas = cur.fetchall()
     cn.commit()
@@ -118,12 +150,23 @@ def logs_de_error():
 
 
 def limpiar_logs():
-    cur.execute("DELETE FROM logs WHERE accion = 'error_no_controlado';")
+    """
+    Borra SOLO los logs con marca propia, de esta ejecución o de una
+    anterior que se cortara antes de limpiar. Sin filtro de id a
+    propósito: la marca basta para no tocar nunca un log real.
+    """
+    cur.execute(f"DELETE FROM logs WHERE {FILTRO_PROPIO};", PARAMS_PROPIOS)
     cn.commit()
 
 
 limpiar_logs()
-print(f"Logs de error al empezar: {len(logs_de_error())}\n")
+# Id más alto de logs en este momento. Todo lo que el script escriba a
+# partir de aquí tendrá un id mayor (id es SERIAL, siempre creciente).
+# COALESCE(..., 0): si la tabla estuviera vacía, max() devolvería NULL.
+cur.execute("SELECT COALESCE(max(id), 0) AS m FROM logs;")
+id_base = cur.fetchone()["m"]
+cn.commit()
+print(f"Logs de error propios al empezar: {len(logs_de_error())} (id_base = {id_base})\n")
 
 # ---- arranque --------------------------------------------------------
 config = uvicorn.Config(
@@ -195,7 +238,8 @@ try:
     original = leads_api.create_lead
 
     def create_lead_roto(data):
-        raise RuntimeError("fallo simulado dentro de services/")
+        # MENSAJE_PROPIO: es la marca con la que el script reconoce este log.
+        raise RuntimeError(MENSAJE_PROPIO)
 
     leads_api.create_lead = create_lead_roto
 
