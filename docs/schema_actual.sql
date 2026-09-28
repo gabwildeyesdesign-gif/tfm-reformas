@@ -1,14 +1,15 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-09-26 16:55:34 UTC
+-- Generado por scripts/dump_schema.py el 2026-09-28 12:01:14 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
--- table_constraints, key_column_usage, constraint_column_usage y
--- check_constraints) y pg_indexes, no copiado de ningun archivo previo.
+-- table_constraints, key_column_usage y check_constraints), pg_constraint
+-- (claves foráneas) y pg_indexes, no copiado de ningun archivo previo.
 --
--- Tablas: 9
+-- Tablas: 10, en orden topológico: cada una después de las
+-- tablas a las que apunta, para que el archivo se pueda ejecutar entero.
 -- ==========================================================================
 
 
@@ -98,7 +99,7 @@ CREATE TABLE presupuestos (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: reglas_negocio   (11 filas en el momento del volcado)
+-- Tabla: reglas_negocio   (12 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE reglas_negocio (
     id                       SERIAL NOT NULL,
@@ -154,8 +155,30 @@ CREATE TABLE visitas (
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT visitas_oportunidad_id_fkey FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
     CONSTRAINT visitas_pkey PRIMARY KEY (id),
+    CONSTRAINT visitas_id_oportunidad_id_key UNIQUE (id, oportunidad_id),
     CONSTRAINT chk_visitas_texto_cliente_longitud CHECK ((char_length(texto_cliente) >= 1) AND (char_length(texto_cliente) <= 1000)),
     CONSTRAINT visitas_estado_check CHECK ((estado)::text = ANY ((ARRAY['solicitada'::character varying, 'confirmada'::character varying, 'completada'::character varying, 'cancelada'::character varying])::text[]))
+);
+
+-- ------------------------------------------------------------------------
+-- Tabla: decisiones_gate   (0 filas en el momento del volcado)
+-- ------------------------------------------------------------------------
+CREATE TABLE decisiones_gate (
+    id                       SERIAL NOT NULL,
+    oportunidad_id           INTEGER NOT NULL,
+    visita_id                INTEGER,
+    decision                 VARCHAR(20) NOT NULL,
+    motivo                   VARCHAR(30),
+    informe                  TEXT NOT NULL,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT decisiones_gate_oportunidad_id_fkey FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
+    CONSTRAINT decisiones_gate_visita_oportunidad_fkey FOREIGN KEY (visita_id, oportunidad_id) REFERENCES visitas(id, oportunidad_id),
+    CONSTRAINT decisiones_gate_pkey PRIMARY KEY (id),
+    CONSTRAINT decisiones_gate_oportunidad_id_key UNIQUE (oportunidad_id),
+    CONSTRAINT chk_decisiones_gate_coherencia CHECK ((((decision)::text <> 'visita_acordada'::text) OR ((visita_id IS NOT NULL) AND (motivo IS NULL))) AND (((decision)::text <> 'descartar'::text) OR ((motivo IS NOT NULL) AND (visita_id IS NULL)))),
+    CONSTRAINT chk_decisiones_gate_decision CHECK ((decision)::text = ANY ((ARRAY['visita_acordada'::character varying, 'descartar'::character varying])::text[])),
+    CONSTRAINT chk_decisiones_gate_informe CHECK ((informe = btrim(informe)) AND ((char_length(informe) >= 1) AND (char_length(informe) <= 2000))),
+    CONSTRAINT chk_decisiones_gate_motivo CHECK ((motivo IS NULL) OR ((motivo)::text = ANY ((ARRAY['precio'::character varying, 'plazo'::character varying, 'no_contesta'::character varying, 'proyecto_no_viable'::character varying, 'otro'::character varying])::text[])))
 );
 
 -- ==========================================================================
@@ -168,6 +191,7 @@ CREATE UNIQUE INDEX visitas_una_activa_por_oportunidad ON public.visitas USING b
 -- Row Level Security
 -- ==========================================================================
 ALTER TABLE clientes         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE decisiones_gate  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE leads            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE logs             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE oportunidades    ENABLE ROW LEVEL SECURITY;
