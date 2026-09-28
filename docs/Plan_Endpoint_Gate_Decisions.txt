@@ -4,9 +4,8 @@ caso de Gate)
 
 Documento de plan · Nivel N0 · 2026-09-28 · Rama feat/n0-gate-decisions
 (desde main = 7934fa6)
-Estado: REVISADO por Gabi el 2026-09-28. P1-P9 decididas (sección 6) y
-correcciones adicionales aplicadas. P10 pendiente. Bloque B sin empezar.
-No hay código escrito.
+Estado: APROBADO por Gabi el 2026-09-28 (Bloque A cerrado en bc758f6).
+P1-P10 decididas (sección 6). Bloque B (migración paso10) en curso.
 
 Fuentes: el encargo del Bloque A (contexto D19 del 26/09), la CORRECCIÓN
 posterior de Gabi (decision = visita_acordada | descartar, visita
@@ -526,8 +525,12 @@ P8. DECIDIDA: el recordatorio del Gate va en WF3, NO en WF2. WF2 se
 
 P9. CONFIRMADA: el informe no se copia al log.
 
-P10. PENDIENTE (nueva, por C5). ¿Se añade también la comprobación que
-     falta en MCP_SECRET (distinto de WEBHOOK_SECRET)?
+P10. DECIDIDA a) (2026-09-28): se añade en esta rama la comprobación de
+     arranque que falta (MCP_SECRET distinto de WEBHOOK_SECRET), en el
+     mismo sitio y con el mismo patrón que la de GATE_SECRET, es decir, en
+     el Bloque C2. Se verifica con check_mcp_connection y
+     check_mcp_calculate_estimate, desde una copia con otro puerto (nunca
+     el 8000). Análisis previo:
       a) Sí, en esta rama, junto a la de GATE_SECRET (RECOMENDADA): las
          tres credenciales quedan comprobadas entre sí en el arranque, y
          el mensaje de error de /mcp deja de prometer algo que no se
@@ -626,7 +629,8 @@ P10. PENDIENTE (nueva, por C5). ¿Se añade también la comprobación que
   C1 Mudanza de las reglas de fecha a reglas_visita (con el "origen" del
      log), sin cambio de comportamiento: check_visits_http 55/55,
      check_visits_service 16/16, suite completa.               [PARA]
-  C2 GATE_SECRET (config, security, .env.example), esquemas, servicio y
+  C2 GATE_SECRET (config, security, .env.example) y la comprobación de
+     MCP_SECRET distinto de WEBHOOK_SECRET (P10); esquemas, servicio y
      endpoint de gate-decisions; verificación mínima.          [PARA]
   D  check_gate_decisions_http y check_gate_decisions_service completos,
      pruebas en negativo y suite.                               [PARA]
