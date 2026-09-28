@@ -107,7 +107,9 @@ de formato: docs/Plan_Endpoint_Visits.txt.
        administración por teléfono), fecha_propuesta = fecha + hora en
        Madrid, texto_cliente = el texto fijo "Visita acordada por
        teléfono por administración tras la revisión del Gate." (P2).
-    2. INSERT en decisiones_gate con visita_id = la visita recién creada.
+    2. INSERT en decisiones_gate con visita_id = la visita recién creada
+       (la clave foránea doble garantiza que esa visita es de ESTA
+       oportunidad).
     3. oportunidades: estado -> 'visita_agendada', fecha_ultimo_contacto
        = now() (P5) y updated_at = now().
     4. Log gate_decision_registrada.
@@ -116,6 +118,10 @@ de formato: docs/Plan_Endpoint_Visits.txt.
     2. oportunidades: estado -> 'perdida', fecha_ultimo_contacto = now()
        (P5) y updated_at = now().
     3. Log gate_decision_registrada.
+  decisiones_gate NO guarda presupuesto_id (corrección del 2026-09-28): el
+  presupuesto se obtiene siempre desde oportunidad_id, porque
+  presupuestos.oportunidad_id es UNIQUE. El servicio sí LEE el presupuesto
+  (para sin_presupuesto y sin_gate), pero no lo copia.
   presupuestos.aprobado_por se queda NULL (N0 no identifica al operador,
   sección 8). presupuestos.requiere_aprobacion NO cambia nunca (P5 de
   /visits: el Gate es permanente).
@@ -224,7 +230,9 @@ de formato: docs/Plan_Endpoint_Visits.txt.
   Misma estructura que solicitar_visita: una transacción, excepciones por
   familia (404, 409, 422, 503) con motivo y mensaje, y el 503 con el log
   conservado (rechazo diferido: se lanza después del commit). Nunca lee
-  importes. Log gate_decision_registrada con entity_type 'oportunidad' y
+  importes. Guarda el informe ya RECORTADO (lo recorta Pydantic, y el CHECK
+  de la base de datos lo exige). No escribe presupuesto_id (no existe).
+  Log gate_decision_registrada con entity_type 'oportunidad' y
   detalle {decision_id, decision, motivo, visita_id, fecha_propuesta}. El
   informe NO se copia al log (P9): vive en decisiones_gate, fuente única,
   y el log guarda decision_id para enlazarlo.
@@ -290,68 +298,131 @@ de formato: docs/Plan_Endpoint_Visits.txt.
 ================================================================
 
 scripts/migraciones_ejecutadas/paso10_decisiones_gate.py, una transacción,
-idempotente (cada paso mira antes si ya está hecho):
+idempotente (cada paso mira antes si ya está hecho). CORREGIDA el 2026-09-28
+tras la revisión del tutor (defectos 1 y 2): sin presupuesto_id, clave
+foránea doble para la visita e informe recortado.
 
+  -- 1. Requisito de la clave doble (idempotente: se comprueba antes en
+  --    pg_constraint, porque ADD CONSTRAINT no admite IF NOT EXISTS)
+  ALTER TABLE visitas ADD CONSTRAINT visitas_id_oportunidad_id_key
+    UNIQUE (id, oportunidad_id);
+
+  -- 2. La tabla
   CREATE TABLE IF NOT EXISTS decisiones_gate (
     id              SERIAL PRIMARY KEY,
-    oportunidad_id  INTEGER NOT NULL REFERENCES oportunidades(id),
-    presupuesto_id  INTEGER NOT NULL REFERENCES presupuestos(id),
-    visita_id       INTEGER NULL REFERENCES visitas(id),
+    oportunidad_id  INTEGER NOT NULL,
+    visita_id       INTEGER NULL,
     decision        VARCHAR(20) NOT NULL,
     motivo          VARCHAR(30) NULL,
     informe         TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT decisiones_gate_oportunidad_id_key UNIQUE (oportunidad_id),
+    CONSTRAINT decisiones_gate_oportunidad_id_fkey
+      FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
+    CONSTRAINT decisiones_gate_visita_oportunidad_fkey
+      FOREIGN KEY (visita_id, oportunidad_id) REFERENCES visitas (id, oportunidad_id),
     CONSTRAINT chk_decisiones_gate_decision
       CHECK (decision IN ('visita_acordada', 'descartar')),
     CONSTRAINT chk_decisiones_gate_motivo
       CHECK (motivo IS NULL OR motivo IN
              ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable', 'otro')),
-    CONSTRAINT chk_decisiones_gate_informe_longitud
-      CHECK (char_length(informe) BETWEEN 1 AND 2000),
+    CONSTRAINT chk_decisiones_gate_informe
+      CHECK (informe = btrim(informe) AND char_length(informe) BETWEEN 1 AND 2000),
     CONSTRAINT chk_decisiones_gate_coherencia CHECK (
       (decision = 'visita_acordada' AND visita_id IS NOT NULL AND motivo IS NULL)
       OR
       (decision = 'descartar' AND motivo IS NOT NULL AND visita_id IS NULL))
   );
-  ALTER TABLE decisiones_gate ENABLE ROW LEVEL SECURITY;   -- misma transacción
+
+  -- 3. RLS, en la misma transacción
+  ALTER TABLE decisiones_gate ENABLE ROW LEVEL SECURITY;
+
+  -- 4. La regla (descripción en UNA línea, enviada como parámetro)
   INSERT INTO reglas_negocio (clave, valor, descripcion)
-    VALUES ('horas_recordatorio_gate', 24,
-            'Horas que puede estar una oportunidad en pendiente_aprobacion sin
-             decisión antes de que WF3 (barridos periódicos) recuerde a
-             administración que llame al cliente. Al registrarse la decisión
-             (POST /gate-decisions) el estado cambia y el recordatorio se
-             detiene solo.')
+    VALUES ('horas_recordatorio_gate', 24, '<descripción en una línea>')
     ON CONFLICT (clave) DO NOTHING;
+
+  Descripción de la regla, literal y en una línea: "Horas que puede estar
+  una oportunidad en pendiente_aprobacion sin decisión antes de que WF3
+  (barridos periódicos) recuerde a administración que llame al cliente. Al
+  registrarse la decisión (POST /gate-decisions) el estado cambia y el
+  recordatorio se detiene solo."
 
   Notas:
   - UNIQUE (oportunidad_id): una decisión por oportunidad. Es también la
     SEGUNDA barrera contra dos peticiones simultáneas (la primera es el
     FOR UPDATE).
-  - presupuesto_id: redundante hoy (presupuestos.oportunidad_id es UNIQUE),
-    pero deja constancia de QUÉ presupuesto se decidió, por si en N1 una
-    oportunidad llega a tener varios.
-  - Es una migración puramente ADITIVA (tabla y fila nuevas): no retira
-    nada, así que no necesita expand/contract.
+  - Sin presupuesto_id (defecto 2): era redundante (presupuestos.
+    oportunidad_id es UNIQUE, así que el presupuesto se obtiene siempre
+    desde oportunidad_id), y un dato redundante sin protección acaba
+    contradiciéndose. Si en N1 una oportunidad tuviera varios
+    presupuestos, se añadirá entonces.
+  - Clave foránea DOBLE (defecto 2): (visita_id, oportunidad_id) tiene que
+    existir JUNTO en visitas, es decir, la visita tiene que ser de la MISMA
+    oportunidad que la decisión. Una clave simple sobre visita_id solo
+    exigiría que la visita existiera, aunque fuera de otro cliente.
+    PostgreSQL solo admite una clave foránea hacia columnas únicas en
+    conjunto; por eso el paso 1 declara UNIQUE (id, oportunidad_id) en
+    visitas. No puede fallar con los datos existentes (id ya es la clave
+    primaria) y solo añade un índice pequeño.
+  - MATCH SIMPLE (el comportamiento por defecto de las claves foráneas):
+    si ALGUNA columna de la clave es NULL, la clave no se comprueba. En un
+    descarte visita_id es NULL, así que la clave doble no se mira, que es
+    lo que se quiere (un descarte no tiene visita). Que un descarte no
+    tenga visita y una visita acordada sí lo garantiza el CHECK de
+    coherencia.
+  - CHECK del informe (defecto 1): defensa doble. informe = btrim(informe)
+    exige que esté guardado ya RECORTADO, como lo guarda Pydantic; así un
+    informe de solo espacios o con espacios en los extremos tampoco entra
+    si alguien escribe en la tabla a mano. Se renombra de
+    chk_decisiones_gate_informe_longitud a chk_decisiones_gate_informe
+    porque ya no comprueba solo la longitud.
+    LÍMITE: btrim sin segundo argumento solo quita el carácter ESPACIO, no
+    tabuladores ni saltos de línea (Python .strip() sí). Ver P11.
+  - Es una migración puramente ADITIVA (una restricción, una tabla y una
+    fila nuevas): no retira nada, así que no necesita expand/contract.
   - Este endpoint NO lee horas_recordatorio_gate: la usa WF3 en n8n.
   - Después: regenerar docs/schema_actual.sql y ejecutar check_rls_estado
     (la tabla nueva debe salir con RLS activado).
 
+  Marcha atrás (NO se ejecuta; solo por si hiciera falta deshacerla):
+    BEGIN;
+    DROP TABLE IF EXISTS decisiones_gate;
+    ALTER TABLE visitas DROP CONSTRAINT IF EXISTS visitas_id_oportunidad_id_key;
+    DELETE FROM reglas_negocio WHERE clave = 'horas_recordatorio_gate';
+    COMMIT;
+  El ORDEN importa: primero la tabla y después la UNIQUE de visitas. La
+  clave doble de decisiones_gate DEPENDE de esa UNIQUE, y PostgreSQL se
+  niega a borrar una restricción de la que depende una clave foránea
+  (salvo con CASCADE, que borraría cosas sin decirlo). Al borrar antes la
+  tabla, su clave doble desaparece con ella y la UNIQUE queda libre.
+  OJO: DROP TABLE borra también las decisiones registradas; hoy no hay
+  ninguna, pero después sí.
+
 scripts/check_migracion_decisiones_gate.py, todo en una transacción que se
 deshace al final y cada violación en su SAVEPOINT:
-  Estructura: columnas, UNIQUE, los 4 CHECK, las 3 FK, RLS activado
-  (pg_class.relrowsecurity) y la fila horas_recordatorio_gate = 24.
-  Comportamiento (con una oportunidad, un presupuesto y una visita propios):
-    rechazados: decision 'continuar'; motivo 'caro'; informe vacío y de
-      2001 caracteres; visita_acordada sin visita_id; visita_acordada con
+  Estructura: la UNIQUE (id, oportunidad_id) de visitas; las 7 columnas
+  (sin presupuesto_id); UNIQUE, clave foránea a oportunidades, clave doble
+  a visitas y exactamente 2 claves foráneas; los 4 CHECK, y que el del
+  informe usa btrim y char_length; RLS activado (pg_class.relrowsecurity);
+  la fila horas_recordatorio_gate = 24 con la descripción en una línea.
+  Comportamiento (con dos oportunidades propias y una visita en cada una):
+    rechazados: decision 'continuar'; motivo 'caro'; informe vacío, de
+      solo espacios "   ", con espacios en los extremos " texto ", de 2001
+      caracteres y NULL; visita_acordada sin visita_id; visita_acordada con
       motivo; descartar sin motivo; descartar con visita_id; dos decisiones
-      para la misma oportunidad; visita_id inexistente (FK).
-    aceptados: visita_acordada con visita_id; descartar con motivo;
-      informe de 2000 caracteres (y 2000 'á', que cuenta caracteres).
-  Pruebas en negativo: con cada CHECK borrado DENTRO de la transacción (uno
-  a uno) y con el UNIQUE borrado, las comprobaciones que dependen de él
-  deben dar "(sin error: la excepción se ha tragado)". La tabla real los
-  conserva (el rollback deshace el DROP).
+      para la misma oportunidad; decisión de la oportunidad 1 con la visita
+      de la oportunidad 2 (clave doble); visita_id inexistente (clave
+      doble); oportunidad inexistente.
+    aceptados: visita_acordada con SU visita; descartar con motivo (la
+      clave doble no se mira, MATCH SIMPLE); una decisión en cada una de dos
+      oportunidades; informe de 2000 caracteres (y 2000 'á', que cuenta
+      caracteres).
+  Pruebas en negativo (parámetro --quitar): con cada CHECK, el UNIQUE y la
+  clave doble borrados DENTRO de la transacción, uno a uno, las
+  comprobaciones que dependen de cada uno deben dar "(sin error: la
+  excepción se ha tragado)". La tabla real los conserva (el rollback
+  deshace el DROP).
 
 
 ================================================================
@@ -392,7 +463,8 @@ POST /calculate-estimate (queda en pendiente_aprobacion).
     (08:29, 12:45, 19:30); los límites 08:30 y 19:00 se aceptan (en leads
     distintos, porque la decisión es definitiva).
   Efectos:
-    201 visita_acordada: fila en decisiones_gate con visita_id; visita
+    201 visita_acordada: fila en decisiones_gate con visita_id de ESA
+      oportunidad (y sin presupuesto_id, que no existe); visita
       'confirmada' con la fecha pedida y el texto fijo de P2; oportunidad
       'visita_agendada'; fecha_ultimo_contacto escrita (no NULL, reciente);
       log gate_decision_registrada SIN el informe; respuesta con visita_id
@@ -540,6 +612,19 @@ P10. DECIDIDA a) (2026-09-28): se añade en esta rama la comprobación de
          check_mcp_connection y check_mcp_calculate_estimate.
       b) No, y se corrige solo el mensaje. Contra: la puerta /mcp queda
          sin la misma protección que /gate-decisions.
+
+
+P11. PENDIENTE (nueva, 2026-09-28). btrim(informe) solo quita el carácter
+     ESPACIO; Python .strip() (Pydantic) quita también tabuladores, saltos
+     de línea y el espacio duro. Un informe "texto\n" o "\t\t" escrito a
+     mano en la tabla pasaría el CHECK.
+      a) Dejarlo como está (lo decidido en la corrección): cubre los casos
+         pedidos ("   " y " texto ") y el camino normal pasa por Pydantic.
+      b) btrim(informe, E' \t\r\n'): cubre también tabuladores y saltos
+         de línea. Contra: sigue sin cubrir el espacio duro (U+00A0).
+      c) Una expresión regular (informe !~ '^\s|\s$' y
+         btrim(informe) <> ''): más completa, más difícil de leer.
+     Se decide antes de aplicar la migración.
 
 
 ================================================================
