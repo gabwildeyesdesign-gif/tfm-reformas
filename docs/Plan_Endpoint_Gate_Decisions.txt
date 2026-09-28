@@ -4,12 +4,15 @@ caso de Gate)
 
 Documento de plan · Nivel N0 · 2026-09-28 · Rama feat/n0-gate-decisions
 (desde main = 7934fa6)
-Estado: PENDIENTE DE APROBACIÓN DE GABI. No hay código escrito.
+Estado: REVISADO por Gabi el 2026-09-28. P1-P9 decididas (sección 6) y
+correcciones adicionales aplicadas. P10 pendiente. Bloque B sin empezar.
+No hay código escrito.
 
-Fuentes: el encargo del Bloque A (contexto D19 del 26/09) y la CORRECCIÓN
+Fuentes: el encargo del Bloque A (contexto D19 del 26/09), la CORRECCIÓN
 posterior de Gabi (decision = visita_acordada | descartar, visita
-confirmada, columna visita_id, sección "fuera de alcance"). Donde se
-contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.txt.
+confirmada, columna visita_id, sección "fuera de alcance") y sus respuestas
+a la revisión del plan. Donde se contradicen, manda lo más reciente. Modelo
+de formato: docs/Plan_Endpoint_Visits.txt.
 
 
 ================================================================
@@ -30,10 +33,14 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
     Data API pública. Por eso el ENABLE va en la MISMA migración que el
     CREATE TABLE (sección 3), no en un paso aparte.
   - app/services/visits_service.py (POST /visits, ya en main) contiene las
-    reglas de fecha que la corrección pide reutilizar:
-    combinar_fecha_hora_madrid, validar_fecha y _leer_reglas.
-  - D18 numera los workflows: WF2 = Gate HITL, WF3 = barrido D13 de
-    seguimiento, WF4 = errores. Ver P8.
+    reglas de fecha que hay que reutilizar: combinar_fecha_hora_madrid,
+    validar_fecha y _leer_reglas.
+  - app/mcp_server/server.py:64 solo comprueba al arrancar que MCP_SECRET
+    exista y no esté vacío. Su mensaje de error dice "Debe ser DISTINTO de
+    WEBHOOK_SECRET", pero el código NO lo comprueba (ver C5 y P10).
+    Comprobado, sin imprimir valores, que en el .env real de Gabi los dos
+    son distintos, y que GATE_SECRET aún no existe.
+  - La rama feat/n0-gate-decisions ya sigue a origin/feat/n0-gate-decisions.
 
 
 ================================================================
@@ -51,9 +58,27 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
   Sin ver la obra no hay presupuesto definitivo, así que "seguir adelante"
   tras la llamada equivale a acordar una visita. Si el cliente quiere
   pensarlo, administración NO registra nada y la oportunidad sigue en
-  'pendiente_aprobacion'.
+  'pendiente_aprobacion' (y el recordatorio de WF3 sigue avisando, P8).
 
-1.2 Entrada (JSON, extra="forbid")
+1.2 Autenticación: un secreto PROPIO (P4)
+  Cabecera X-Gate-Secret con el valor de GATE_SECRET (variable nueva del
+  .env). NO se acepta X-Webhook-Secret: esa credencial la tiene la
+  herramienta HTTP del Agente 2 (un LLM, para POST /visits), y D18 prohíbe
+  que el agente toque el Gate ("podría aprobar su propio Gate"). Con un
+  secreto propio, el agente no puede llamar a este endpoint aunque lo
+  intente, porque no tiene la credencial.
+
+  Comprobación al ARRANCAR (el servidor no abre el puerto si falla), en el
+  mismo sitio y con el mismo patrón que WEBHOOK_SECRET y MCP_SECRET:
+    - GATE_SECRET no definido o solo espacios -> se detiene;
+    - GATE_SECRET igual a WEBHOOK_SECRET -> se detiene;
+    - GATE_SECRET igual a MCP_SECRET -> se detiene.
+  El mensaje de error explica cómo generar uno y remite a .env.example.
+  Comparación de la cabecera en tiempo constante (secrets.compare_digest),
+  como el resto. Sin cabecera o con otro valor: 401 antes de validar el
+  cuerpo, con la misma forma que el 401 de /leads.
+
+1.3 Entrada (JSON, extra="forbid")
   oportunidad_id  entero > 0, obligatorio.
   decision        'visita_acordada' | 'descartar', obligatorio.
   fecha           YYYY-MM-DD. Obligatoria con visita_acordada; PROHIBIDA
@@ -63,9 +88,10 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
   motivo          'precio' | 'plazo' | 'no_contesta' | 'proyecto_no_viable'
                   | 'otro'. Obligatorio con descartar; PROHIBIDO con
                   visita_acordada.
-  informe         texto de 1 a 2000 caracteres (tras quitar espacios de los
-                  extremos), SIEMPRE obligatorio: todo contacto queda
-                  registrado para la auditoría anual.
+  informe         texto de 1 a 2000 caracteres, contados DESPUÉS de quitar
+                  los espacios de los extremos (se guarda recortado). Uno
+                  hecho solo de espacios da 422. SIEMPRE obligatorio: todo
+                  contacto queda registrado para la auditoría anual.
 
   Las combinaciones prohibidas se validan en el esquema (Pydantic, un
   validador de modelo), así que dan 422 de formato antes de tocar la base
@@ -73,26 +99,32 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
   formato que VisitaCreate (sin "10:00Z", sin segundos, etc.): se
   reutilizan, no se copian (sección 2.3).
 
-1.3 Efectos, en UNA transacción (get_transactional_connection)
+1.4 Efectos, en UNA transacción (get_transactional_connection)
   Bloqueo: SELECT ... FROM oportunidades o LEFT JOIN presupuestos p ...
   WHERE o.id = %s FOR UPDATE OF o (misma técnica que /visits).
 
   Con visita_acordada:
     1. INSERT en visitas: estado 'confirmada' (la ha confirmado
        administración por teléfono), fecha_propuesta = fecha + hora en
-       Madrid, texto_cliente = ver P2.
+       Madrid, texto_cliente = el texto fijo "Visita acordada por
+       teléfono por administración tras la revisión del Gate." (P2).
     2. INSERT en decisiones_gate con visita_id = la visita recién creada.
-    3. oportunidades.estado -> 'visita_agendada' (y updated_at).
+    3. oportunidades: estado -> 'visita_agendada', fecha_ultimo_contacto
+       = now() (P5) y updated_at = now().
     4. Log gate_decision_registrada.
   Con descartar:
     1. INSERT en decisiones_gate con motivo y visita_id NULL.
-    2. oportunidades.estado -> 'perdida' (y updated_at).
+    2. oportunidades: estado -> 'perdida', fecha_ultimo_contacto = now()
+       (P5) y updated_at = now().
     3. Log gate_decision_registrada.
   presupuestos.aprobado_por se queda NULL (N0 no identifica al operador,
   sección 8). presupuestos.requiere_aprobacion NO cambia nunca (P5 de
   /visits: el Gate es permanente).
+  Al salir la oportunidad de 'pendiente_aprobacion', el recordatorio del
+  Gate de WF3 deja de verla y se detiene solo (P8), sin que este endpoint
+  tenga que avisar a nadie.
 
-1.4 Respuesta (201 si se crea, 200 si es una repetición)
+1.5 Respuesta (201 si se crea, 200 si es una repetición)
   decision_id, oportunidad_id, decision, motivo, estado_oportunidad,
   visita_id (null si descartar), fecha_propuesta (null si descartar; si
   hay visita, en hora de Madrid con su desfase: "2026-10-23T08:30:00+02:00"),
@@ -100,41 +132,43 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
   NUNCA importes. Defensa doble, como en /visits y GET /leads/session: la
   consulta no los lee y el esquema de respuesta no tiene dónde ponerlos.
 
-1.5 Idempotencia
-  - La MISMA decisión repetida -> 200, creado=false, sin escribir nada:
+1.6 Idempotencia
+  - La MISMA decisión repetida -> 200, creado=false, sin escribir nada
+    (tampoco fecha_ultimo_contacto):
       visita_acordada: misma decisión y misma fecha y hora.
-      descartar: misma decisión y mismo motivo (ver P3).
-    El informe de la repetición se ignora (como texto_cliente en /visits y
-    los datos de un lead_token repetido en /leads).
+      descartar: misma decisión y mismo motivo (P3).
+    El informe de la repetición se IGNORA y se conserva el original (como
+    texto_cliente en /visits y los datos de un lead_token repetido en
+    /leads).
   - Cualquier otra decisión, cuando ya hay una registrada -> 409
     decision_ya_registrada. La decisión es definitiva: se registra una vez
     por oportunidad (UNIQUE en decisiones_gate.oportunidad_id).
 
-1.6 Formato de los errores de negocio: igual que /visits,
+1.7 Formato de los errores de negocio: igual que /visits,
   {"detail": {"motivo": "<código>", "mensaje": "<texto>"}}; en el 503,
   también "faltan". Mismas dos formas de 422 (Pydantic: lista; negocio:
   objeto).
 
-1.7 Tabla de códigos
+1.8 Tabla de códigos
 
 | Código | motivo | Cuándo | Reintento n8n |
 |---|---|---|---|
 | 201 | — | Decisión nueva registrada | — |
 | 200 | — | Repetición exacta de la decisión ya registrada (creado=false) | — |
-| 401 | — | Falta X-Webhook-Secret o es incorrecto (antes de validar el cuerpo) | NO |
-| 422 | (Pydantic) | Cuerpo mal formado: campo de más, decision/motivo fuera de lista, combinación prohibida (visita_acordada sin fecha/hora o con motivo; descartar sin motivo o con fecha/hora), informe vacío o > 2000, formato de fecha/hora | NO |
+| 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET (antes de validar el cuerpo) | NO |
+| 422 | (Pydantic) | Cuerpo mal formado: campo de más, decision/motivo fuera de lista, combinación prohibida (visita_acordada sin fecha/hora o con motivo; descartar sin motivo o con fecha/hora), informe vacío, solo espacios o > 2000, formato de fecha/hora | NO |
 | 404 | oportunidad_no_encontrada | No existe la oportunidad | NO |
 | 409 | sin_presupuesto | La oportunidad no tiene presupuesto | NO |
 | 409 | sin_gate | El presupuesto tiene requiere_aprobacion = false | NO |
 | 409 | decision_ya_registrada | Ya hay una decisión DISTINTA registrada | NO |
 | 409 | estado_no_permitido | Sin decisión previa y estado distinto de pendiente_aprobacion | NO |
-| 503 | configuracion_incompleta | (solo visita_acordada) Falta o es incoherente una regla de visita; se registra en logs | Inútil, inofensivo |
+| 503 | configuracion_incompleta | (solo visita_acordada) Falta o es incoherente una regla de visita; se registra en logs con origen "gate_decisions" | Inútil, inofensivo |
 | 422 | fecha_pasada / fin_de_semana / fuera_de_franja | (solo visita_acordada) La fecha incumple una regla de /visits | NO |
-| 409 | visita_activa_existente | (solo visita_acordada, si se aprueba P1-a) Ya hay una visita activa para la oportunidad | NO |
+| 409 | visita_activa_existente | (solo visita_acordada) Ya hay una visita activa para la oportunidad (P1) | NO |
 | 500 | — | Error no controlado | SÍ, con backoff |
 
-1.8 Orden de las comprobaciones
-    1. 401  cabecera (dependencia, antes del cuerpo)
+1.9 Orden de las comprobaciones
+    1. 401  cabecera X-Gate-Secret (dependencia, antes del cuerpo)
     2. 422  formato y combinaciones (Pydantic)
     3. 404  oportunidad_no_encontrada        (tras el FOR UPDATE)
     4. 409  sin_presupuesto
@@ -147,7 +181,7 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
           503 configuracion_incompleta (reglas de visita)
           422 fecha_pasada / fin_de_semana / fuera_de_franja
           409 visita_activa_existente (P1)
-    9. Escritura (sección 1.3)
+    9. Escritura (sección 1.4)
   Por qué la repetición (6) va ANTES que el estado (7): tras la primera
   decisión, el estado ya no es pendiente_aprobacion ('visita_agendada' o
   'perdida'). Si el estado se comprobara antes, un reintento legítimo de
@@ -157,7 +191,7 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
 
 
 ================================================================
-2. CÓDIGO (Bloques C y D)
+2. CÓDIGO (Bloques C1, C2 y D)
 ================================================================
 
 2.1 Archivos
@@ -168,18 +202,23 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
     app/api/gate_decisions.py
     scripts/migraciones_ejecutadas/paso10_decisiones_gate.py
     scripts/check_migracion_decisiones_gate.py
+    scripts/check_gate_decisions_service.py  (503 de los dos endpoints y
+                                              su "origen", sin servidor)
     scripts/check_gate_decisions_http.py
   Modificados:
+    app/config.py                      lee GATE_SECRET
+    app/api/security.py                verificar_gate_secret y las
+                                       comprobaciones de arranque de 1.2
     app/services/visits_service.py     usa reglas_visita (sin cambio de
                                        comportamiento)
-    app/api/visits.py                  solo si cambia el nombre de la clase
-                                       base de los rechazos (2.3)
-    app/schemas/visits.py              los validadores de fecha/hora pasan a
-                                       ser reutilizables (2.3)
+    app/api/visits.py                  captura la base común de rechazos (2.3)
+    app/schemas/visits.py              los validadores de fecha/hora/texto
+                                       pasan a ser reutilizables (2.3)
     app/schemas/common.py              MAX_INFORME_GATE = 2000
     app/main.py                        include_router
     scripts/check_visits_service.py    el parche en memoria de la prueba 503
                                        apunta al módulo nuevo (2.3)
+    .env.example                       GATE_SECRET, con cómo generarlo
     docs/schema_actual.sql             regenerado tras paso10
 
 2.2 Servicio (gate_decisions_service.registrar_decision)
@@ -187,8 +226,9 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
   familia (404, 409, 422, 503) con motivo y mensaje, y el 503 con el log
   conservado (rechazo diferido: se lanza después del commit). Nunca lee
   importes. Log gate_decision_registrada con entity_type 'oportunidad' y
-  detalle {decision_id, decision, motivo, visita_id, fecha_propuesta}; el
-  informe NO se copia al log (vive en decisiones_gate, ver P9).
+  detalle {decision_id, decision, motivo, visita_id, fecha_propuesta}. El
+  informe NO se copia al log (P9): vive en decisiones_gate, fuente única,
+  y el log guarda decision_id para enlazarlo.
 
 2.3 Reutilizar las reglas de fecha de /visits SIN duplicar código
   Se crea app/services/reglas_visita.py y se MUEVEN allí, sin cambiarlas:
@@ -207,6 +247,22 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
   fecha, hora y texto se sacan a funciones reutilizables (por ejemplo en
   app/schemas/common.py), que VisitaCreate y GateDecisionCreate llaman.
 
+  "Origen" del log de configuración incompleta (corrección adicional 2).
+  Como ConfiguracionIncompleta pasa a lanzarse desde dos endpoints, el
+  INSERT de ese log se mueve también a reglas_visita, en una función
+  registrar_configuracion_incompleta(cursor, oportunidad_id, problemas,
+  origen). /visits la llama con origen "visits" y /gate-decisions con
+  origen "gate_decisions". El detalle pasa de {"problemas": [...]} a
+  {"problemas": [...], "origen": "..."}. La acción del log no cambia
+  (visita_configuracion_incompleta: el problema es la configuración de
+  las VISITAS, la pida quien la pida).
+
+  Por qué /visits no cambia de comportamiento con esto: la respuesta HTTP
+  del 503 es la misma (el origen solo va al log, no al cliente); el log
+  sigue escribiéndose en el mismo momento (antes del commit) y con la
+  misma acción; lo único nuevo es una clave más en su detalle, que ningún
+  código lee.
+
   Cómo se comprueba que /visits sigue IGUAL:
     - check_visits_http 55/55 SIN tocar el script: prueba el contrato
       entero por HTTP (códigos, motivos, mensajes, concurrencia).
@@ -216,7 +272,15 @@ contradicen, manda la corrección. Modelo de formato: docs/Plan_Endpoint_Visits.
       tiene que apuntar allí (y _leer_reglas pasa a leer_reglas_visita).
       Se enseñará que el script SIN ese ajuste falla contra el código
       nuevo (el parche ya no afectaría a nada), y que con el ajuste da
-      16/16. Es un cambio de dónde se prueba, no de qué se prueba.
+      16/16. Es un cambio de dónde se prueba, no de qué se prueba. Sus
+      comprobaciones del log siguen siendo las mismas (que el log existe
+      y se conserva), así que el recuento no cambia.
+    - El "origen" se comprueba en el script NUEVO
+      check_gate_decisions_service.py, que provoca el 503 de los DOS
+      endpoints (con la clave cambiada solo en memoria, sin tocar
+      reglas_negocio) y exige origen "visits" en uno y "gate_decisions"
+      en el otro. Así no se alteran los recuentos de los scripts de
+      /visits.
     - ast.parse de visits_service para comprobar que la estructura del
       rechazo diferido no cambia.
     - Suite completa antes y después de la mudanza.
@@ -253,7 +317,13 @@ idempotente (cada paso mira antes si ya está hecho):
   );
   ALTER TABLE decisiones_gate ENABLE ROW LEVEL SECURITY;   -- misma transacción
   INSERT INTO reglas_negocio (clave, valor, descripcion)
-    VALUES ('horas_recordatorio_gate', 24, '...') ON CONFLICT (clave) DO NOTHING;
+    VALUES ('horas_recordatorio_gate', 24,
+            'Horas que puede estar una oportunidad en pendiente_aprobacion sin
+             decisión antes de que WF3 (barridos periódicos) recuerde a
+             administración que llame al cliente. Al registrarse la decisión
+             (POST /gate-decisions) el estado cambia y el recordatorio se
+             detiene solo.')
+    ON CONFLICT (clave) DO NOTHING;
 
   Notas:
   - UNIQUE (oportunidad_id): una decisión por oportunidad. Es también la
@@ -264,6 +334,7 @@ idempotente (cada paso mira antes si ya está hecho):
     oportunidad llega a tener varios.
   - Es una migración puramente ADITIVA (tabla y fila nuevas): no retira
     nada, así que no necesita expand/contract.
+  - Este endpoint NO lee horas_recordatorio_gate: la usa WF3 en n8n.
   - Después: regenerar docs/schema_actual.sql y ejecutar check_rls_estado
     (la tabla nueva debe salir con RLS activado).
 
@@ -285,9 +356,10 @@ deshace al final y cada violación en su SAVEPOINT:
 
 
 ================================================================
-4. PRUEBAS HTTP (Bloque D): scripts/check_gate_decisions_http.py
+4. PRUEBAS (Bloque D)
 ================================================================
 
+4.1 scripts/check_gate_decisions_http.py
 Mismas reglas que check_visits_http: uvicorn en un puerto propio (8019,
 nunca el 8000), apagado del servidor propio; tokens uuid4; emails
 http-gate-*@example.com; fechas relativas al próximo lunes; limpieza solo
@@ -298,27 +370,45 @@ con id_base; 201 <-> creado en todas las respuestas; 0 claves "importe".
 Los leads con Gate se crean por POST /leads con cambios estructurales y
 POST /calculate-estimate (queda en pendiente_aprobacion).
 
-  Autenticación y forma: 401 (también con cuerpo inválido); 422 por campo
-    de más, decision 'continuar', motivo 'caro', visita_acordada sin fecha,
-    sin hora y con motivo, descartar sin motivo y con fecha, informe vacío
-    y de 2001, hora "10:00Z".
+  Autenticación (P4):
+    401 sin cabecera (también con cuerpo inválido: la cabecera va antes).
+    401 con el valor de WEBHOOK_SECRET en X-Webhook-Secret.
+    401 con el valor de WEBHOOK_SECRET en X-Gate-Secret.
+      Estas dos son la prueba de que la credencial del Agente 2 no abre
+      esta puerta.
+    Arranque: en un proceso hijo, el servidor se NIEGA a arrancar con
+      GATE_SECRET vacío, igual a WEBHOOK_SECRET o igual a MCP_SECRET (mismo
+      patrón que check_webhook_auth_http, con PYTHONIOENCODING=utf-8 en el
+      entorno del hijo).
+  Forma (422 de Pydantic): campo de más, decision 'continuar', motivo
+    'caro', visita_acordada sin fecha, sin hora y con motivo, descartar
+    sin motivo y con fecha, informe vacío, informe SOLO DE ESPACIOS, de
+    2001 caracteres, hora "10:00Z".
   Estado: 404; 409 sin_presupuesto (lead sin calcular); 409 sin_gate
     (presupuesto normal); 409 estado_no_permitido (Gate con el estado
-    forzado a 'presupuesto_enviado' desde el script, sin decisión previa).
+    forzado a 'presupuesto_enviado' desde el script, sin decisión previa);
+    409 visita_activa_existente (visita activa creada a mano en una
+    oportunidad propia con Gate).
   Fecha (visita_acordada): 422 fecha_pasada, fin_de_semana, fuera_de_franja
     (08:29, 12:45, 19:30); los límites 08:30 y 19:00 se aceptan (en leads
     distintos, porque la decisión es definitiva).
   Efectos:
     201 visita_acordada: fila en decisiones_gate con visita_id; visita
-      'confirmada' con la fecha pedida; oportunidad 'visita_agendada'; log
-      gate_decision_registrada; respuesta con visita_id y fecha_propuesta
-      (+01:00/+02:00); requiere_aprobacion sigue true; aprobado_por NULL.
-    200 repetición (misma fecha y hora): mismo decision_id, 0 filas nuevas.
+      'confirmada' con la fecha pedida y el texto fijo de P2; oportunidad
+      'visita_agendada'; fecha_ultimo_contacto escrita (no NULL, reciente);
+      log gate_decision_registrada SIN el informe; respuesta con visita_id
+      y fecha_propuesta (+01:00/+02:00); requiere_aprobacion sigue true;
+      aprobado_por NULL.
+    Informe con espacios en los extremos: se guarda recortado.
+    200 repetición (misma fecha y hora, otro informe): mismo decision_id,
+      0 filas nuevas, el informe ORIGINAL intacto y fecha_ultimo_contacto
+      SIN CAMBIOS (mismo valor que tras el 201).
     409 decision_ya_registrada: visita_acordada a otra hora, y descartar,
       sobre la misma oportunidad.
-    201 descartar: motivo guardado, visita_id NULL, oportunidad 'perdida'.
-    200 repetición de descartar (mismo motivo); 409 con otro motivo (P3) y
-      con visita_acordada.
+    201 descartar: motivo guardado, visita_id NULL, oportunidad 'perdida',
+      fecha_ultimo_contacto escrita.
+    200 repetición de descartar (mismo motivo, fecha_ultimo_contacto sin
+      cambios); 409 con otro motivo y con visita_acordada.
   Concurrencia:
     5 peticiones simultáneas con la MISMA decisión (visita_acordada, misma
       fecha): un 201, cuatro 200, una sola fila en decisiones_gate y una
@@ -329,9 +419,13 @@ POST /calculate-estimate (queda en pendiente_aprobacion).
       sola visita.
   Regresión cruzada:
     POST /visits sobre un lead con Gate ya decidido: sigue 409
-      presupuesto_con_gate (P5).
-    GET /leads/session tras cada decisión: lo que devuelve (ver P6).
+      presupuesto_con_gate (P5 de /visits).
+    GET /leads/session tras cada decisión: estado 'visita_agendada' o
+      'perdida' y requiere_aprobacion true (lo que usará el router, P6).
   Pruebas en negativo (copias restauradas con diff):
+    - con la dependencia de /gate-decisions cambiada a la de
+      WEBHOOK_SECRET: las pruebas "401 con el valor de WEBHOOK_SECRET"
+      deben FALLAR (salen 2xx o 4xx de negocio en vez de 401).
     - sin FOR UPDATE: la concurrencia debe fallar; se espera que el UNIQUE
       de decisiones_gate (o el índice parcial de visitas) frene el
       duplicado con un 500. Los logs de esos 500 se borran por id exacto
@@ -340,9 +434,17 @@ POST /calculate-estimate (queda en pendiente_aprobacion).
     - sin el orden repetición-antes-que-estado (estado primero): el 200 de
       la repetición debe salir 409 estado_no_permitido.
 
-Regresión: check_visits_http 55/55 y check_visits_service 16/16 tras la
-mudanza de 2.3; suite completa (hoy 28 scripts; con los 2 nuevos, 30;
-esperado 29/30 con check_tipo_reforma_constraint como único fallo).
+4.2 scripts/check_gate_decisions_service.py (sin servidor)
+  - 503 de /gate-decisions: con una regla de visita cambiada SOLO EN
+    MEMORIA, ConfiguracionIncompleta, log conservado con
+    origen "gate_decisions", ninguna decisión ni visita escrita.
+  - 503 de /visits por el mismo camino: log con origen "visits".
+  - Datos propios (check-gate-svc-*@example.com), borrados al terminar.
+
+4.3 Regresión
+  check_visits_http 55/55 y check_visits_service 16/16 tras la mudanza de
+  2.3; suite completa (hoy 28 scripts; con los 3 nuevos, 31; esperado
+  30/31 con check_tipo_reforma_constraint como único fallo conocido).
 
 
 ================================================================
@@ -358,84 +460,83 @@ C2. El encargo decía que 'continuar' dejaba la oportunidad en
     pero ningún endpoint la usa ya.
 C3. visitas.texto_cliente es NOT NULL con CHECK de 1 a 1000 caracteres
     (paso9), pero en una visita acordada por teléfono el cliente no ha
-    escrito nada. Ver P2.
-C4. El encargo dice que horas_recordatorio_gate "la usará WF3". En D18,
-    WF3 es el barrido de seguimiento de D13 y WF2 es el Gate HITL. Ver P8.
+    escrito nada. RESUELTA con P2 (texto fijo).
+C4. RESUELTA con P8. El encargo decía que horas_recordatorio_gate la usa
+    WF3; D18 numeraba WF3 = barrido D13 y WF2 = Gate. La respuesta de Gabi
+    confirma WF3, que se REDEFINE: WF3 pasa a ser "barridos periódicos"
+    con dos consultas (seguimiento de 48 h de D13 y recordatorio del
+    Gate). WF2 se dispara una sola vez, al aparecer el Gate, y no puede
+    volver a mirar al día siguiente. La numeración de D18 se actualiza en
+    la documentación (sección 9).
+C5. app/mcp_server/server.py dice en su mensaje de error que MCP_SECRET
+    "Debe ser DISTINTO de WEBHOOK_SECRET", pero no lo comprueba. El
+    encargo daba por hecho que sí ("como ya se hace con MCP_SECRET"). Ver
+    P10.
 
 
 ================================================================
-6. PREGUNTAS ABIERTAS (decisión de Gabi)
+6. DECISIONES (revisión de Gabi, 2026-09-28)
 ================================================================
 
-P1. Visita activa ya existente al acordar una visita (pedida por la
-    corrección como pregunta). No debería pasar: /visits rechaza los casos
-    con Gate. Pero el índice parcial de visitas la rechazaría con un 500 si
-    pasara (por ejemplo, una visita creada a mano).
-      a) 409 visita_activa_existente, sin escribir nada (RECOMENDADA):
-         explícito, y administración ve el problema en el formulario.
-      b) Cancelar la activa y crear la nueva (como la sustitución de
-         /visits). Contra: deshace algo que no debería existir sin que nadie
-         lo mire.
+P1. DECIDIDA a): visita activa ya existente al acordar una visita -> 409
+    visita_activa_existente, sin escribir nada. No debería pasar (/visits
+    rechaza los casos con Gate), pero sin esta comprobación el índice
+    parcial de visitas lo rechazaría con un 500.
 
-P2. texto_cliente de la visita acordada (C3).
-      a) Texto fijo: "Visita acordada por teléfono por administración tras
-         la revisión del Gate." (RECOMENDADA). Cumple el CHECK, y el
-         informe completo queda en decisiones_gate, enlazado por visita_id.
-      b) Copiar el informe. Contra: puede pasar de 1000 caracteres (el
-         informe admite 2000) y lo duplicaría.
-      c) Hacer texto_cliente NULL-able. Contra: una migración que retira un
-         NOT NULL (expand/contract) solo para esto.
+P2. DECIDIDA a): texto_cliente de la visita acordada = "Visita acordada por
+    teléfono por administración tras la revisión del Gate." El informe
+    completo queda en decisiones_gate, enlazado por visita_id.
 
-P3. ¿Qué es "la misma decisión" en descartar? La corrección solo lo define
-    para visita_acordada (misma fecha y hora).
-      a) Misma decisión y mismo motivo; el informe se ignora (RECOMENDADA,
-         el mismo criterio que la fecha en visita_acordada).
-      b) Solo la misma decisión, cualquier motivo. Contra: un segundo
-         formulario con otro motivo parecería aceptado (200) y el motivo
-         nuevo se perdería en silencio.
+P3. DECIDIDA a): en descartar, "la misma decisión" es misma decisión y
+    mismo motivo; el informe de la repetición se ignora y se conserva el
+    original.
 
-P4. Mismo secreto que el chat. POST /gate-decisions usa X-Webhook-Secret,
-    la misma credencial que tiene la herramienta HTTP del Agente 2 (un LLM)
-    para POST /visits. D18 dice que el Agente 2 no debe poder tocar el
-    Gate ("podría aprobar su propio Gate"). Hoy la única barrera sería no
-    darle esa URL en n8n.
-      a) Secreto propio GATE_SECRET (cabecera X-Gate-Secret), obligatorio
-         para arrancar, como MCP_SECRET (RECOMENDADA): el agente no tiene
-         esa credencial, así que no puede llamar aunque lo intente.
-         Contra: una variable más en .env y una credencial más en n8n.
-      b) El mismo X-Webhook-Secret, y confiar en la configuración de n8n.
-         Contra: una herramienta mal configurada basta para saltarse el
-         Gate.
+P4. DECIDIDA a): GATE_SECRET con cabecera X-Gate-Secret, obligatorio para
+    arrancar, y además distinto de WEBHOOK_SECRET y de MCP_SECRET (el
+    servidor no arranca si coincide con alguno). Pruebas: 401 con el valor
+    de WEBHOOK_SECRET en X-Webhook-Secret y en X-Gate-Secret, y en
+    negativo con la dependencia cambiada a la de WEBHOOK_SECRET (sección
+    4.1). GATE_SECRET se añade a .env.example y a CLAUDE.md.
 
-P5. oportunidades.fecha_ultimo_contacto. La llamada de administración ES un
-    contacto con el cliente.
-      a) Escribirla (now()) al registrar la decisión (RECOMENDADA): deja el
-         dato bien desde el principio.
-      b) Dejarla para el barrido D13. Contra: el barrido no pasa por las
-         oportunidades del Gate (ver P7).
+P5. DECIDIDA a): fecha_ultimo_contacto = now() en las dos decisiones. Se
+    comprueba que queda escrita tras un 201 y que NO cambia tras un 200.
 
-P6. GET /leads/session tras la decisión. Devuelve estado_oportunidad
-    'visita_agendada' o 'perdida', y presupuesto.requiere_aprobacion = true.
-    Si el cliente vuelve al chat, el router lo manda al Agente 2. Con
-    'perdida', ¿debe atenderle el Agente 2 (que no puede pedir visita,
-    409 presupuesto_con_gate) o un mensaje fijo? Afecta al router de n8n y
-    al prompt, no a este endpoint. Propuesta: anotarlo como requisito del
-    router (con 'perdida', mensaje fijo remitiendo a administración).
+P6. DECIDIDA: con estado 'perdida', el router de n8n da un mensaje fijo, no
+    el Agente 2:
+      "Tu solicitud anterior ya está cerrada. Si quieres retomar tu
+      proyecto, llámanos al [teléfono de la empresa] en horario de oficina
+      y lo revisamos contigo."
+    REQUISITO DEL ROUTER, fuera del alcance de esta rama (sección 8). Este
+    endpoint solo garantiza que GET /leads/session devuelva 'perdida'.
 
-P7. Barrido D13 y el Gate. El barrido busca estado 'presupuesto_enviado'
-    sin contacto en 48 h. Las oportunidades en 'pendiente_aprobacion' NUNCA
-    entran en él, y 'perdida' tampoco (bien). Lo que vigila el Gate sin
-    decisión es el recordatorio de horas_recordatorio_gate (24 h), que
-    avisa a administración, no al cliente. Confirmar que es así y que un
-    Gate sin decisión no recibe NINGÚN seguimiento automático al cliente.
+P7. CONFIRMADA: un Gate sin decisión no recibe ningún seguimiento
+    automático dirigido al cliente; solo el recordatorio a administración
+    (WF3, P8).
 
-P8. ¿Qué workflow usa horas_recordatorio_gate (C4)? D18 dice WF2 = Gate
-    HITL y WF3 = barrido D13. Propuesta: WF2 (aviso y recordatorio del
-    Gate); corregir la referencia a WF3 del encargo.
+P8. DECIDIDA: el recordatorio del Gate va en WF3, NO en WF2. WF2 se
+    dispara una sola vez, al aparecer el Gate. WF3 pasa a ser "barridos
+    periódicos" con dos consultas:
+      a) seguimiento de 48 h (D13): estado 'presupuesto_enviado' sin
+         contacto;
+      b) recordatorio del Gate: oportunidades en 'pendiente_aprobacion'
+         desde hace más de horas_recordatorio_gate horas.
+    Al registrarse la decisión, el estado deja de ser
+    'pendiente_aprobacion' y la consulta b) deja de encontrarla: el
+    recordatorio se detiene solo.
 
-P9. ¿El informe va también al log? Recomendado: no. Vive en
-    decisiones_gate (fuente única); el log guarda decision_id para
-    enlazarlo. Evita duplicar hasta 2000 caracteres por decisión.
+P9. CONFIRMADA: el informe no se copia al log.
+
+P10. PENDIENTE (nueva, por C5). ¿Se añade también la comprobación que
+     falta en MCP_SECRET (distinto de WEBHOOK_SECRET)?
+      a) Sí, en esta rama, junto a la de GATE_SECRET (RECOMENDADA): las
+         tres credenciales quedan comprobadas entre sí en el arranque, y
+         el mensaje de error de /mcp deja de prometer algo que no se
+         comprueba. Comprobado que en el .env real ya son distintas, así
+         que no impide arrancar a nadie. Contra: toca el arranque de /mcp
+         en una rama de gate-decisions; se verifica con
+         check_mcp_connection y check_mcp_calculate_estimate.
+      b) No, y se corrige solo el mensaje. Contra: la puerta /mcp queda
+         sin la misma protección que /gate-decisions.
 
 
 ================================================================
@@ -450,8 +551,14 @@ P9. ¿El informe va también al log? Recomendado: no. Vive en
       Queda como corrección manual en la base de datos (sección 8).
   R3. check_tipo_reforma_constraint y el resto de scripts que borran
       oportunidades de sus clientes de prueba no crean decisiones_gate, así
-      que la FK nueva no les afecta. Solo check_gate_decisions_http y
-      check_migracion_decisiones_gate crean filas en ella.
+      que la FK nueva no les afecta. Solo los scripts de gate-decisions
+      crean filas en ella.
+  R4. Al integrar esta rama, el uvicorn del puerto 8000 de Gabi NO
+      arrancará hasta que añada GATE_SECRET a su .env (comprobado: hoy no
+      lo tiene). No es un fallo: es la comprobación de arranque de P4. El
+      último bloque incluye las instrucciones exactas, paso a paso, para
+      generarlo y añadirlo (sección 9), y el merge a main se hace cuando
+      Gabi lo tenga preparado.
 
 
 ================================================================
@@ -465,6 +572,9 @@ P9. ¿El informe va también al log? Recomendado: no. Vive en
   - Identificación del operador (quién registra la decisión;
     presupuestos.aprobado_por): N1.
   - Corregir una decisión ya registrada (R2): manual en N0.
+  - Router de n8n: el mensaje fijo para el estado 'perdida' (P6).
+  - Workflows de n8n: WF2 (aviso del Gate) y WF3 (barridos periódicos,
+    P8), incluido el formulario que llama a este endpoint con X-Gate-Secret.
 
 
 ================================================================
@@ -473,20 +583,37 @@ P9. ¿El informe va también al log? Recomendado: no. Vive en
 
   Adenda:
     - Fila 3: contrato nuevo (oportunidad_id, decision, fecha, hora,
-      motivo, informe; respuesta con decision_id, visita_id,
-      fecha_propuesta...; disparador: formulario de n8n tras la llamada).
-    - Sección 3: reescrita según D19 (aviso a administración, llamada,
-      registro del resultado; sin botones ni Wait).
+      motivo, informe; X-Gate-Secret; respuesta con decision_id,
+      visita_id, fecha_propuesta...; disparador: formulario de n8n tras la
+      llamada).
+    - Sección 3: reescrita según D19 (aviso a administración por WF2,
+      llamada, registro del resultado; recordatorio en WF3; sin botones ni
+      Wait).
     - Sección 5.5 nueva: tabla de códigos, orden, formato {motivo,
-      mensaje}, idempotencia, concurrencia y limitaciones (Gate
-      permanente, decisión definitiva, operador no identificado).
+      mensaje}, autenticación propia, idempotencia, concurrencia y
+      limitaciones (Gate permanente, decisión definitiva, operador no
+      identificado).
   CLAUDE.md:
     - Corregir lo que ya está desfasado: "POST /visits pendiente de merge"
       (ya está en main desde 7934fa6) y "Bloque actual: el router".
     - Hecho y verificado: POST /gate-decisions con sus recuentos.
     - Dos puertas: gate-decisions deja de ser un docstring.
-    - Si se aprueba P4-a: GATE_SECRET en los gotchas (obligatorio para
-      arrancar) y en .env.example.
+    - Gotchas: GATE_SECRET obligatorio para arrancar y distinto de
+      WEBHOOK_SECRET y MCP_SECRET (y P10, si se aprueba).
+    - La numeración de workflows: WF3 = barridos periódicos (P8).
+  .env.example: GATE_SECRET, con el mismo formato que MCP_SECRET.
+  Instrucciones para Gabi (R4), paso a paso y explicadas:
+    1. Generar el valor con el Python del venv:
+         ./venv/Scripts/python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+       (qué hace: 32 bytes aleatorios, unos 43 caracteres seguros para una
+       cabecera HTTP).
+    2. Añadir al .env una línea GATE_SECRET=<valor>, sin comillas ni
+       espacios, distinta de las otras dos.
+    3. Reiniciar el uvicorn del 8000 (sin --reload) y comprobar que
+       arranca.
+    4. En n8n, crear una credencial "Header Auth" nueva con nombre
+       X-Gate-Secret y ese valor, solo para el formulario del Gate (nunca
+       en la herramienta del Agente 2).
   Este plan: marcado como implementado, con los hashes.
 
 
@@ -496,13 +623,14 @@ P9. ¿El informe va también al log? Recomendado: no. Vive en
 
   A  Este plan (sin código).                                   [PARA]
   B  Migración paso10 y su verificación, con pruebas en negativo. [PARA]
-  C1 Mudanza de las reglas de fecha a reglas_visita, sin cambio de
-     comportamiento: check_visits_http 55/55, check_visits_service 16/16,
-     suite completa.                                            [PARA]
-  C2 Esquemas, servicio y endpoint de gate-decisions; verificación
-     mínima.                                                    [PARA]
-  D  check_gate_decisions_http completo, pruebas en negativo y suite.
-                                                                [PARA]
-  E  Documentación.                                             [PARA]
+  C1 Mudanza de las reglas de fecha a reglas_visita (con el "origen" del
+     log), sin cambio de comportamiento: check_visits_http 55/55,
+     check_visits_service 16/16, suite completa.               [PARA]
+  C2 GATE_SECRET (config, security, .env.example), esquemas, servicio y
+     endpoint de gate-decisions; verificación mínima.          [PARA]
+  D  check_gate_decisions_http y check_gate_decisions_service completos,
+     pruebas en negativo y suite.                               [PARA]
+  E  Documentación e instrucciones de GATE_SECRET.             [PARA]
   Un commit por bloque verificado. Merge a main solo con confirmación
-  explícita de Gabi, con --ff-only.
+  explícita de Gabi, con --ff-only, y cuando GATE_SECRET esté en su .env
+  (R4).
