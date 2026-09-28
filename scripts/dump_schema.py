@@ -12,12 +12,28 @@ Fuentes consultadas, todas de information_schema:
   - columns                   -> columnas, tipos, nullable, defaults
   - table_constraints         -> que restricciones existen y de que tipo
   - key_column_usage          -> que columnas forman cada PK/UNIQUE/FK
-  - constraint_column_usage   -> a que columna apunta cada FK
   - check_constraints         -> la expresion de cada CHECK
 
 Y ademas, fuera de information_schema:
+  - pg_constraint + pg_get_constraintdef -> la definición COMPLETA de cada
+    clave foránea, y de qué tabla depende cada tabla (ver pasos 3 y 3c).
   - pg_indexes + pg_constraint -> los indices que NO respaldan ninguna
     restriccion (ver paso 3b en main()).
+
+CORRECCIÓN 2026-09-28 (dos fallos que aparecieron con la primera clave
+foránea de dos columnas, decisiones_gate -> visitas (id, oportunidad_id)):
+  1. El destino de cada clave foránea se leía de
+     information_schema.constraint_column_usage, que da UNA FILA POR
+     COLUMNA; se guardaba en un diccionario y la segunda fila pisaba a la
+     primera, así que salía "REFERENCES visitas(oportunidad_id)". Ahora se
+     usa pg_get_constraintdef, que la da completa y en orden.
+  2. Las tablas se escribían en orden alfabético, y decisiones_gate salía
+     antes que oportunidades y visitas, a las que apunta: el archivo no se
+     podía ejecutar ("relation oportunidades does not exist"). Ahora se
+     escriben en ORDEN TOPOLÓGICO: cada tabla después de las que
+     referencia. Si hubiera un ciclo de claves foráneas, el script se
+     detiene con un error y NO escribe el archivo.
+Se comprueba con scripts/check_schema_actual_ejecutable.py.
 
 Uso:
     .\\venv\\Scripts\\python.exe scripts\\dump_schema.py
@@ -88,6 +104,54 @@ def tipo_sql(tipo, longitud, precision, escala, defecto):
     return base
 
 
+def ordenar_tablas(tablas, dependencias):
+    """
+    Devuelve las tablas en ORDEN TOPOLÓGICO: cada una después de todas
+    las tablas a las que apunta con una clave foránea. Así el archivo se
+    puede ejecutar de arriba abajo: cuando un CREATE TABLE dice
+    REFERENCES otra_tabla, otra_tabla ya existe.
+
+    tablas:       lista de nombres de tabla.
+    dependencias: diccionario tabla -> conjunto de tablas a las que apunta
+                  (sin contarse a sí misma: una tabla que se apunta a sí
+                  misma se puede crear en un solo CREATE TABLE).
+
+    Método (algoritmo de Kahn): se van sacando las tablas que ya no tienen
+    dependencias pendientes. Entre varias disponibles a la vez se elige la
+    primera por orden alfabético, para que el resultado sea siempre el
+    mismo (y el diff entre dos volcados solo muestre cambios reales).
+
+    Si en algún momento no queda ninguna disponible pero sí quedan tablas,
+    es que hay un CICLO (A apunta a B y B apunta a A): se lanza un error,
+    porque ningún orden permitiría crearlas con sus claves foráneas dentro
+    del CREATE TABLE, y un archivo que no se puede ejecutar no debe
+    escribirse.
+    """
+    # Copia de las dependencias, para ir tachando sin tocar el original.
+    # set(...) crea un conjunto: una colección sin repetidos.
+    pendientes = {t: set(dependencias.get(t, set())) for t in tablas}
+    orden = []
+    while pendientes:
+        # Tablas cuyas dependencias ya están todas escritas.
+        disponibles = sorted(t for t, deps in pendientes.items() if not deps)
+        if not disponibles:
+            # Ninguna disponible y aún quedan: ciclo. Se nombran las tablas
+            # atrapadas para que el error diga dónde mirar.
+            raise RuntimeError(
+                "Ciclo de claves foráneas entre las tablas "
+                f"{sorted(pendientes)}: no hay ningún orden que permita crearlas. "
+                "No se escribe schema_actual.sql."
+            )
+        siguiente = disponibles[0]
+        orden.append(siguiente)
+        del pendientes[siguiente]
+        # La tabla escrita deja de ser una dependencia pendiente de las demás.
+        # discard() quita un elemento de un conjunto si está (y no falla si no).
+        for deps in pendientes.values():
+            deps.discard(siguiente)
+    return orden
+
+
 def main():
     if not DATABASE_URL:
         print("ERROR: no se encontro DATABASE_URL en el .env")
@@ -151,19 +215,44 @@ def main():
     for tabla, tipo, nombre, cols in cursor.fetchall():
         restricciones.setdefault(tabla, []).append((tipo, nombre, cols))
 
-    # Destino de cada clave foranea.
+    # Definición completa de cada clave foránea, y de qué tabla depende
+    # cada tabla (para el orden topológico del paso 3c).
+    #
+    # pg_constraint es el catálogo interno de restricciones; contype = 'f'
+    # son las claves foráneas. pg_get_constraintdef(oid) devuelve la
+    # definición completa, con TODAS sus columnas en orden, por ejemplo
+    # "FOREIGN KEY (visita_id, oportunidad_id) REFERENCES visitas(id,
+    # oportunidad_id)". conrelid es la tabla que tiene la clave y confrelid
+    # la tabla a la que apunta; se unen con pg_class para sacar sus nombres.
+    #
+    # (Antes se usaba information_schema.constraint_column_usage, que da
+    # una fila por columna de destino; con una clave de dos columnas solo
+    # sobrevivía una. Ver la cabecera.)
     cursor.execute(
         """
-        SELECT tc.constraint_name, ccu.table_name, ccu.column_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.constraint_column_usage ccu
-          ON ccu.constraint_name = tc.constraint_name
-         AND ccu.table_schema    = tc.table_schema
-        WHERE tc.table_schema = 'public'
-          AND tc.constraint_type = 'FOREIGN KEY';
+        SELECT k.conname, pg_get_constraintdef(k.oid), origen.relname, destino.relname
+        FROM pg_constraint k
+        JOIN pg_namespace n    ON n.oid = k.connamespace
+        JOIN pg_class origen   ON origen.oid  = k.conrelid
+        JOIN pg_class destino  ON destino.oid = k.confrelid
+        WHERE n.nspname = 'public' AND k.contype = 'f';
         """
     )
-    destinos_fk = {n: (t, c) for n, t, c in cursor.fetchall()}
+    definiciones_fk = {}
+    dependencias = {}
+    for nombre, definicion, tabla_origen, tabla_destino in cursor.fetchall():
+        definiciones_fk[nombre] = definicion
+        # Una tabla que se apunta a sí misma no cuenta como dependencia:
+        # su clave se puede escribir en su propio CREATE TABLE.
+        if tabla_destino != tabla_origen:
+            dependencias.setdefault(tabla_origen, set()).add(tabla_destino)
+
+    # ---- 3c. Orden de las tablas ---------------------------------------
+    # Cada tabla después de las que referencia (ver ordenar_tablas). Se
+    # calcula ANTES de escribir nada: si hubiera un ciclo, el error sale
+    # aquí y el archivo anterior se queda como estaba.
+    orden_tablas = ordenar_tablas(tablas, dependencias)
+    print(f"Orden de escritura: {', '.join(orden_tablas)}")
 
     # CHECKs. information_schema.check_constraints incluye tambien los
     # CHECK automaticos que Postgres crea para cada columna NOT NULL
@@ -231,14 +320,15 @@ def main():
     lineas.append("-- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.")
     lineas.append("--")
     lineas.append("-- Reconstruido leyendo information_schema (columns,")
-    lineas.append("-- table_constraints, key_column_usage, constraint_column_usage y")
-    lineas.append("-- check_constraints) y pg_indexes, no copiado de ningun archivo previo.")
+    lineas.append("-- table_constraints, key_column_usage y check_constraints), pg_constraint")
+    lineas.append("-- (claves foráneas) y pg_indexes, no copiado de ningun archivo previo.")
     lineas.append("--")
-    lineas.append(f"-- Tablas: {len(tablas)}")
+    lineas.append(f"-- Tablas: {len(tablas)}, en orden topológico: cada una después de las")
+    lineas.append("-- tablas a las que apunta, para que el archivo se pueda ejecutar entero.")
     lineas.append("-- " + "=" * 74)
     lineas.append("")
 
-    for tabla in tablas:
+    for tabla in orden_tablas:
         lineas.append("")
         lineas.append("-- " + "-" * 72)
         lineas.append(f"-- Tabla: {tabla}   ({conteos[tabla]} filas en el momento del volcado)")
@@ -265,12 +355,12 @@ def main():
             elif tipo == "UNIQUE":
                 definiciones.append(f"    CONSTRAINT {nombre} UNIQUE ({cols})")
             elif tipo == "FOREIGN KEY":
-                destino = destinos_fk.get(nombre)
-                if destino:
-                    definiciones.append(
-                        f"    CONSTRAINT {nombre} FOREIGN KEY ({cols}) "
-                        f"REFERENCES {destino[0]}({destino[1]})"
-                    )
+                # La definición completa viene de pg_get_constraintdef
+                # (paso 3). Si no estuviera, antes se omitía EN SILENCIO y
+                # el archivo salía sin esa clave; ahora es un error.
+                if nombre not in definiciones_fk:
+                    raise RuntimeError(f"No se encontró la definición de la clave foránea {nombre}")
+                definiciones.append(f"    CONSTRAINT {nombre} {definiciones_fk[nombre]}")
 
         for nombre, clausula in checks.get(tabla, []):
             definiciones.append(f"    CONSTRAINT {nombre} CHECK {clausula}")
