@@ -342,6 +342,22 @@ foránea doble para la visita e informe recortado.
     VALUES ('horas_recordatorio_gate', 24, '<descripción en una línea>')
     ON CONFLICT (clave) DO NOTHING;
 
+  CORRECCIÓN paso10b (2026-09-28, opción d de Gabi): la coherencia de
+  paso10 repetía qué valores existen ((decision = 'visita_acordada' AND ...)
+  OR (decision = 'descartar' AND ...)). Un valor inválido incumplía las dos
+  restricciones y PostgreSQL informaba de "coherencia" (primera por orden
+  alfabético): diagnóstico engañoso, y chk_decisiones_gate_decision no
+  podía saltar nunca (36/37 igual con y sin ella). paso10b la sustituye,
+  con el mismo nombre, por:
+    (decision <> 'visita_acordada' OR (visita_id IS NOT NULL AND motivo IS NULL))
+    AND
+    (decision <> 'descartar' OR (motivo IS NOT NULL AND visita_id IS NULL))
+  Cada CHECK tiene una sola responsabilidad: decision dice QUÉ valores
+  existen; coherencia, QUÉ ACOMPAÑA a cada uno. paso10 no se modifica
+  (scripts/migraciones_ejecutadas/paso10b_coherencia_decisiones_gate.py).
+  Marcha atrás de paso10b (NO se ejecuta): restaurar la definición de
+  paso10 con DROP CONSTRAINT y ADD CONSTRAINT en una transacción.
+
   Descripción de la regla, literal y en una línea: "Horas que puede estar
   una oportunidad en pendiente_aprobacion sin decisión antes de que WF3
   (barridos periódicos) recuerde a administración que llame al cliente. Al

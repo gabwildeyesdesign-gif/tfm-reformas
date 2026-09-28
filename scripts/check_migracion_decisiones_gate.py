@@ -6,7 +6,8 @@ DOS PARTES:
   A) Estructura: la restricción nueva de visitas (UNIQUE (id,
      oportunidad_id)), las 7 columnas de decisiones_gate (sin
      presupuesto_id), sus restricciones (UNIQUE, clave foránea a
-     oportunidades, clave foránea DOBLE a visitas y 4 CHECK), RLS activado
+     oportunidades, clave foránea DOBLE a visitas y 4 CHECK, con la
+     coherencia en su versión de paso10b), RLS activado
      y la fila horas_recordatorio_gate de reglas_negocio (valor 24 y
      descripción en UNA línea).
   B) Comportamiento: se intenta escribir lo que las restricciones deben
@@ -239,6 +240,17 @@ try:
               f"({sorted(n for n, (t, _) in restr.items() if t == 'f')})")
     for chk in (CHECK_DECISION, CHECK_MOTIVO, CHECK_INFORME, CHECK_COHERENCIA):
         comprobar(f"CHECK {chk}", restr.get(chk, ("", ""))[0] == "c")
+    # Coherencia, versión de paso10b: "si es X, entonces ..." con <>, sin
+    # repetir qué valores existen (eso es cosa de chk_decisiones_gate_decision).
+    # La versión antigua (paso10) contenía = 'visita_acordada'; la nueva no.
+    # No basta con mirar que no haya una lista IN (...): la antigua tampoco
+    # la tenía (enumeraba los valores con dos ramas unidas por OR).
+    definicion_coherencia = restr.get(CHECK_COHERENCIA, ("", ""))[1]
+    comprobar("el CHECK de coherencia es el de paso10b (usa <> y no repite los valores)",
+              "<> 'visita_acordada'" in definicion_coherencia
+              and "<> 'descartar'" in definicion_coherencia
+              and "= 'visita_acordada'" not in definicion_coherencia.replace("<> 'visita_acordada'", ""),
+              f"({definicion_coherencia})")
     comprobar("el CHECK del informe exige texto recortado (btrim) y longitud",
               "btrim(informe)" in restr.get(CHECK_INFORME, ("", ""))[1]
               and "char_length(informe)" in restr.get(CHECK_INFORME, ("", ""))[1])
