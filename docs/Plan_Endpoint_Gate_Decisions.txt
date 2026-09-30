@@ -718,6 +718,14 @@ P11. PENDIENTE (nueva, 2026-09-28). btrim(informe) solo quita el carácter
     4. En n8n, crear una credencial "Header Auth" nueva con nombre
        X-Gate-Secret y ese valor, solo para el formulario del Gate (nunca
        en la herramienta del Agente 2).
+  docs/TFM_Decisiones_Arquitectura_MCP_y_DB.txt (anotado el 2026-09-30,
+  al borrar app/services/gate_service.py en el Bloque C2): la línea 198 de
+  la sección 3.1 NO se modifica, porque es un registro de decisiones y
+  reescribirla haría creer que el diseño original ya lo decía. Se añade
+  JUNTO a ella, sin tocar el texto original, esta nota literal:
+    "(Nota 2026-09-30: gate_service.py se eliminó sin uso; su función la
+    cubre app/services/gate_decisions_service.py, rama
+    feat/n0-gate-decisions.)"
   Este plan: marcado como implementado, con los hashes.
 
 

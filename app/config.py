@@ -39,6 +39,21 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 # archivo que lo usa.
 MCP_SECRET = os.getenv("MCP_SECRET")
 
+# Secreto de la puerta del Gate (POST /gate-decisions), la que usa el
+# formulario de n8n con el que administración registra el resultado de su
+# llamada al cliente. Lo envía en la cabecera X-Gate-Secret.
+#
+# Es un TERCER secreto, distinto de los otros dos, por decisión P4 del plan
+# de /gate-decisions: WEBHOOK_SECRET lo tiene también la herramienta HTTP
+# del Agente 2 (un LLM, para POST /visits), y D18 prohíbe que el agente
+# pueda decidir un Gate. Con un secreto propio, el agente no puede llamar a
+# esta puerta aunque lo intente, porque no tiene la credencial.
+#
+# Mismo criterio que los otros dos: aquí solo se lee. Las comprobaciones de
+# arranque (obligatorio, no vacío y distinto de los otros dos) viven en
+# app/api/security.py, el único archivo que lo usa.
+GATE_SECRET = os.getenv("GATE_SECRET")
+
 # Número mínimo de conexiones que el pool mantiene siempre abiertas, listas
 # para usar sin esperar a crear una nueva. os.getenv devuelve siempre texto
 # (str) aunque el valor parezca un número, así que hay que convertirlo con

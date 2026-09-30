@@ -169,6 +169,16 @@ MAX_LEAD_TOKEN = 100
 # (migración paso9). Si se cambia aquí, hay que cambiarlo también allí.
 MAX_TEXTO_VISITA = 1000
 
+# Longitud máxima de decisiones_gate.informe: lo que anota administración
+# tras la llamada al cliente en un caso de Gate (POST /gate-decisions). Es
+# más largo que el texto de una visita porque es un resumen de una
+# conversación telefónica, y queda para la auditoría anual.
+#
+# Defensa doble (mismo criterio que MAX_TEXTO_VISITA): el mismo valor está
+# en el CHECK chk_decisiones_gate_informe de la base de datos (migración
+# paso10). Si se cambia aquí, hay que cambiarlo también allí.
+MAX_INFORME_GATE = 2000
+
 
 # ======================================================================
 # Validadores de formato COMPARTIDOS (fecha, hora y texto)

@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from psycopg2.extras import Json
 
 from app.api import estimates as estimates_api
+from app.api import gate_decisions as gate_decisions_api
 from app.api import leads as leads_api
 from app.api import visits as visits_api
 from app.db.connection import (
@@ -82,6 +83,12 @@ app.include_router(estimates_api.router)
 # lo llama la herramienta HTTP del Agente 2 en n8n para registrar la
 # SOLICITUD de visita técnica de un cliente (no es una reserva).
 app.include_router(visits_api.router)
+
+# Cuarto router: POST /gate-decisions (app/api/gate_decisions.py). Solo
+# REST, sin tool MCP: lo llama el formulario de n8n con el que
+# administración registra el resultado de su llamada en un caso de Gate.
+# Tiene su propio secreto (X-Gate-Secret), que el Agente 2 no tiene.
+app.include_router(gate_decisions_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna

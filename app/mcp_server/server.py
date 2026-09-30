@@ -61,6 +61,9 @@ from app.services import estimate_service
 #     sería un agente que falla en producción sin motivo aparente.
 #   - .strip() trata un valor de solo espacios como ausente.
 #   - Aquí y no en config.py: solo se le exige a quien lo usa.
+# Que sea DISTINTO de WEBHOOK_SECRET (y de GATE_SECRET) NO se comprueba
+# aquí, sino en app/api/security.py, junto al resto de comparaciones entre
+# secretos (decisión P10 del plan de /gate-decisions, 2026-09-30).
 if MCP_SECRET is None or not MCP_SECRET.strip():
     raise RuntimeError(
         "MCP_SECRET no está definido (o está vacío) en el .env. "
