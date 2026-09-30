@@ -13,7 +13,7 @@ Bloque C (esta versión):
      el caso del 26/10 daría 06:30 en UTC, una hora antes de lo pedido.
 
 Bloque D:
-  2a. _leer_reglas() con un cursor de mentira (sin base de datos): una
+  2a. leer_reglas_visita() con un cursor de mentira (sin base de datos): una
       regla que falta, una con decimales y una franja al revés deben
       salir las tres como problemas.
   2b. Configuración incompleta de verdad (503): contra la base de datos
@@ -39,6 +39,7 @@ from decimal import Decimal
 
 import psycopg2
 
+import app.services.reglas_visita as reglas_visita
 import app.services.visits_service as visits_service
 from app.config import DATABASE_URL
 from app.db import connection as db
@@ -46,7 +47,10 @@ from app.schemas.leads import LeadCreate
 from app.schemas.visits import VisitaCreate
 from app.services.estimate_service import calculate_estimate
 from app.services.leads_service import create_lead
-from app.services.visits_service import ConfiguracionIncompleta, combinar_fecha_hora_madrid
+# Desde el 2026-09-30 las reglas de fecha y de configuración viven en
+# reglas_visita.py (compartidas con /gate-decisions); este script las busca
+# allí. Lo que se comprueba no cambia: solo dónde se mira.
+from app.services.reglas_visita import ConfiguracionIncompleta, combinar_fecha_hora_madrid
 
 ok = 0
 fallos = []
@@ -81,7 +85,7 @@ for dia, hora, desfase, utc_esperado in CASOS:
     comprobar(f"{dia}: la hora local sigue siendo {hora:%H:%M}", (resultado.hour, resultado.minute) == (hora.hour, hora.minute))
 
 print("\n" + "=" * 78)
-print("2a. _leer_reglas() CON UN CURSOR DE MENTIRA (sin base de datos)")
+print("2a. leer_reglas_visita() CON UN CURSOR DE MENTIRA (sin base de datos)")
 print("=" * 78)
 
 
@@ -103,25 +107,25 @@ class CursorDeMentira:
 
 
 reglas_rotas = [
-    (visits_service.CLAVE_MANANA_INICIO, Decimal("510.50")),  # con decimales
-    (visits_service.CLAVE_MANANA_FIN, Decimal("810.00")),
-    (visits_service.CLAVE_TARDE_INICIO, Decimal("1200.00")),  # al revés: empieza
-    (visits_service.CLAVE_TARDE_FIN, Decimal("1020.00")),     # después de acabar
+    (reglas_visita.CLAVE_MANANA_INICIO, Decimal("510.50")),  # con decimales
+    (reglas_visita.CLAVE_MANANA_FIN, Decimal("810.00")),
+    (reglas_visita.CLAVE_TARDE_INICIO, Decimal("1200.00")),  # al revés: empieza
+    (reglas_visita.CLAVE_TARDE_FIN, Decimal("1020.00")),     # después de acabar
     # duracion_visita_min: falta
 ]
-reglas, problemas = visits_service._leer_reglas(CursorDeMentira(reglas_rotas))
+reglas, problemas = reglas_visita.leer_reglas_visita(CursorDeMentira(reglas_rotas))
 for p in problemas:
     print(f"  problema: {p}")
 comprobar("detecta la regla que falta", any("duracion_visita_min: no existe" in p for p in problemas))
 comprobar("detecta el valor con decimales", any("visita_manana_inicio_min: valor no válido" in p for p in problemas))
 comprobar("detecta la franja al revés", any("visita_tarde_inicio_min (1200) no es menor" in p for p in problemas))
-reglas_ok, problemas_ok = visits_service._leer_reglas(CursorDeMentira([
-    (visits_service.CLAVE_MANANA_INICIO, Decimal("510.00")), (visits_service.CLAVE_MANANA_FIN, Decimal("810.00")),
-    (visits_service.CLAVE_TARDE_INICIO, Decimal("1020.00")), (visits_service.CLAVE_TARDE_FIN, Decimal("1200.00")),
-    (visits_service.CLAVE_DURACION, Decimal("60.00")),
+reglas_ok, problemas_ok = reglas_visita.leer_reglas_visita(CursorDeMentira([
+    (reglas_visita.CLAVE_MANANA_INICIO, Decimal("510.00")), (reglas_visita.CLAVE_MANANA_FIN, Decimal("810.00")),
+    (reglas_visita.CLAVE_TARDE_INICIO, Decimal("1020.00")), (reglas_visita.CLAVE_TARDE_FIN, Decimal("1200.00")),
+    (reglas_visita.CLAVE_DURACION, Decimal("60.00")),
 ]))
 comprobar("con las 5 reglas correctas: 0 problemas y valores enteros",
-          problemas_ok == [] and reglas_ok[visits_service.CLAVE_DURACION] == 60, f"({reglas_ok})")
+          problemas_ok == [] and reglas_ok[reglas_visita.CLAVE_DURACION] == 60, f"({reglas_ok})")
 
 print("\n" + "=" * 78)
 print("2b. CONFIGURACIÓN INCOMPLETA DE VERDAD (503), contra la base de datos")
@@ -159,10 +163,10 @@ try:
     # Cambio SOLO EN MEMORIA: las funciones del servicio leen estas
     # constantes del módulo en el momento de ejecutarse, así que ven el
     # nombre falso. La fila real duracion_visita_min no se toca.
-    clave_real = visits_service.CLAVE_DURACION
+    clave_real = reglas_visita.CLAVE_DURACION
     CLAVE_FALSA = "clave_inexistente_check_visits"
-    visits_service.CLAVE_DURACION = CLAVE_FALSA
-    visits_service.CLAVES_REGLAS = tuple(CLAVE_FALSA if c == clave_real else c for c in visits_service.CLAVES_REGLAS)
+    reglas_visita.CLAVE_DURACION = CLAVE_FALSA
+    reglas_visita.CLAVES_REGLAS = tuple(CLAVE_FALSA if c == clave_real else c for c in reglas_visita.CLAVES_REGLAS)
 
     # La fecha no llega a validarse: la configuración falla antes.
     peticion = VisitaCreate(lead_token=token, fecha="2030-01-07", hora="08:30", texto_cliente="prueba 503")
@@ -178,8 +182,8 @@ try:
         # Rama else del try: solo si NO salió ninguna excepción.
         comprobar("sale ConfiguracionIncompleta", False, "(la excepción se ha tragado: no salió nada)")
     finally:
-        visits_service.CLAVE_DURACION = clave_real
-        visits_service.CLAVES_REGLAS = tuple(clave_real if c == CLAVE_FALSA else c for c in visits_service.CLAVES_REGLAS)
+        reglas_visita.CLAVE_DURACION = clave_real
+        reglas_visita.CLAVES_REGLAS = tuple(clave_real if c == CLAVE_FALSA else c for c in reglas_visita.CLAVES_REGLAS)
 
     cur.execute(
         "SELECT detalle FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %s "

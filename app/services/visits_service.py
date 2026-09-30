@@ -12,22 +12,26 @@ adaptador app/api/visits.py decide qué código HTTP corresponde a cada
 una.
 """
 
-from datetime import date, datetime, time
-
-# ZoneInfo: las zonas horarias oficiales (base de datos IANA). En Windows
-# necesita el paquete tzdata (fijado en requirements.txt, decisión P1):
-# sin él, ZoneInfo("Europe/Madrid") falla con ZoneInfoNotFoundError.
-from zoneinfo import ZoneInfo
-
 from psycopg2.extras import Json
 
 from app.db.connection import get_transactional_connection
 from app.schemas.visits import VisitaCreate, VisitaResponse
 
-# Zona horaria en la que el cliente dice la fecha y la hora. Tiene en
-# cuenta el cambio de hora: las 08:30 del 23/10/2026 son +02:00 (verano)
-# y las del 26/10/2026, +01:00 (invierno).
-ZONA_MADRID = ZoneInfo("Europe/Madrid")
+# Reglas de fecha y de configuración COMPARTIDAS con POST /gate-decisions.
+# Hasta el 2026-09-30 vivían en este archivo; se mudaron a reglas_visita.py
+# sin cambiar su lógica (plan de /gate-decisions, sección 2.3).
+from app.services.reglas_visita import (
+    ZONA_MADRID,
+    ConfiguracionIncompleta,
+    RechazoNegocio,
+    combinar_fecha_hora_madrid,
+    leer_reglas_visita,
+    registrar_configuracion_incompleta,
+    validar_fecha,
+)
+
+# Origen con el que este endpoint firma el log de configuración incompleta.
+ORIGEN_LOG = "visits"
 
 # Estados de la oportunidad desde los que se puede pedir visita.
 # 'visita_agendada' está incluido para poder CAMBIAR la fecha de una
@@ -49,37 +53,21 @@ ESTADOS_VISITA_ACTIVA = (VISITA_SOLICITADA, VISITA_CONFIRMADA)
 LOG_ENTITY_TYPE_OPORTUNIDAD = "oportunidad"
 ACCION_SOLICITADA = "visita_solicitada"
 ACCION_SUSTITUIDA = "visita_sustituida"
-ACCION_CONFIGURACION_INCOMPLETA = "visita_configuracion_incompleta"
-
-# Claves de reglas_negocio que usa este servicio (migración paso9). Los
-# valores están en MINUTOS DESDE MEDIANOCHE, hora de Madrid: 510 = 08:30.
-CLAVE_MANANA_INICIO = "visita_manana_inicio_min"
-CLAVE_MANANA_FIN = "visita_manana_fin_min"
-CLAVE_TARDE_INICIO = "visita_tarde_inicio_min"
-CLAVE_TARDE_FIN = "visita_tarde_fin_min"
-CLAVE_DURACION = "duracion_visita_min"
-CLAVES_REGLAS = (CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN, CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN, CLAVE_DURACION)
-
-MINUTOS_POR_DIA = 24 * 60
 
 
 # ======================================================================
 # Excepciones: una clase por FAMILIA de rechazo
 # ======================================================================
-# Todas heredan de VisitaRechazada, que guarda el motivo y el mensaje. El
-# adaptador captura cada familia y la convierte en su código HTTP
-# (404, 409, 422 o 503). Así la regla "qué código es cada cosa" vive en
-# un único sitio, app/api/visits.py.
+# VisitaRechazada es la base de los rechazos PROPIOS de /visits, y hereda
+# de RechazoNegocio (reglas_visita.py), la base común con /gate-decisions.
+# Los rechazos COMPARTIDOS, FechaNoValida (422) y ConfiguracionIncompleta
+# (503), viven en reglas_visita.py. El adaptador (app/api/visits.py)
+# captura RechazoNegocio, que incluye a todos, y decide el código HTTP de
+# cada familia.
 
 
-class VisitaRechazada(Exception):
-    """Base común: la solicitud no se puede aceptar tal como viene."""
-
-    def __init__(self, motivo: str, mensaje: str):
-        # super().__init__(mensaje) hace que str(excepción) sea el mensaje.
-        super().__init__(mensaje)
-        self.motivo = motivo
-        self.mensaje = mensaje
+class VisitaRechazada(RechazoNegocio):
+    """Base de los rechazos propios de /visits (motivo y mensaje los guarda RechazoNegocio)."""
 
 
 class LeadNoEncontrado(VisitaRechazada):
@@ -88,152 +76,6 @@ class LeadNoEncontrado(VisitaRechazada):
 
 class EstadoNoPermiteVisita(VisitaRechazada):
     """El estado del lead no permite pedir visita desde el chat (-> 409)."""
-
-
-class FechaNoValida(VisitaRechazada):
-    """La fecha o la hora incumplen una regla de negocio (-> 422)."""
-
-
-class ConfiguracionIncompleta(VisitaRechazada):
-    """
-    Falta o es incoherente alguna fila de reglas_negocio (-> 503).
-
-    faltan: lista de claves que faltan o no tienen un valor válido. Se
-    guarda aparte del mensaje para que el adaptador la pueda devolver.
-    """
-
-    def __init__(self, motivo: str, mensaje: str, faltan: list[str]):
-        super().__init__(motivo, mensaje)
-        self.faltan = faltan
-
-
-# ======================================================================
-# Funciones puras (sin base de datos): se prueban directamente
-# ======================================================================
-
-
-def combinar_fecha_hora_madrid(fecha: date, hora: time) -> datetime:
-    """
-    Junta un día y una hora en un INSTANTE concreto, en hora de Madrid.
-
-    datetime.combine(fecha, hora, tzinfo=...) crea un datetime "consciente"
-    (con zona horaria). ZoneInfo calcula el desfase correcto para ESE día:
-    +02:00 en horario de verano y +01:00 en el de invierno. Un desfase fijo
-    escrito a mano se equivocaría la mitad del año; por eso se instaló
-    tzdata (prueba en scripts/check_visits_service.py).
-
-    Las franjas de visita (08:30-20:00) nunca caen en la hora que se salta
-    o se repite al cambiar el reloj (entre las 02:00 y las 03:00), así que
-    no hay horas inexistentes ni ambiguas que tratar.
-    """
-    return datetime.combine(fecha, hora, tzinfo=ZONA_MADRID)
-
-
-def _hhmm(minutos: int) -> str:
-    """Minutos desde medianoche -> texto "HH:MM" (510 -> "08:30")."""
-    # divmod(a, b) devuelve a la vez el cociente y el resto: (8, 30).
-    horas, mins = divmod(minutos, 60)
-    return f"{horas:02d}:{mins:02d}"
-
-
-def validar_fecha(inicio: datetime, ahora: datetime, reglas: dict[str, int]) -> None:
-    """
-    Aplica las tres reglas de la fecha. No devuelve nada si todo está bien;
-    si no, lanza FechaNoValida con el motivo y un mensaje que el agente
-    puede leerle al cliente.
-
-    inicio: el instante pedido, en hora de Madrid.
-    ahora:  el now() de la base de datos (la referencia de tiempo es el
-            reloj de Postgres, no el del ordenador que ejecuta el código).
-    reglas: los cinco valores de reglas_negocio, ya comprobados.
-
-    Las reglas se comprueban en orden y se informa de la PRIMERA que
-    falla: pasado, fin de semana, franja.
-    """
-    # Comparar dos datetime conscientes funciona aunque estén en zonas
-    # distintas: Python compara el instante real, no el texto.
-    if inicio <= ahora:
-        raise FechaNoValida(
-            "fecha_pasada",
-            f"La visita tiene que ser en el futuro, y el {inicio:%d/%m/%Y} a las {inicio:%H:%M} ya ha pasado.",
-        )
-
-    # weekday(): lunes = 0 ... sábado = 5, domingo = 6. Se usa el día EN
-    # MADRID (inicio ya lleva esa zona), no el día en UTC.
-    if inicio.weekday() >= 5:
-        raise FechaNoValida(
-            "fin_de_semana",
-            f"Las visitas son de lunes a viernes, y el {inicio:%d/%m/%Y} es fin de semana.",
-        )
-
-    manana = (reglas[CLAVE_MANANA_INICIO], reglas[CLAVE_MANANA_FIN])
-    tarde = (reglas[CLAVE_TARDE_INICIO], reglas[CLAVE_TARDE_FIN])
-    duracion = reglas[CLAVE_DURACION]
-
-    # Todo en minutos desde medianoche para comparar números enteros.
-    empieza = inicio.hour * 60 + inicio.minute
-    termina = empieza + duracion
-
-    # La visita vale si EMPIEZA y TERMINA dentro de la misma franja, con
-    # los dos extremos incluidos: con 60 min, 12:30 vale (termina a las
-    # 13:30 justas) y 12:45 no (terminaría a las 13:45).
-    # any(...) es True si al menos una de las franjas cumple la condición.
-    cabe = any(ini <= empieza and termina <= fin for ini, fin in (manana, tarde))
-    if not cabe:
-        raise FechaNoValida(
-            "fuera_de_franja",
-            f"La visita dura {duracion} minutos y debe empezar y terminar dentro de una franja: "
-            f"mañana de {_hhmm(manana[0])} a {_hhmm(manana[1])} o tarde de {_hhmm(tarde[0])} a {_hhmm(tarde[1])}. "
-            f"Empezando a las {_hhmm(empieza)} terminaría a las {_hhmm(termina)}.",
-        )
-
-
-# ======================================================================
-# Lectura de las reglas
-# ======================================================================
-
-
-def _leer_reglas(cursor) -> tuple[dict[str, int], list[str]]:
-    """
-    Lee las cinco claves de reglas_negocio y devuelve (reglas, problemas).
-
-    reglas:    clave -> minutos como int, solo de las filas válidas.
-    problemas: lista de textos, vacía si todo está bien. No se adivina
-               ningún valor: si algo falla, el servicio responde 503.
-
-    Un valor es válido si es un número ENTERO de minutos dentro del día
-    (reglas_negocio.valor es NUMERIC(10,2) y llega como Decimal('510.00')).
-    Además cada franja debe empezar antes de terminar, y la duración debe
-    ser positiva.
-    """
-    cursor.execute(
-        "SELECT clave, valor FROM reglas_negocio WHERE clave = ANY(%s);",
-        (list(CLAVES_REGLAS),),
-    )
-    # dict(...) sobre una lista de pares (clave, valor) crea un diccionario.
-    leidas = dict(cursor.fetchall())
-
-    reglas: dict[str, int] = {}
-    problemas: list[str] = []
-    for clave in CLAVES_REGLAS:
-        valor = leidas.get(clave)
-        if valor is None:
-            problemas.append(f"{clave}: no existe")
-        elif valor != valor.to_integral_value() or not (0 <= valor <= MINUTOS_POR_DIA):
-            # to_integral_value() redondea al entero; si cambia, es que
-            # tenía decimales (510.50 minutos no tiene sentido aquí).
-            problemas.append(f"{clave}: valor no válido ({valor})")
-        else:
-            reglas[clave] = int(valor)
-
-    # Coherencia, solo si las filas implicadas son válidas.
-    for ini, fin in ((CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN), (CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN)):
-        if ini in reglas and fin in reglas and reglas[ini] >= reglas[fin]:
-            problemas.append(f"{ini} ({reglas[ini]}) no es menor que {fin} ({reglas[fin]})")
-    if reglas.get(CLAVE_DURACION) == 0:
-        problemas.append(f"{CLAVE_DURACION}: debe ser mayor que 0")
-
-    return reglas, problemas
 
 
 # ======================================================================
@@ -345,19 +187,12 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
         # --------------------------------------------------------------
         # 3. Reglas de negocio de la visita (503 si faltan)
         # --------------------------------------------------------------
-        reglas, problemas = _leer_reglas(cursor)
+        reglas, problemas = leer_reglas_visita(cursor)
         if problemas:
-            # Se deja rastro para administración (P2) y se DIFIERE la
-            # excepción para que este INSERT se confirme (ver arriba).
-            cursor.execute(
-                "INSERT INTO logs (entity_type, entity_id, accion, detalle) VALUES (%s, %s, %s, %s);",
-                (
-                    LOG_ENTITY_TYPE_OPORTUNIDAD,
-                    oportunidad_id,
-                    ACCION_CONFIGURACION_INCOMPLETA,
-                    Json({"problemas": problemas}),
-                ),
-            )
+            # Se deja rastro para administración (P2), firmado con el
+            # origen "visits", y se DIFIERE la excepción para que este
+            # INSERT se confirme (ver arriba).
+            registrar_configuracion_incompleta(cursor, oportunidad_id, problemas, ORIGEN_LOG)
             rechazo_diferido = ConfiguracionIncompleta(
                 "configuracion_incompleta",
                 "Ahora mismo no se pueden registrar visitas por un problema de configuración; "

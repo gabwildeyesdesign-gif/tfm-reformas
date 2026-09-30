@@ -13,6 +13,10 @@ significa nada en el negocio.
 # "esto es un texto cualquiera", decimos "esto es uno de estos cuatro".
 from enum import Enum
 
+# re: expresiones regulares, para exigir el formato EXACTO de fecha y hora
+# (validadores compartidos, al final de este archivo).
+import re
+
 
 class TipoReforma(str, Enum):
     """
@@ -164,3 +168,59 @@ MAX_LEAD_TOKEN = 100
 # el CHECK chk_visitas_texto_cliente_longitud de la base de datos
 # (migración paso9). Si se cambia aquí, hay que cambiarlo también allí.
 MAX_TEXTO_VISITA = 1000
+
+
+# ======================================================================
+# Validadores de formato COMPARTIDOS (fecha, hora y texto)
+# ======================================================================
+# Los usan VisitaCreate (POST /visits) y GateDecisionCreate (POST
+# /gate-decisions), que deben aceptar EXACTAMENTE los mismos formatos. Se
+# mudaron aquí desde app/schemas/visits.py el 2026-09-30, sin cambiar ni
+# los patrones ni los mensajes de error.
+#
+# Por qué hacen falta (comprobado con ejecución real el 2026-09-26): sin
+# ellos, Pydantic acepta en una fecha "2026-10-01T00:00:00" y números
+# enteros, y en una hora "10:00:30.5", el número 36000 y "10:00Z". Este
+# último es el peligroso: la Z significa UTC, así que la visita quedaría
+# dos horas desplazada. El contrato dice YYYY-MM-DD y HH:MM, y solo eso.
+#
+# Cada esquema los llama desde un @field_validator(..., mode="before"), es
+# decir, ANTES de que Pydantic convierta el valor a date o a time.
+
+# Formatos exactos. ^ y $ obligan a que el texto ENTERO cumpla el patrón
+# (no basta con que lo contenga).
+#   \d{4}-\d{2}-\d{2}       -> "2026-10-23"
+#   ([01]\d|2[0-3]):[0-5]\d -> de "00:00" a "23:59"; "9:00" no vale, "09:00" sí
+PATRON_FECHA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+PATRON_HORA = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def fecha_en_formato_exacto(valor):
+    """
+    Deja pasar solo un texto "YYYY-MM-DD"; si no, ValueError (que Pydantic
+    convierte en un 422 que nombra el campo). Devuelve el texto tal cual:
+    Pydantic lo convierte después a date, y ahí rechaza los días
+    imposibles como "2026-02-30".
+    """
+    # isinstance comprueba el tipo: si no es texto, o si es texto con otra
+    # forma, se rechaza.
+    if not isinstance(valor, str) or not PATRON_FECHA.match(valor):
+        raise ValueError("la fecha debe tener el formato YYYY-MM-DD, por ejemplo 2026-10-23")
+    return valor
+
+
+def hora_en_formato_exacto(valor):
+    """Deja pasar solo un texto "HH:MM" (24 horas); si no, ValueError."""
+    if not isinstance(valor, str) or not PATRON_HORA.match(valor):
+        raise ValueError("la hora debe tener el formato HH:MM (24 horas), por ejemplo 08:30 o 17:00")
+    return valor
+
+
+def texto_sin_espacios_en_los_extremos(valor):
+    """
+    Quita espacios, tabuladores y saltos de línea del principio y del
+    final (.strip()). Un texto hecho solo de espacios queda vacío y lo
+    rechaza el min_length=1 del campo. Si no es texto, se deja pasar tal
+    cual para que Pydantic dé su propio error de tipo.
+    """
+    return valor.strip() if isinstance(valor, str) else valor

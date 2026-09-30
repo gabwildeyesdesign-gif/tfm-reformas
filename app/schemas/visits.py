@@ -8,20 +8,18 @@ franja) dependen de valores de reglas_negocio y del reloj de la base de
 datos, así que viven en app/services/visits_service.py.
 """
 
-# re: expresiones regulares, para exigir el formato exacto de fecha y hora.
-import re
 from datetime import date, datetime, time
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.schemas.common import MAX_LEAD_TOKEN, MAX_TEXTO_VISITA, MIN_LEAD_TOKEN
-
-# Formatos exactos que admite el contrato. ^ y $ obligan a que el texto
-# ENTERO cumpla el patrón (no basta con que lo contenga).
-#   \d{4}-\d{2}-\d{2}      -> "2026-10-23"
-#   ([01]\d|2[0-3]):[0-5]\d -> de "00:00" a "23:59"; "9:00" no vale, "09:00" sí
-PATRON_FECHA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-PATRON_HORA = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+from app.schemas.common import (
+    MAX_LEAD_TOKEN,
+    MAX_TEXTO_VISITA,
+    MIN_LEAD_TOKEN,
+    fecha_en_formato_exacto,
+    hora_en_formato_exacto,
+    texto_sin_espacios_en_los_extremos,
+)
 
 
 class VisitaCreate(BaseModel):
@@ -57,41 +55,24 @@ class VisitaCreate(BaseModel):
     # ------------------------------------------------------------------
     # mode="before": se ejecutan ANTES de que Pydantic convierta el valor
     # al tipo del campo (date, time), sobre lo que llegó en el JSON.
-    #
-    # Por qué hacen falta (comprobado con ejecución real el 2026-09-26):
-    # sin ellos, Pydantic acepta en fecha "2026-10-01T00:00:00" y números
-    # enteros, y en hora "10:00:30.5", el número 36000 y "10:00Z". Este
-    # último es el peligroso: la Z significa UTC, así que la visita
-    # quedaría dos horas desplazada respecto a lo que el cliente pidió.
-    # El contrato dice YYYY-MM-DD y HH:MM, y solo eso se admite.
+    # La lógica vive en app/schemas/common.py (compartida con
+    # GateDecisionCreate desde el 2026-09-30); aquí solo se engancha cada
+    # comprobación a su campo. El motivo de cada una está explicado allí.
 
     @field_validator("fecha", mode="before")
     @classmethod
-    def fecha_en_formato_exacto(cls, valor):
-        # isinstance comprueba el tipo: si no es texto, o si es texto con
-        # otra forma, se rechaza. El ValueError se convierte en un 422 que
-        # nombra el campo.
-        if not isinstance(valor, str) or not PATRON_FECHA.match(valor):
-            raise ValueError("la fecha debe tener el formato YYYY-MM-DD, por ejemplo 2026-10-23")
-        # Se devuelve el texto tal cual: Pydantic lo convierte después a
-        # date, y ahí rechaza los días imposibles como "2026-02-30".
-        return valor
+    def validar_fecha(cls, valor):
+        return fecha_en_formato_exacto(valor)
 
     @field_validator("hora", mode="before")
     @classmethod
-    def hora_en_formato_exacto(cls, valor):
-        if not isinstance(valor, str) or not PATRON_HORA.match(valor):
-            raise ValueError("la hora debe tener el formato HH:MM (24 horas), por ejemplo 08:30 o 17:00")
-        return valor
+    def validar_hora(cls, valor):
+        return hora_en_formato_exacto(valor)
 
     @field_validator("texto_cliente", mode="before")
     @classmethod
-    def texto_sin_espacios_en_los_extremos(cls, valor):
-        # .strip() quita espacios, tabuladores y saltos de línea del
-        # principio y del final. Un texto hecho solo de espacios queda
-        # vacío y lo rechaza min_length=1. Si no es texto, se deja pasar
-        # tal cual para que Pydantic dé su propio error de tipo.
-        return valor.strip() if isinstance(valor, str) else valor
+    def recortar_texto_cliente(cls, valor):
+        return texto_sin_espacios_en_los_extremos(valor)
 
 
 class VisitaResponse(BaseModel):

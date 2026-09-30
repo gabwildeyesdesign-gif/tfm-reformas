@@ -11,12 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.api.security import verificar_webhook_secret
 from app.schemas.visits import VisitaCreate, VisitaResponse
+# Los rechazos COMPARTIDOS con /gate-decisions (FechaNoValida,
+# ConfiguracionIncompleta) y su base común RechazoNegocio viven en
+# reglas_visita.py desde el 2026-09-30; los PROPIOS de /visits, en
+# visits_service.py.
+from app.services.reglas_visita import ConfiguracionIncompleta, FechaNoValida, RechazoNegocio
 from app.services.visits_service import (
-    ConfiguracionIncompleta,
     EstadoNoPermiteVisita,
-    FechaNoValida,
     LeadNoEncontrado,
-    VisitaRechazada,
     solicitar_visita,
 )
 
@@ -60,7 +62,10 @@ def post_visits(data: VisitaCreate, response: Response) -> VisitaResponse:
     """
     try:
         resultado = solicitar_visita(data)
-    except VisitaRechazada as error:
+    # RechazoNegocio es la base de TODOS: los propios de /visits (que
+    # heredan de VisitaRechazada) y los compartidos de reglas_visita.py.
+    # Capturar solo VisitaRechazada dejaría escapar un 422 o un 503 como 500.
+    except RechazoNegocio as error:
         # type(error) es la clase concreta (FechaNoValida, etc.); con ella
         # se busca el código en la tabla. detail es un diccionario, así que
         # el cuerpo de la respuesta será {"detail": {"motivo": ..., ...}}:
