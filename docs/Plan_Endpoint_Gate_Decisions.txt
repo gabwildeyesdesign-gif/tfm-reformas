@@ -663,6 +663,11 @@ P11. PENDIENTE (nueva, 2026-09-28). btrim(informe) solo quita el carácter
       último bloque incluye las instrucciones exactas, paso a paso, para
       generarlo y añadirlo (sección 9), y el merge a main se hace cuando
       Gabi lo tenga preparado.
+  D3. DEUDA TÉCNICA (anotada el 2026-10-01, Bloque D). Los tres estados de
+      visita/oportunidad que gate_decisions_service importa de
+      visits_service (ESTADOS_VISITA_ACTIVA, VISITA_CONFIRMADA y
+      ESTADO_OPORTUNIDAD_CON_VISITA) deberían vivir en reglas_visita.py;
+      se saldará la próxima vez que se toque /visits.
 
 
 ================================================================
