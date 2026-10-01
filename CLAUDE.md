@@ -114,9 +114,11 @@ tool MCP calculate_estimate (list_tools() devuelve solo esa), con /mcp
 autenticado por Bearer MCP_SECRET. Desde el 2026-09-25 existe también
 GET /leads/session/{lead_token} (solo REST, en el router de leads, para
 el router de n8n; no forma parte de los 5 endpoints originales).
-Desde el 2026-09-26, en la rama feat/n0-visits (pendiente de merge),
-POST /visits (solo REST, tercer include_router). gate-decisions y
-create-followup-task siguen siendo un docstring de una línea.
+Desde el 2026-09-26, POST /visits (solo REST, tercer include_router),
+integrado en main (7934fa6). Desde el 2026-10-01, en la rama
+feat/n0-gate-decisions (pendiente de merge), POST /gate-decisions (solo
+REST, cuarto include_router), con su propia cabecera X-Gate-Secret.
+create-followup-task sigue siendo un docstring de una línea.
 Lo que sigue es la especificación completa, no el estado actual.
 
 calculate-estimate tiene las dos (MCP en producción, REST para
@@ -158,7 +160,8 @@ SOLO REST.
   (combined_lifespan anidado), nunca uno reemplazar al otro — FastAPI
   solo acepta un lifespan.
 - DB_POOL_MIN y DB_POOL_MAX NO están en .env: el .env contiene
-  DATABASE_URL y WEBHOOK_SECRET. Los valores 2 y 10 son los por defecto
+  DATABASE_URL y WEBHOOK_SECRET (y, desde que se añadieron, MCP_SECRET y
+  GATE_SECRET). Los valores 2 y 10 son los por defecto
   escritos en app/config.py. Para cambiarlos sin tocar código, hay que
   añadir primero esas variables al .env.
 - POST /leads EXIGE la cabecera X-Webhook-Secret con el valor de
@@ -176,6 +179,19 @@ SOLO REST.
   (VerificadorSecretoMCP, compare_digest), NO StaticTokenVerifier de
   fastmcp (comparación no constante, "no usar en producción").
   scripts/check_mcp_connection.py ya envía el token.
+- GATE_SECRET (tercer secreto, desde el 2026-09-30) también es
+  obligatorio para ARRANCAR. app/api/security.py detiene uvicorn, antes de
+  abrir el puerto, si GATE_SECRET falta o solo tiene espacios, si es igual
+  a WEBHOOK_SECRET o si es igual a MCP_SECRET; y también si MCP_SECRET es
+  igual a WEBHOOK_SECRET (P10: el mensaje de server.py ya lo prometía,
+  pero nadie lo comprobaba). Los mensajes nombran las variables, nunca su
+  valor. POST /gate-decisions exige la cabecera X-Gate-Secret (401 sin
+  ella, o con el valor de WEBHOOK_SECRET en cualquiera de las dos
+  cabeceras). Motivo: WEBHOOK_SECRET lo tiene la herramienta del Agente 2,
+  y con el mismo valor el agente podría decidir su propio Gate. En n8n va
+  en una credencial "Header Auth" PROPIA, solo para el formulario del
+  Gate. Al integrar la rama, el uvicorn del 8000 no arranca sin
+  GATE_SECRET en el .env (R4 del plan de /gate-decisions).
 - El precio que se devuelve al cliente lleva IVA INCLUIDO (D14):
   EstimateResponse trae importe_min_con_iva / importe_max_con_iva, y esas
   son también las columnas de presupuestos (renombradas en paso7), junto
@@ -193,7 +209,8 @@ SOLO REST.
   integral_vivienda y parcial_acabados 10.000 €, los cuatro ya cerrados). La fila
   reglas_negocio.umbral_aprobacion_manual sigue existiendo pero está marcada
   como OBSOLETA y nadie la lee: editarla no tiene ningún efecto.
-  El proyecto tiene por tanto 9 tablas, no 8.
+  El proyecto tiene por tanto 9 tablas, no 8. (Desde paso10, 2026-09-28,
+  son 10: se añadió decisiones_gate.)
 - m2 tiene tope: más de 0 y hasta 500 (MAX_M2_LEAD en app/schemas/common.py,
   y CHECK chk_leads_m2_rango en leads, defensa doble como en D5). Es Decimal,
   no float. OJO: el CHECK va sobre la expresión (datos_estructurados ->>
@@ -253,17 +270,37 @@ SOLO REST.
 > check_mcp_calculate_estimate 19/19, check_migracion_iva_y_seguimiento
 > 17/17, y el resto de la suite sin fallos.
 >
-> **Bloque actual: el router de n8n (D18.9).** Un solo workflow de
-> entrada: Chat Trigger → GET /leads/session/{lead_token} → Switch →
-> Agente 1 (captura) o Agente 2 (asesor). El endpoint ya está en main.
+> **Integrado en `main` el 2026-09-26.** POST /visits (rama
+> feat/n0-visits), último commit 7934fa6.
 >
-> **POST /visits está implementado y verificado en la rama
-> feat/n0-visits, pendiente de merge.** Después, POST /gate-decisions,
-> con corte a mitad de octubre: si para entonces no está, el Agente 2
-> baja a N1 (D18). El
-> barrido de seguimiento de D13 queda detrás, como WF3 (orden de D18).
-> Se aplica la misma regla de siempre: **no hacer merge a `main` sin la
-> confirmación explícita de Gabi**, y siempre con `--ff-only`.
+> **Bloque actual: POST /gate-decisions, implementado y verificado en la
+> rama `feat/n0-gate-decisions`, pendiente de merge** (Bloques A a E
+> cerrados; el corte de mitad de octubre de D18 se cumple). Antes del
+> merge, Gabi tiene que añadir GATE_SECRET a su .env, o el uvicorn del
+> 8000 no arrancará (R4). Se aplica la misma regla de siempre: **no hacer
+> merge a `main` sin la confirmación explícita de Gabi**, y siempre con
+> `--ff-only`.
+>
+> El router de n8n (D18.9: Chat Trigger → GET /leads/session/{lead_token}
+> → Switch → Agente 1 o Agente 2) se construye en n8n, fuera de este
+> repositorio; su endpoint está en main desde el 2026-09-25. Le falta el
+> mensaje fijo para el estado 'perdida' (P6 del plan de /gate-decisions).
+>
+> **Numeración de los workflows de n8n (redefinida el 2026-09-28, P8 del
+> plan de /gate-decisions; sustituye a la de D18):**
+> - WF2 = aviso del Gate a administración, UNA sola vez, al aparecer el
+>   Gate. Sin botones ni nodo Wait (D19).
+> - WF3 = barridos periódicos, con dos consultas: el seguimiento de 48 h
+>   (D13) y el recordatorio del Gate a administración cuando una
+>   oportunidad lleva más de horas_recordatorio_gate (24) horas en
+>   'pendiente_aprobacion'. Al registrarse la decisión, el estado cambia y
+>   el recordatorio se detiene solo.
+> - WF4 = errores (sin cambios respecto a D18).
+>
+> Trabajo posterior, fuera de esta rama (sección 11 del plan): el endpoint
+> de solo lectura para el aviso del Gate (antes de WF2), WF2, WF3, el
+> formulario de n8n con su credencial X-Gate-Secret, el mensaje del router
+> para 'perdida' y la deuda técnica D3.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -364,6 +401,31 @@ check_tipo_reforma_constraint). Detalle: docs/Plan_Endpoint_Visits.txt y
 la sección 5.4 de la Adenda (códigos y limitaciones: Gate permanente,
 festivos, hora exacta, visita confirmada).
 
+POST /gate-decisions (rama feat/n0-gate-decisions, 2026-09-28 a
+2026-10-01, pendiente de merge; hashes por bloque en la sección 10 del
+plan): administración registra el resultado de su llamada a un cliente con
+Gate (D19): visita_acordada (fecha y hora; crea una visita 'confirmada' y
+la oportunidad pasa a 'visita_agendada') o descartar (motivo; pasa a
+'perdida'), con el informe siempre. Cabecera X-Gate-Secret propia. Tabla
+nueva decisiones_gate (paso10 + paso10b, con RLS):
+check_migracion_decisiones_gate 38/38 (en negativo, quitando cada
+restricción, de 34/38 a 37/38). Reglas de fecha compartidas con /visits en
+app/services/reglas_visita.py (Bloque C1, sin cambio de comportamiento:
+check_visits_http 55/55, check_visits_service 16/16).
+check_gate_decisions_http 121/121 (arranque con GATE_SECRET vacío o
+repetido, 401 incluido el valor de WEBHOOK_SECRET, 12 x 422 de forma, 404,
+409 x5 motivos, 422 de fecha, 201 con todos sus efectos, 200 sin escribir
+nada, concurrencia, regresión con /visits y /leads/session, 0 importes);
+check_gate_decisions_service 14/14 (503 con el log conservado y su
+"origen" en los dos endpoints). En negativo, sobre copias: dependencia de
+WEBHOOK_SECRET 54/121, sin FOR UPDATE 117/121 (dos 500 por
+UniqueViolation), sin sin_gate 120/121, estado antes que repetición
+112/121, informe en el log 118/121, repetición que escribe 117/121, y en
+el servicio 13/14 y 12/14. Suite completa 31/32 (el fallo es
+check_tipo_reforma_constraint). Detalle: docs/Plan_Endpoint_Gate_Decisions.txt
+y la sección 5.5 de la Adenda (limitaciones: Gate permanente, decisión
+definitiva, operador no identificado, P11 pendiente).
+
 Scripts de verificación frágiles (anotados, sin arreglar):
 check_tipo_reforma_constraint exige que oportunidades esté vacía y hoy
 tiene filas reales, así que siempre da "HAY FALLOS" (obsoleto desde el
@@ -380,7 +442,16 @@ check_migracion_m2_leads (max(tipo) sobre todos los logs) quedó corregida
 el 2026-09-26 (6bde841); en check_exception_handler sigue abierta la de
 su prueba D, que solo mira el código 201.
 
-Pendiente: gate-decisions, create-followup-task,
+Suite de verificación (2026-10-01): 32 scripts check_*.py, 31/32. Desde
+la rama de /gate-decisions se suman check_migracion_decisiones_gate,
+check_gate_decisions_http (puerto 8019, nunca el 8000),
+check_gate_decisions_service y check_schema_actual_ejecutable (ejecuta
+docs/schema_actual.sql en un esquema de prueba dentro de una transacción
+que termina en ROLLBACK y lo compara con public: 10/10). Se ejecuta con el
+procedimiento seguro: check_graceful_shutdown y check_mcp_connection desde
+una copia con otro puerto, y solo se detiene el uvicorn propio, por su PID.
+
+Pendiente: create-followup-task,
 get_business_rules y request_missing_information, la concurrencia
 del Session pooler bajo carga, la tabla de excepciones de la Adenda
 (hoy un error no controlado de services/ sale como 500 genérico), y la
@@ -428,6 +499,10 @@ rápida, no sustituye esa documentación. Contiene:
   importes para el agente (D18.5) y plazos.
 - Plan_Endpoint_Sesion_Lead.txt — plan aprobado de GET
   /leads/session/{lead_token}.
+- Plan_Endpoint_Visits.txt — plan de POST /visits (P1-P5).
+- Plan_Endpoint_Gate_Decisions.txt — plan de POST /gate-decisions (D19,
+  P1-P11, bloques con sus hashes y trabajo posterior). D19 no tiene todavía
+  documento de decisiones propio: su contexto está en la sección 1.1.
 
 ## Esquema de la base de datos: cuál de los dos .sql manda
 
@@ -438,6 +513,13 @@ ejecutó contra un esquema de prueba y recreó las 8 tablas con sus 15
 restricciones PK/UNIQUE/FK y sus 7 CHECK. Se regenera ejecutando:
 
     .\venv\Scripts\python.exe scripts\dump_schema.py
+
+(Nota 2026-10-01: las cifras de arriba son las de entonces. Hoy son 10
+tablas, y desde b505390 la comprobación la hace un script:
+scripts/check_schema_actual_ejecutable.py, 10/10 con 10 claves primarias,
+6 unique, 6 claves foráneas, 15 CHECK y 2 índices sueltos. dump_schema
+escribe ahora bien las claves foráneas compuestas y ordena las tablas para
+que el archivo se pueda ejecutar de principio a fin.)
 
 docs/schema_n0_v2.sql es HISTÓRICO. Se escribió a mano y divergió de la
 realidad sin que nadie lo notara: le faltan la columna

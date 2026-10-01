@@ -196,6 +196,9 @@ app/
     leads_service.py
     estimate_service.py    — aquí vive calculate_estimate()
     gate_service.py
+                           (Nota 2026-09-30: gate_service.py se eliminó sin uso; su función la
+                           cubre app/services/gate_decisions_service.py, rama
+                           feat/n0-gate-decisions.)
     visits_service.py
     followup_service.py
   db/

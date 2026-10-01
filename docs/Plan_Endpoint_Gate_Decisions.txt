@@ -7,6 +7,11 @@ Documento de plan · Nivel N0 · 2026-09-28 · Rama feat/n0-gate-decisions
 Estado: APROBADO por Gabi el 2026-09-28 (Bloque A cerrado en bc758f6).
 P1-P10 decididas (sección 6). Bloque B (migración paso10) en curso.
 
+**[Actualizado 2026-10-01] IMPLEMENTADO Y VERIFICADO** en la rama
+feat/n0-gate-decisions, pendiente de merge a main (bloques y hashes en la
+sección 10; trabajo posterior en la sección 11). P11 sigue PENDIENTE de
+decisión formal: lo aplicado en paso10 equivale a su opción a).
+
 Fuentes: el encargo del Bloque A (contexto D19 del 26/09), la CORRECCIÓN
 posterior de Gabi (decision = visita_acordada | descartar, visita
 confirmada, columna visita_id, sección "fuera de alcance") y sus respuestas
@@ -532,6 +537,9 @@ POST /calculate-estimate (queda en pendiente_aprobacion).
   check_visits_http 55/55 y check_visits_service 16/16 tras la mudanza de
   2.3; suite completa (hoy 28 scripts; con los 3 nuevos, 31; esperado
   30/31 con check_tipo_reforma_constraint como único fallo conocido).
+  (Nota 2026-10-01: el recuento real fue 32 scripts y 31/32, con el mismo
+  único fallo. La cifra de arriba no contaba check_schema_actual_ejecutable,
+  que se añadió en b505390 al corregir dump_schema durante el Bloque B.)
 
 
 ================================================================
@@ -752,3 +760,37 @@ P11. PENDIENTE (nueva, 2026-09-28). btrim(informe) solo quita el carácter
   Un commit por bloque verificado. Merge a main solo con confirmación
   explícita de Gabi, con --ff-only, y cuando GATE_SECRET esté en su .env
   (R4).
+
+  Hashes (anotado el 2026-10-01; los recuentos completos están en el
+  mensaje de cada commit):
+    A   cd1bb23, bc758f6  plan y respuestas de la revisión.
+    B   4bf672b, 439ff02, 61dab13 (escritas), b505390 (dump_schema y
+        check_schema_actual_ejecutable 10/10), d6c5eb3 (paso10 y paso10b
+        APLICADAS; check_migracion_decisiones_gate 38/38).
+    C1  520aae1  check_visits_http 55/55, check_visits_service 16/16,
+        suite 29/30 idéntica antes y después.
+    C2  49a3572  verificación mínima: arranque 12/12, HTTP 26/26.
+    D   36c6ec2  check_gate_decisions_http 121/121,
+        check_gate_decisions_service 14/14, ocho pruebas en negativo,
+        suite 31/32.
+    E   el commit de documentación que sigue a 36c6ec2 (este bloque).
+
+
+================================================================
+11. TRABAJO POSTERIOR (fuera de esta rama)
+================================================================
+
+  Anotado el 2026-10-01, al cerrar el Bloque E. Nada de esto se hace en
+  feat/n0-gate-decisions:
+  - Endpoint de solo lectura para el aviso del Gate (qué ve administración
+    en el aviso). Va ANTES de construir WF2 (sección 8).
+  - WF2 en n8n: aviso a administración UNA sola vez, al aparecer el Gate.
+  - WF3 en n8n, "barridos periódicos": el seguimiento de 48 h de D13 y el
+    recordatorio del Gate a las horas_recordatorio_gate (24) horas (P8).
+  - El formulario de n8n que llama a POST /gate-decisions, con su propia
+    credencial "Header Auth" (X-Gate-Secret), que nunca se da a la
+    herramienta del Agente 2.
+  - El mensaje fijo del router de n8n para el estado 'perdida' (P6).
+  - La deuda técnica D3 (sección 7): mover los tres estados a
+    reglas_visita.py la próxima vez que se toque /visits.
+  - P11: decisión formal pendiente (sección 6).
