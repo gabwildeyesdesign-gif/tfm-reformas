@@ -2,6 +2,37 @@
 PLAN: LANZADOR DE LA SUITE DE VERIFICACIÓN (scripts/ejecutar_suite.py)
 ================================================================
 
+**APLAZADO 2026-10-03: se prioriza el TFM; sustituido por la regla de uso
+de CLAUDE.md. Se conserva por si se retoma.** (Decisión de Gabi.) La regla
+está en CLAUDE.md, "Cómo trabajamos": suite completa con el portátil
+enchufado, pantalla y suspensión en "Nunca" estando enchufado, tapa
+abierta, y comprobación de los eventos Kernel-Power 506/507 al terminar
+(si los hubo, la pasada no vale). Allí está también la limitación P4.
+
+Estado de las preguntas abiertas de la sección 7 al aplazarse: NINGUNA
+llegó a decidirse (el aplazamiento llegó antes que las respuestas). Se
+anotan con la propuesta que tenían, como PROPUESTA y no como decisión,
+para retomarlas si se retoma el lanzador:
+  P1 (nombres de las variables de puerto): sin decidir. Propuesta:
+     CHECK_PUERTO_MCP=8021 y CHECK_PUERTO_APAGADO=8022.
+  P2 (si Windows no acepta la petición): sin decidir. Propuesta: pasada
+     NO VÁLIDA desde el principio.
+  P3 (eventos de la suspensión clásica S3): sin decidir. Propuesta: solo
+     506/507 mientras la suite se ejecute en este portátil.
+  P4 (los cinco scripts sin sys.exit): sin decidir como arreglo; queda
+     como limitación anotada en CLAUDE.md, con revisión manual de su
+     salida.
+  P5 (dónde van los logs): sin decidir. Propuesta: %TEMP%, fuera del
+     repositorio.
+  P6 (conectar_script()): sin decidir. Propuesta: mejora menor para
+     después de N0.
+  P7 (carpeta de prueba para V3): sin decidir. Propuesta: opción
+     --carpeta.
+  P8 (tiempo máximo por script): sin decidir. Propuesta: 15 minutos.
+  P9 (quién cambia el apagado de pantalla para V0): sin decidir.
+     Propuesta: Gabi, a mano. (Con la regla de uso, Gabi ya dejó la
+     pantalla y la suspensión en "Nunca" estando enchufado.)
+
 Rama: fix/ejecutor-suite, creada desde main (24cf60f) el 2026-10-03.
 Estado: PLAN, sin código todavía (Bloque A). Nada de lo que sigue está
 implementado.

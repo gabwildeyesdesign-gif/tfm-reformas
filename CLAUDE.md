@@ -65,6 +65,38 @@ actual: Nivel N0 (núcleo mínimo aprobable).
   las sentencias de forma equivocada. Es exactamente lo que ocurrió en
   D16, con el raise atrapado dentro del if porque Python ignora los
   comentarios al calcular los niveles de indentación.
+- Suite completa sin suspensiones (regla desde el 2026-10-03). Motivo: los
+  tres cortes de conexión de la rama de /gate-decisions coincidieron con
+  un Modern Standby de Windows con la red desconectada (ver "Scripts de
+  verificación frágiles"); en este portátil, apagar la pantalla ya es
+  entrar en esa suspensión. El lanzador que lo automatizaba
+  (docs/Plan_Ejecutor_Suite.txt) quedó APLAZADO y lo sustituye esta regla.
+  - Antes de empezar: portátil ENCHUFADO, con la pantalla y la suspensión
+    en "Nunca" cuando está enchufado (ajuste ya hecho por Gabi en
+    Windows), y la tapa abierta. Se anota la hora de inicio.
+  - Al terminar: se comprueba en el registro de Windows si hubo algún
+    Kernel-Power 506 (entra en Modern Standby) o 507 (sale) entre la hora
+    de inicio y la de fin. Si los hubo, la pasada NO VALE: no cuenta ni
+    como 32/32 ni como fallo, y se repite entera. Comando de PowerShell
+    (probado el 2026-10-03: encuentra la suspensión de 12:29:14-12:29:57
+    en 12:25-12:35 y ninguna en 13:30-13:45):
+        # Pon aquí la hora de inicio y la de fin de la pasada.
+        $inicio = '2026-10-03 12:25'; $fin = '2026-10-03 12:35'
+        # Busca en el registro System los eventos 506/507 de Kernel-Power
+        # en ese intervalo. -ErrorAction SilentlyContinue: si no hay
+        # ninguno, Get-WinEvent da un error en vez de una lista vacía.
+        $s = Get-WinEvent -FilterHashtable @{LogName='System'; `
+               ProviderName='Microsoft-Windows-Kernel-Power'; Id=506,507; `
+               StartTime=[datetime]$inicio; EndTime=[datetime]$fin} `
+               -ErrorAction SilentlyContinue
+        # Si encontró alguno, los enseña y avisa; si no, la pasada vale.
+        if ($s) { $s | Select-Object TimeCreated, Id; 'LA PASADA NO VALE: hubo suspension' } else { 'ninguna suspension: la pasada vale' }
+  - Limitación conocida (P4 del plan): check_foreign_keys,
+    check_mcp_connection, check_pool_connections,
+    check_pool_transaction_state y check_rls_estado no llaman nunca a
+    sys.exit, así que terminan con código 0 aunque una comprobación salga
+    mal (solo dan otro código si revientan con una excepción). Su salida
+    hay que revisarla a mano: el código de salida no basta.
 
 ## REGLA CRÍTICA: nunca arrancar uvicorn con --reload
 
