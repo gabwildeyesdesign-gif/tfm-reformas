@@ -103,6 +103,53 @@ class MotivoGate(str, Enum):
     AMBOS = "ambos"
 
 
+class EstadoOportunidad(str, Enum):
+    """
+    Estados posibles de una oportunidad (columna oportunidades.estado).
+
+    Los valores de la derecha están copiados del CHECK real
+    oportunidades_estado_check de Supabase (docs/schema_actual.sql), en el
+    mismo orden, no de la documentación. Mismo criterio que TipoReforma y
+    MotivoGate: si aquí faltara un valor que la base de datos sí admite,
+    leer una oportunidad en ese estado daría un 500 al construir la
+    respuesta.
+
+    Se añadió el 2026-10-03 para GET /gate-avisos (corrección del tutor
+    sobre el Bloque B). Están los OCHO y no solo los tres que espera ese
+    endpoint: tras la visita, un caso con Gate puede pasar A MANO a
+    'ganada' (N0), y con una lista de tres el aviso fallaría. Los
+    servicios que hoy escriben los estados como textos sueltos
+    (gate_decisions_service, visits_service, estimate_service) todavía no
+    lo usan: queda para otra rama.
+
+    (str, Enum): cada valor es también un texto normal, igual que
+    TipoReforma.
+    """
+
+    # Recién creada por POST /leads.
+    NUEVA = "nueva"
+    # Está en el CHECK pero NO se escribe en N0: la cualificación ocurre
+    # dentro del mismo ciclo síncrono que el cálculo, y un estado que nadie
+    # puede observar no aporta nada. Se conserva para N1+
+    # (docs/TFM_Decisiones_Modelo_Datos_Leads.txt, "POR QUÉ 'cualificada'
+    # NO TIENE UNA TRANSICIÓN PERSISTIDA PROPIA EN N0"). También D21.1
+    # (Decisiones_D21_Gate_Resultado_Llamada_Administracion.md, pendiente
+    # de copiar al repositorio).
+    CUALIFICADA = "cualificada"
+    # Presupuesto con Gate, esperando la llamada de administración.
+    PENDIENTE_APROBACION = "pendiente_aprobacion"
+    # Visita confirmada (por POST /gate-decisions con visita_acordada).
+    VISITA_AGENDADA = "visita_agendada"
+    # Presupuesto sin Gate, ya comunicado al cliente.
+    PRESUPUESTO_ENVIADO = "presupuesto_enviado"
+    # Seguimiento de 48 h pendiente (D13; lo escribirá el barrido de WF3).
+    SEGUIMIENTO_PENDIENTE = "seguimiento_pendiente"
+    # Estados finales. 'ganada' se escribe a mano en N0; 'perdida', también
+    # por POST /gate-decisions con descartar.
+    GANADA = "ganada"
+    PERDIDA = "perdida"
+
+
 # Número máximo de fotos que se aceptan en un lead.
 #
 # PROVISIONAL — PENDIENTE (limitación documentada en

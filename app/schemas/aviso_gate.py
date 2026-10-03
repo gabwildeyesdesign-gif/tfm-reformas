@@ -35,8 +35,15 @@ from pydantic import BaseModel, ConfigDict, Field
 # Las listas cerradas que ya existen en el proyecto, reutilizadas en vez de
 # copiadas: tipo de reforma, nivel de acabados y motivo del Gate
 # (common.py), y decisión y motivo de descarte (gate_decisions.py). Así el
-# aviso solo puede decir valores que el sistema conoce.
-from app.schemas.common import MAX_FOTOS_LEAD, MotivoGate, NivelAcabados, TipoReforma
+# aviso solo puede decir valores que el sistema conoce. EstadoOportunidad
+# (los 8 estados del CHECK) se añadió el 2026-10-03, corrección del tutor.
+from app.schemas.common import (
+    MAX_FOTOS_LEAD,
+    EstadoOportunidad,
+    MotivoGate,
+    NivelAcabados,
+    TipoReforma,
+)
 from app.schemas.gate_decisions import DecisionGate, MotivoDescarte
 
 
@@ -147,8 +154,10 @@ class AvisoGateResponse(BaseModel):
     # llamar después a POST /gate-decisions.
     oportunidad_id: int
     # oportunidades.estado: 'pendiente_aprobacion', o 'visita_agendada' /
-    # 'perdida' si ya hay decisión.
-    estado_oportunidad: str
+    # 'perdida' si ya hay decisión (y 'ganada' si se cerró a mano tras la
+    # visita). Es la lista cerrada EstadoOportunidad con los 8 valores del
+    # CHECK, no un texto libre: /docs enseña los valores posibles.
+    estado_oportunidad: EstadoOportunidad
     # leads.created_at, en hora de Madrid: cuándo pidió presupuesto.
     fecha_solicitud: datetime
     # Los cuatro objetos anidados de arriba.

@@ -486,6 +486,9 @@ Consulta 2, el caso (solo si pasó la puerta):
     texto exacto (por ejemplo "8.7", no 8.699999...).
   CASO 10 - Minimización: el JSON tiene EXACTAMENTE las claves del
     contrato, en cada nivel; ninguna de la lista "lo que NO sale" (1.5).
+    [Añadido 2026-10-03, corrección del tutor sobre el Bloque B:]
+    estado_oportunidad es uno de los 8 valores de EstadoOportunidad
+    (app/schemas/common.py), que son los del CHECK oportunidades_estado_check.
   CASO 11 - Solo lectura (pre-decisión 8): antes y después de varias
     llamadas (200, 404, 409, 401), los recuentos de filas PROPIAS en
     clientes, leads, oportunidades, presupuestos, visitas, decisiones_gate
@@ -511,6 +514,8 @@ Consulta 2, el caso (solo si pasó la puerta):
       obligatoria del encargo): fallan las del CASO 1 con el valor de
       WEBHOOK_SECRET en X-Webhook-Secret (da 200) y, en cadena, la de
       "401 idéntico". Esperado: al menos 2 FALLOS.
+      [Corregido 2026-10-03, decisión del tutor: la previsión "al menos 2"
+      era demasiado corta; ver el resultado exacto abajo.]
   N2. Sin la comprobación sin_gate: el caso sin Gate da 200 con datos ->
       fallan las del CASO 4. Esperado: al menos 2 FALLOS.
   N3. Contacto leído de la ficha y no del lead: fallan las del CASO 5
@@ -522,8 +527,83 @@ Consulta 2, el caso (solo si pasó la puerta):
       al menos 1 FALLO.
   N6. Sin IVA calculado con float en vez de Decimal: falla al menos un
       importe del CASO 9 (o lo demuestra el script de servicio, 4.3).
+      [Corregido 2026-10-03, decisión del tutor: esa previsión era
+      INCORRECTA. N6 es un MUTANTE EQUIVALENTE; ver abajo.]
   N7. El informe añadido a la respuesta: falla el CASO 6 y el CASO 10.
       Esperado: al menos 2 FALLOS.
+  N8. [Añadida 2026-10-03, decisión del tutor] deducir_sin_iva SIN el
+      redondeo a céntimos (return con_iva / (1 + iva_pct / CIEN)): el
+      importe sin IVA sale con todos los decimales de la división.
+
+  RESULTADOS EXACTOS (Bloque C, 2026-10-03; copias en el scratchpad, una
+  por prueba, borradas al terminar con su .env; el código real no cambió:
+  git diff del servicio, la API y main.py respecto a f3beb9a, vacío).
+  Sin mutación: check_aviso_gate_http 75/75 y check_aviso_gate_service 18/18.
+
+  N1  dependencia del webhook
+      check_aviso_gate_http 27/75. Cascada con una sola causa: la llave del
+      webhook ABRE (es el fallo a detectar: "valor de WEBHOOK_SECRET en
+      X-Webhook-Secret -> 401" falla) y la del Gate DEJA de abrir, así que
+      caen todas las comprobaciones que usan X-Gate-Secret: los 422 ("0",
+      "-1", "abc"), los 404 (inexistente, 2147483648 y
+      99999999999999999999), los 409 (sin_presupuesto, sin_gate y su
+      cuerpo), los 200 de B2 y L y sus contactos, la decisión de A, X y Z,
+      los estados de X y Z, las fotos de A y B2, las 5 de fechas, las 13
+      de importes, las 7 de claves y estados del CASO 10 que dependen de
+      un 200, y la repetición. Siguen pasando: sin cabecera (401, cuerpo,
+      WWW-Authenticate e idéntico a /gate-decisions), X-Gate-Secret
+      incorrecto, WEBHOOK_SECRET en X-Gate-Secret, sin cabecera + "abc",
+      "nada de B1" y "ficha de B2/L" (no hay respuesta que los contenga),
+      "la ficha sigue siendo la de B1" (se mira en la base de datos),
+      "ninguna clave prohibida" en A y en X y "el informe no aparece" (un
+      401 no tiene esas claves ni ese texto), "8 estados leídos", el CASO
+      11 (nada se escribe), ningún 500, la limpieza y el CASO 13. En total,
+      48 fallos y 27 aciertos.
+  N2  sin la comprobación sin_gate
+      check_aviso_gate_http 72/75: "caso sin Gate -> 409 sin_gate", "el 409
+      solo trae detail {motivo, mensaje}", "ni nombre, ni email, ni
+      teléfono, ni importes de B1 en la respuesta".
+      check_aviso_gate_service 17/18: "presupuesto sin Gate ->
+      EstadoNoPermiteAviso (sin_gate)" (la excepción se tragó).
+  N3  contacto leído de la ficha
+      check_aviso_gate_http 71/75: "contacto de B2 = el de SU solicitud",
+      "ni el nombre ni el teléfono de la ficha aparecen en el aviso de B2",
+      "contacto de L: tres null y origen 'no_disponible'", "nada de la
+      ficha de L en el aviso".
+      check_aviso_gate_service 15/18: "lead con 'contacto' -> sus datos",
+      "lead sin 'contacto' -> tres None", "la ficha no aparece".
+  N4  desfase fijo +02:00
+      check_aviso_gate_http 73/75: "X: fecha_visita = ...+01:00" y "los dos
+      desfases son distintos".
+      check_aviso_gate_service 17/18: "26/10/2026 07:30 UTC -> ...+01:00".
+  N5  escribe en logs (INSERT + commit)
+      check_aviso_gate_http 74/75: "recuentos de filas propias (7 tablas,
+      logs incluidos) iguales". (Hace falta el commit: sin él, la conexión
+      de solo lectura desharía el INSERT, que es en sí una defensa.)
+  N6  float en la deducción: MUTANTE EQUIVALENTE, no detectable por diseño
+      check_aviso_gate_http 75/75 y check_aviso_gate_service 18/18: ningún
+      fallo, y no puede haberlo. La deducción solo saldría mal si el
+      cociente cayera en la frontera de redondeo (,xx5); queda siempre a
+      menos de 0,005/k del valor correcto, así que con IVA 21 % el margen
+      MÍNIMO hasta la frontera es 0,005 × (1 - 1/1,21) ≈ 0,00087 €. El error
+      de un float es relativo (unas 16 cifras): con el máximo de
+      NUMERIC(10,2), 99.999.999,99 €, es del orden de 1e-8 €, decenas de
+      miles de veces menor que ese margen. Lo confirma el barrido de
+      check_aviso_gate_service: 1.200.000 casos (300.000 por cada IVA 21,
+      10, 4 y 0) sin ninguna diferencia, también con la versión float.
+      float SIGUE PROHIBIDO por la política D4: la protección la dan la
+      norma y la revisión del código, no esta prueba.
+  N7  informe en la respuesta
+      check_aviso_gate_http 72/75: "el informe no aparece (ni la clave ni el
+      texto) en X ni en Z", "X: ninguna clave prohibida en ningún nivel",
+      "X: claves de decision = las del contrato".
+  N8  sin redondear el sin IVA
+      check_aviso_gate_http 71/75: "sin IVA = el de la foto del cálculo" en
+      A, B2, L y X.
+      check_aviso_gate_service 15/18: los barridos con IVA 21, 10 y 4.
+      (Siguen pasando el barrido con IVA 0 y los casos sueltos como
+      9075,00 -> 7500: con una división exacta el resultado es el mismo
+      número, y Decimal("7500") es igual en valor a Decimal("7500.00").)
 
 4.3 scripts/check_aviso_gate_service.py (sin servidor)
   La función pura de deducción del sin IVA, con casos límite: k = 1
@@ -659,6 +739,11 @@ Consulta 2, el caso (solo si pasó la puerta):
     (oportunidades 248-252, de leads de prueba sin 'contacto') con POST
     /gate-decisions (descartar) ANTES de activar WF3, para que no generen
     recordatorios. Lo hará Gabi, no esta rama (P1).
+  - Reutilizar EstadoOportunidad (app/schemas/common.py, añadido el
+    2026-10-03 por la corrección del tutor sobre el Bloque B) en los
+    servicios que hoy escriben los estados como textos sueltos
+    (gate_decisions_service, visits_service, estimate_service). En otra
+    rama: esta solo lo usa en AvisoGateResponse.estado_oportunidad.
   - DEUDA TÉCNICA (P3, opción c): columna presupuestos.umbral_gate_aplicado,
     escrita por calculate-estimate con el mismo patrón que
     iva_pct_aplicado, para que el umbral que decidió el Gate quede fijo en
