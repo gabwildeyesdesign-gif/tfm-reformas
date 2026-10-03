@@ -118,8 +118,18 @@ try:
     # count(columna) cuenta solo los valores NO nulos, así que si vale 0
     # es que todas están a NULL. Es lo esperado en este bloque: la columna
     # se crea ahora y la escribirá el barrido de D13 más adelante.
-    comprobar("ninguna fila tiene valor todavía (nadie la escribe aún)",
-              con_valor == 0, f"({con_valor} con valor de {total} filas)")
+    #
+    # (Nota 2026-10-03: esto YA NO se exige. Comprobaba el estado de un
+    # momento concreto, y la rama feat/n0-gate-decisions lo ha dejado de
+    # hacer cierto: POST /gate-decisions escribe fecha_ultimo_contacto =
+    # now() en las dos decisiones (P5 del plan de /gate-decisions). Con la
+    # primera decisión real del Gate, exigir 0 fallaría para siempre; y
+    # además miraba TODA la tabla, no solo lo de este script. Ese mismo día
+    # falló 16/17 por las oportunidades de prueba que dejó un corte de
+    # check_gate_decisions_http. Ahora el recuento solo se ENSEÑA, como
+    # información, y no cuenta ni como acierto ni como fallo.)
+    print(f"  [INFO]  fecha_ultimo_contacto con valor: {con_valor} de {total} filas "
+          f"(solo información, no se exige nada: la escribe POST /gate-decisions, P5)")
 
     print("\n" + "=" * 78)
     print("S3 y S4 - D13: el octavo estado")

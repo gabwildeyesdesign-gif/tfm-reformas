@@ -438,6 +438,16 @@ guardada una oportunidad PROPIA antes de la comprobación da HAY FALLOS
 ("oportunidades descartables restantes: 1"); sus filas se borraron por id
 exacto.
 
+check_migracion_iva_y_seguimiento arreglado (2026-10-03, misma rama): su
+comprobación "ninguna fila tiene valor todavía" exigía que
+oportunidades.fecha_ultimo_contacto fuera NULL en TODA la tabla. Era el
+estado de un momento concreto que esta rama dejó de hacer cierto (POST
+/gate-decisions la escribe, P5), y la primera decisión real del Gate la
+habría hecho fallar para siempre. Ahora el recuento solo se imprime como
+[INFO], con una nota fechada en el código: 16/16. La prueba en negativo
+es el fallo real de ese mismo día con la versión anterior (16/17, por las
+oportunidades de prueba que dejó un corte de check_gate_decisions_http).
+
 Scripts de verificación frágiles (anotados, sin arreglar): hay tokens
 fijos compartidos entre scripts: "tok-estr" lo usan check_calculate_estimate_http y
 check_mcp_calculate_estimate, así que si uno se corta antes de limpiar,
@@ -463,14 +473,8 @@ la siguiente ejecución. Repetidos aisladamente, los dos de hoy dieron OK.
 Hipótesis SIN VERIFICAR: una conexión que
 pasa un rato sin usarse durante una suite larga muere por un corte de red.
 Solución propuesta para después de N0: una función compartida para las
-conexiones de los scripts. No se arregla en esta rama.
-check_migracion_iva_y_seguimiento tiene el mismo defecto que tenía
-check_tipo_reforma_constraint: su prueba "ninguna fila tiene valor
-todavía" mira oportunidades.fecha_ultimo_contacto en TODA la tabla, no
-solo en lo suyo. El 2026-10-03 falló (16/17) por las oportunidades de
-prueba que dejó el corte de check_gate_decisions_http, y fallará siempre
-en cuanto se registre una decisión real del Gate, que escribe esa fecha.
-Sin arreglar.
+conexiones de los scripts. No se arregla en esta rama (es la primera
+tarea pendiente después del merge, ver "Pendiente").
 
 Suite de verificación (2026-10-03): 32 scripts check_*.py. Ninguno falla
 ya por su propia lógica: check_tipo_reforma_constraint, el fallo fijo
@@ -487,6 +491,11 @@ docs/schema_actual.sql en un esquema de prueba dentro de una transacción
 que termina en ROLLBACK y lo compara con public: 10/10). Se ejecuta con el
 procedimiento seguro: check_graceful_shutdown y check_mcp_connection desde
 una copia con otro puerto, y solo se detiene el uvicorn propio, por su PID.
+
+Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
+función compartida para las conexiones directas de los scripts check_*.py
+(hoy psycopg2.connect sin keepalives ni validación con SELECT 1; tres
+cortes del pooler en esa rama, ver "Scripts de verificación frágiles").
 
 Pendiente: create-followup-task,
 get_business_rules y request_missing_information, la concurrencia
