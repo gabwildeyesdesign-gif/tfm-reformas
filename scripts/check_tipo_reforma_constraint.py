@@ -162,12 +162,30 @@ cur.execute("SELECT COUNT(*) FROM clientes WHERE email = %s;", (EMAIL_PRUEBA,))
 c1 = cur.fetchone()[0]
 cur.execute("SELECT COUNT(*) FROM leads WHERE canal = 'prueba_paso1';")
 c2 = cur.fetchone()[0]
-cur.execute("SELECT COUNT(*) FROM oportunidades;")
-c3 = cur.fetchone()[0]
+# Solo se cuentan las oportunidades PROPIAS de este script, no la tabla
+# entera: antes era "SELECT COUNT(*) FROM oportunidades", que contaba
+# tambien las oportunidades reales y daba "HAY FALLOS" siempre que la tabla
+# tuviera filas ajenas. La marca es EMAIL_PRUEBA: el indice unico
+# clientes_email_lower_key garantiza que como mucho un cliente lo tiene, y
+# el dominio .invalid esta reservado, asi que ningun cliente real puede
+# tenerlo. (leads.canal no sirve igual de bien: es texto libre, sin unico.)
+# La consulta salta oportunidad -> su lead (lead_id) -> su cliente
+# (cliente_id) y se queda con las que acaban en el cliente de prueba.
+cur.execute(
+    """
+    SELECT COUNT(*)
+    FROM oportunidades o
+    JOIN leads l    ON l.id = o.lead_id
+    JOIN clientes c ON c.id = l.cliente_id
+    WHERE c.email = %s;
+    """,
+    (EMAIL_PRUEBA,),  # el email se pasa como parametro, nunca pegado en el SQL
+)
+c3 = cur.fetchone()[0]  # numero de oportunidades de prueba que han sobrevivido
 cn.commit()
 print(f"  clientes descartables restantes    : {c1}")
 print(f"  leads descartables restantes       : {c2}")
-print(f"  filas totales en oportunidades     : {c3}")
+print(f"  oportunidades descartables restantes: {c3}")
 
 print("\n" + "=" * 80)
 todo_ok = resultado_3c and resultado_3d and c1 == 0 and c2 == 0 and c3 == 0
