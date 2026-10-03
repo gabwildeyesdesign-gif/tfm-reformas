@@ -490,6 +490,21 @@ es impedir la suspensión durante la suite (docs/Plan_Ejecutor_Suite.txt);
 conectar_script() queda solo como mejora menor, por paridad de
 statement_timeout (2 min en las conexiones de los scripts frente a 30 s
 en las del pool), no como arreglo de los cortes.)
+(Nota 2026-10-03, posterior a la anterior: la causa queda DETERMINADA en
+los tres cortes. Los TRES coinciden con un Modern Standby con la red
+desconectada, según el registro de Windows de este portátil (eventos
+Kernel-Power 506/507 y 172, y NetworkProfile 10001/10000): 30/09
+14:26:07-14:28:47 (check_visits_http; el corte ocurrió entre 14:25:22 y
+14:29:09, según el log de esa suite), 03/10 12:05:58-12:07:24
+(check_transactional_connection; entre 12:05:51 y 12:07:25, según la
+fecha de creación de los logs de la primera suite) y 03/10
+12:29:14-12:29:57 (check_gate_decisions_http). Los eventos del Wi-Fi
+(WLAN-AutoConfig) no muestran nada en ningún intervalo. Gabi había dicho
+que en dos de ellos estaba usando el ordenador; tras ver el registro,
+retira ese testimonio: no notó las suspensiones. Manda el registro.
+Conclusión: la causa de los cortes es la suspensión del portátil (3 de 3,
+más el experimento: 15 min sin usarse NO matan la conexión y la
+suspensión sí). Ya no hay causa "sin determinar".)
 
 Suite de verificación (2026-10-03): 32 scripts check_*.py. Ninguno falla
 ya por su propia lógica: check_tipo_reforma_constraint, el fallo fijo

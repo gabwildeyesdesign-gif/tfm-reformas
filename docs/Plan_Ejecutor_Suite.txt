@@ -52,6 +52,31 @@ cortes se explica así; los otros dos (check_transactional_connection el
 registro de la hora de esas pasadas. Limitación del experimento: es UNA
 prueba de 15 minutos; no descarta que algún corte tenga otra causa.
 
+[Actualizado 2026-10-03, tras la primera versión de este plan: la causa
+queda DETERMINADA en los tres cortes.] Buscando en el registro de Windows
+las horas de los otros dos cortes:
+  - check_visits_http, 30/09: el corte ocurrió entre 14:25:22 (hora de la
+    fila rechazada en la prueba 3c de check_tipo_reforma_constraint, el
+    script anterior, en suite_despues_c1.log de la sesión de ese día) y
+    14:29:09 (fin de esa suite). Modern Standby 14:26:07-14:28:47; red
+    desconectada 14:26:14-14:28:47.
+  - check_transactional_connection, 03/10: entre 12:05:51 y 12:07:25
+    (fecha de creación de su log y del siguiente, que conservan la hora
+    de la primera suite aunque la segunda los sobrescribió). Modern
+    Standby 12:05:58-12:07:24; red desconectada 12:06:08-12:07:24.
+  - check_gate_decisions_http, 03/10: Modern Standby 12:29:14-12:29:57
+    (ya medido arriba).
+  Fuentes: System (Kernel-Power 506/507 y 172 "Connectivity state in
+  standby: Disconnected") y Microsoft-Windows-NetworkProfile/Operational
+  (10001 "Network Disconnected", 10000 "Network Connected"). En
+  Microsoft-Windows-WLAN-AutoConfig/Operational no hay ningún evento en
+  esos intervalos. Gabi había dicho que en dos de ellos estaba usando el
+  ordenador; tras ver el registro, retira ese testimonio (no notó las
+  suspensiones). Manda el registro.
+  Conclusión: la causa de los cortes es la suspensión del portátil, 3 de
+  3, más el experimento (15 min sin usarse NO matan la conexión; la
+  suspensión sí). Ya no hay causa "sin determinar".
+
 Por eso el arreglo no está en las conexiones sino en CÓMO se ejecuta la
 suite: impedir la suspensión mientras corre, y detectar si aun así la
 hubo.
@@ -111,6 +136,54 @@ No entra:
   - Límite que no se puede evitar: cerrar la tapa suspende igualmente. El
     lanzador lo dice al arrancar.
 
+  Por qué hacen falta los DOS indicadores en este portátil (Modern
+  Standby, S0 de bajo consumo, no el reposo clásico S3). Documentación
+  oficial de Microsoft, consultada el 2026-10-03:
+    [F1] "Prepare software for modern standby", Microsoft Learn,
+         https://learn.microsoft.com/en-us/windows-hardware/design/
+         device-experiences/prepare-software-for-modern-standby
+         (actualizada el 2024-06-25):
+         "A system enters modern standby when the display turns off. This
+         will occur in response to: [...] the system idling out."
+         Y, en la tabla de fases (No-CS phase): "Power requests will block
+         the NoCS phase indefinitely on AC power, and for up to 5 minutes
+         on DC power."
+    [F2] "System Sleep Criteria", Microsoft Learn,
+         https://learn.microsoft.com/en-us/windows/win32/power/
+         system-sleep-criteria (actualizada el 2026-07-17):
+         "If the display idle timer value is greater than the display
+         time-out value, and no threads have requested the display by
+         calling SetThreadExecutionState with ES_DISPLAY_REQUIRED, the
+         system powers off the display."
+         Y: "Avoid holding ES_SYSTEM_REQUIRED | ES_CONTINUOUS
+         indefinitely. [...] On Modern Standby devices, this drains the
+         battery rapidly even when the lid is closed. Clear with
+         SetThreadExecutionState(ES_CONTINUOUS) once the active operation
+         completes."
+    [F3] "SetThreadExecutionState function (winbase.h)", Microsoft
+         Learn, https://learn.microsoft.com/en-us/windows/win32/api/
+         winbase/nf-winbase-setthreadexecutionstate (actualizada el
+         2025-07-01): ES_DISPLAY_REQUIRED "Forces the display to be on by
+         resetting the display idle timer"; ES_SYSTEM_REQUIRED "Forces
+         the system to be in the working state by resetting the system
+         idle timer"; "If the function fails, the return value is NULL";
+         y "The SetThreadExecutionState function cannot be used to
+         prevent the user from putting the computer to sleep. Applications
+         should respect that the user expects a certain behavior when they
+         close the lid on their laptop or press the power button."
+  Lectura: en Modern Standby, apagar la pantalla YA es entrar en la
+  suspensión [F1]. ES_SYSTEM_REQUIRED solo la RETRASA una vez apagada la
+  pantalla: indefinidamente enchufado, pero como mucho 5 minutos con
+  batería [F1], así que solo no basta. ES_DISPLAY_REQUIRED impide que la
+  pantalla se apague por inactividad [F2], y con ello la entrada por
+  "idling out". Por eso se piden los dos (más ES_CONTINUOUS), y se
+  retiran SIEMPRE al terminar [F2]. Ninguno impide la entrada por la tapa
+  o el botón de encendido [F3].
+  Consecuencia para el diseño: el lanzador apunta al empezar y al
+  terminar si el portátil está enchufado o con batería (para que una
+  pasada NO VÁLIDA se pueda interpretar), y la prueba de 5.V0 se hace
+  con batería, que es el caso difícil.
+
 3.3 Detectar si hubo suspensión
   Una función propia, hubo_suspension(desde, hasta), que consulta el
   registro de Windows con PowerShell (Get-WinEvent, LogName System,
@@ -139,6 +212,27 @@ No entra:
     check_rls_estado), así que su código es 0 aunque una comprobación
     salga mal, mientras no haya excepción. Era igual en todas las suites
     anteriores. Ver P4.
+
+3.4b Clasificar los cortes de conexión (para acumular pruebas)
+  Cuando un script termina con código distinto de 0 y su log contiene un
+  error de conexión cortada (OperationalError con "server closed the
+  connection unexpectedly", "SSL connection has been closed
+  unexpectedly" o "connection already closed", o InterfaceError
+  "connection already closed"), el resumen lo clasifica como "CORTE DE
+  CONEXIÓN" y no como "FALLO" de lógica. Para cada corte apunta:
+  - la hora exacta en que el lanzador vio terminar el script, y el
+    intervalo en que el script estuvo corriendo (inicio y fin);
+  - los eventos de suspensión (506/507) y de red (NetworkProfile 10000
+    y 10001) de ese intervalo, con su hora, o "ninguno".
+  Así cada corte queda con las mismas pruebas que hubo que reconstruir a
+  mano el 2026-10-03 para los tres anteriores.
+  Excepciones: check_conexion_muerta y check_exception_handler provocan
+  esos mensajes A PROPÓSITO (se ven en todas las suites) y terminan con
+  código 0; como solo se clasifica un script con código distinto de 0,
+  no se confunden.
+  La clasificación es solo informativa: un corte de conexión cuenta
+  igual como "no superado" para el 32/32. Y sigue sin reintentarse nada
+  (3.7).
 
 3.5 El servidor que necesita check_mcp_connection
   check_mcp_connection se conecta a un servidor ya arrancado. El lanzador
@@ -212,6 +306,27 @@ Cómo se comprueba que siguen probando lo mismo:
 5. VERIFICACIÓN PREVISTA
 ================================================================
 
+  V0. ¿Impide de verdad Modern Standby? (requisito de Gabi, 2026-10-03;
+      se hace la PRIMERA en el Bloque B, antes que V1). Condiciones: con
+      batería (el caso difícil, ver [F1] en 3.2), tapa abierta, sin tocar
+      teclado ni ratón, y el tiempo de apagado de pantalla de Windows en
+      1 minuto. Antes se anotan los valores actuales de apagado de
+      pantalla y de suspensión (con batería y enchufado) para
+      restaurarlos al final (P9).
+        a) SIN el lanzador: 5 minutos sin tocar nada. El registro DEBE
+           mostrar un Modern Standby (506) en ese intervalo; si no
+           aparece, la prueba no demuestra nada y se repite o se revisan
+           las condiciones.
+        b) CON el lanzador corriendo 5 minutos (con la carpeta de prueba
+           de P7: un único check que solo espera 5 minutos y no toca la
+           base de datos): el registro NO debe mostrar ninguna suspensión
+           (506/507) en ese intervalo, y la pantalla debe seguir encendida.
+      Si en b) aparece una suspensión, se PARA y se avisa a Gabi: el
+      mecanismo no sirve y no se sigue con V1.
+      Antecedente, no sustituye a V0: el experimento 2 (13:30-13:45 del
+      2026-10-03) pidió los dos indicadores y no hubo ninguna suspensión,
+      pero no se anotó si el portátil estaba enchufado ni el tiempo de
+      apagado de pantalla.
   V1. Una pasada completa con scripts/ejecutar_suite.py. Objetivo: 32/32
       de una vez y "eventos de suspensión: ninguno". Si sale menos, se
       para y se explica, sin repetir para "conseguir" el 32/32.
@@ -229,6 +344,16 @@ Cómo se comprueba que siguen probando lo mismo:
       dentro del lanzador, o Ctrl+C), se comprueba que el finally ejecutó
       la restauración (línea en el log del lanzador) y que el uvicorn
       propio ya no escucha.
+  V4b. Clasificación de cortes (3.4b), con logs REALES ya existentes: el
+      log del corte de check_visits_http del 30/09
+      (suite_c1_visits_http.log de esa sesión) y el de
+      check_gate_decisions_http del 03/10 deben salir como "CORTE DE
+      CONEXIÓN"; el de check_migracion_iva_y_seguimiento 16/17 del 03/10
+      (fallo de lógica, sin corte) debe salir como "FALLO"; y los logs de
+      check_conexion_muerta y check_exception_handler (mensajes de corte
+      provocados, código 0), como superados. Y el cruce con el registro,
+      aplicado a 30/09 14:25:22-14:29:09, debe encontrar la suspensión
+      14:26:07-14:28:47 y la desconexión de red 14:26:14-14:28:47.
   V5. "No toca lo ajeno": antes y después de V1, ningún proceso en el
       puerto 8000 ha cambiado (mismo PID si estaba arrancado).
 
@@ -287,3 +412,9 @@ Cómo se comprueba que siguen probando lo mismo:
       FALLO (tiempo agotado), se detiene SOLO ese proceso hijo (el
       lanzador lo arrancó y tiene su PID) y se sigue con el siguiente.
       No es un reintento.
+  P9. Para V0, ¿quién cambia el tiempo de apagado de pantalla a 1 minuto
+      y lo restaura después: Gabi en Configuración (Sistema > Inicio/
+      apagado y batería > Pantalla y suspensión), o un comando powercfg
+      que enseño antes de ejecutarlo, con los valores originales
+      anotados? Propuesta: Gabi, a mano, porque es una configuración
+      del equipo y no del proyecto.
