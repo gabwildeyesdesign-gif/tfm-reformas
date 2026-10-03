@@ -475,6 +475,21 @@ pasa un rato sin usarse durante una suite larga muere por un corte de red.
 Solución propuesta para después de N0: una función compartida para las
 conexiones de los scripts. No se arregla en esta rama (es la primera
 tarea pendiente después del merge, ver "Pendiente").
+(Nota 2026-10-03, rama fix/ejecutor-suite: la hipótesis de arriba queda
+REFUTADA por lo medido. Experimento con dos conexiones directas, una a
+secas y otra con los parámetros de init_pool, y 15 min sin usarse: SIN
+suspensión de Windows (13:30-13:45, suspensión bloqueada y 0 eventos 506/
+507 en el intervalo), las DOS sobrevivieron; CON suspensiones (12:54-13:31,
+tres Modern Standby con la red desconectada), las DOS murieron con el
+mismo OperationalError, también la protegida con keepalives. El corte de
+check_gate_decisions_http coincide al segundo con una suspensión
+(12:29:14-12:29:57; su log se cerró a las 12:29:57). Los cortes de
+check_transactional_connection (03/10) y check_visits_http (30/09): causa
+SIN DETERMINAR, no hay registros de la hora de esas pasadas. El arreglo
+es impedir la suspensión durante la suite (docs/Plan_Ejecutor_Suite.txt);
+conectar_script() queda solo como mejora menor, por paridad de
+statement_timeout (2 min en las conexiones de los scripts frente a 30 s
+en las del pool), no como arreglo de los cortes.)
 
 Suite de verificación (2026-10-03): 32 scripts check_*.py. Ninguno falla
 ya por su propia lógica: check_tipo_reforma_constraint, el fallo fijo
@@ -496,6 +511,10 @@ Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
 (hoy psycopg2.connect sin keepalives ni validación con SELECT 1; tres
 cortes del pooler en esa rama, ver "Scripts de verificación frágiles").
+(Nota 2026-10-03: sustituida por el lanzador de la suite que impide la
+suspensión de Windows, docs/Plan_Ejecutor_Suite.txt, rama
+fix/ejecutor-suite; el experimento refutó que la causa fuera el tiempo
+sin usarse.)
 
 Pendiente: create-followup-task,
 get_business_rules y request_missing_information, la concurrencia

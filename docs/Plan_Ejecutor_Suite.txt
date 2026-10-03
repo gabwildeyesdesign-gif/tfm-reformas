@@ -1,0 +1,289 @@
+================================================================
+PLAN: LANZADOR DE LA SUITE DE VERIFICACIÓN (scripts/ejecutar_suite.py)
+================================================================
+
+Rama: fix/ejecutor-suite, creada desde main (24cf60f) el 2026-10-03.
+Estado: PLAN, sin código todavía (Bloque A). Nada de lo que sigue está
+implementado.
+
+Fuentes: el encargo de Gabi del 2026-10-03 (opción A, ampliada), el
+experimento de la sección 1 y lo leído en el código el mismo día
+(app/db/connection.py, scripts/check_graceful_shutdown.py,
+scripts/check_mcp_connection.py y el lanzador provisional que se usó hoy
+desde el scratchpad, que no está en el repositorio).
+
+
+================================================================
+1. POR QUÉ (lo medido, no lo supuesto)
+================================================================
+
+En la rama feat/n0-gate-decisions hubo tres cortes con OperationalError
+"server closed the connection unexpectedly" en conexiones directas de los
+scripts (CLAUDE.md, "Scripts de verificación frágiles"). La hipótesis
+anotada era que una conexión muere por pasar un rato sin usarse. Se
+comprobó con un experimento (script en el scratchpad, sin escribir nada
+en la base de datos): dos conexiones a la base de datos real, una con
+psycopg2.connect a secas y otra con los parámetros de init_pool
+(keepalives, connect_timeout y ConexionConTimeout), SELECT 1 en cada una,
+15 minutos sin usarlas y otro SELECT 1.
+
+  Experimento 1 (12:54-13:31): durante la espera el portátil entró TRES
+  veces en Modern Standby (12:57:59-13:03:15, 13:06:19-13:12:28 y
+  13:15:35-13:27:24), las tres con "Connectivity state in standby:
+  Disconnected". Resultado: las DOS conexiones muertas, con el mismo
+  OperationalError de los cortes, también la protegida con keepalives.
+  No distingue las causas (sin usarse y suspendida a la vez).
+
+  Experimento 2 (13:30-13:45): la misma prueba, con la suspensión
+  bloqueada (SetThreadExecutionState) y la espera medida con el reloj de
+  pared. Registro de Windows: 0 eventos de suspensión (506/507) en el
+  intervalo. Resultado: las DOS conexiones VIVAS (SELECT 1 en 0,20 s y
+  0,19 s).
+
+  Coincidencia: en la segunda suite del 2026-10-03, el log de
+  check_gate_decisions_http (el script del corte) se cerró a las
+  12:29:57, el mismo segundo en que el portátil salió de una suspensión
+  que empezó a las 12:29:14.
+
+Conclusión: 15 minutos sin usarse NO matan una conexión directa; la
+suspensión de Windows SÍ, con o sin keepalives. Al menos uno de los tres
+cortes se explica así; los otros dos (check_transactional_connection el
+03/10 y check_visits_http el 30/09) quedan SIN DETERMINAR, porque no hay
+registro de la hora de esas pasadas. Limitación del experimento: es UNA
+prueba de 15 minutos; no descarta que algún corte tenga otra causa.
+
+Por eso el arreglo no está en las conexiones sino en CÓMO se ejecuta la
+suite: impedir la suspensión mientras corre, y detectar si aun así la
+hubo.
+
+
+================================================================
+2. ALCANCE
+================================================================
+
+Entra:
+  a) scripts/ejecutar_suite.py (nuevo, versionado): ejecuta la suite
+     completa con el procedimiento seguro que hoy se hace a mano.
+  b) check_graceful_shutdown.py y check_mcp_connection.py leen su puerto
+     de una variable de entorno, para que el lanzador no necesite copias
+     (sección 4).
+  c) CLAUDE.md: el procedimiento de la suite pasa a ser "ejecutar
+     scripts/ejecutar_suite.py"; se retira la nota de las copias con otro
+     puerto y la fragilidad del puerto 8000 escrito en el código.
+
+No entra:
+  - conectar_script() (función compartida para las conexiones de los
+    scripts): queda como mejora MENOR, por paridad de statement_timeout
+    (2 min en las conexiones de los scripts frente a 30 s en las del
+    pool), no como arreglo de los cortes. Ver la pregunta abierta P6.
+  - Cambiar la lógica de ningún otro check_*.py.
+  - Reintentos de ningún tipo (sección 3.7).
+
+
+================================================================
+3. DISEÑO DE scripts/ejecutar_suite.py
+================================================================
+
+3.1 Qué scripts entran
+  La suite son los archivos scripts/check_*.py, encontrados al arrancar
+  con un patrón (glob), en orden alfabético: hoy, 32. No se escribe la
+  lista a mano, por el mismo motivo que dump_schema.py no escribe la de
+  tablas: un script nuevo con ese nombre entra solo. Quedan fuera, por no
+  llamarse check_*: dump_schema.py (genera docs/schema_actual.sql, no
+  verifica) y todo scripts/migraciones_ejecutadas/ (registro de lo
+  ejecutado; nunca se vuelve a lanzar). El resumen imprime el número de
+  scripts encontrados, para que un cambio en la cuenta se vea.
+
+3.2 Impedir la suspensión
+  El mismo mecanismo del experimento 2: al empezar,
+  SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED |
+  ES_DISPLAY_REQUIRED) mediante ctypes. ES_DISPLAY_REQUIRED hace falta en
+  este portátil: con Modern Standby, apagar la pantalla es lo que dispara
+  la suspensión.
+  - Se restaura SIEMPRE al terminar (SetThreadExecutionState(
+    ES_CONTINUOUS)) dentro de un finally, aunque un script reviente o se
+    pulse Ctrl+C. (Además, Windows retira la petición sola si el proceso
+    muere, pero no se confía en eso.)
+  - Si la llamada devuelve 0 (Windows no la acepta), se avisa y la pasada
+    se marca NO VÁLIDA desde el principio (P2).
+  - Fuera de Windows (sys.platform distinto de "win32"): aviso "no se
+    puede impedir la suspensión en este sistema" y se sigue.
+  - Límite que no se puede evitar: cerrar la tapa suspende igualmente. El
+    lanzador lo dice al arrancar.
+
+3.3 Detectar si hubo suspensión
+  Una función propia, hubo_suspension(desde, hasta), que consulta el
+  registro de Windows con PowerShell (Get-WinEvent, LogName System,
+  proveedor Microsoft-Windows-Kernel-Power, Id 506 "entering Modern
+  Standby" y 507 "exiting") entre la hora de inicio y la de fin de la
+  pasada, y devuelve la lista de eventos. Si la lista no está vacía, la
+  pasada es NO VÁLIDA: no cuenta ni como 32/32 ni como fallo, y el
+  resumen enseña los eventos con su hora y qué script corría en cada
+  uno. Fuera de Windows, la función devuelve "no comprobable" y el
+  resumen lo dice.
+  Pendiente de confirmar al implementar: si los equipos sin Modern
+  Standby (suspensión S3 clásica) registran otros Id (P3).
+
+3.4 Ejecución de cada script
+  - Uno detrás de otro, nunca en paralelo (varios usan la misma base de
+    datos y algunos miden concurrencia a propósito).
+  - Con el intérprete del venv y PYTHONIOENCODING=utf-8 en el entorno del
+    hijo (gotcha de cp1252 de CLAUDE.md).
+  - La salida de cada script (stdout y stderr juntos) va a un archivo de
+    log por script, en una carpeta FUERA del repositorio (P5).
+  - Criterio de "pasa": código de salida 0. Del log se extrae, solo como
+    información, la última línea con un recuento ("RESULTADO: 121/121",
+    "CORRECTO", "HAY FALLOS"...). Limitación conocida: cinco scripts no
+    llaman nunca a sys.exit (check_foreign_keys, check_mcp_connection,
+    check_pool_connections, check_pool_transaction_state y
+    check_rls_estado), así que su código es 0 aunque una comprobación
+    salga mal, mientras no haya excepción. Era igual en todas las suites
+    anteriores. Ver P4.
+
+3.5 El servidor que necesita check_mcp_connection
+  check_mcp_connection se conecta a un servidor ya arrancado. El lanzador
+  arranca uno propio, SIN --reload, en el puerto de la sección 4, solo
+  durante la pasada:
+  - antes de arrancarlo comprueba que ese puerto está libre; si no, se
+    para y avisa (nunca usa ni detiene lo que ya escucha);
+  - toma el PID de la línea "Started server process [N]" del log de
+    uvicorn y comprueba que es el que escucha en ese puerto;
+  - al terminar (en un finally) lo detiene SOLO por ese PID, tras volver a
+    comprobar que sigue escuchando en el puerto.
+  Ojo, comprobado hoy en el listado de procesos: lanzar el python.exe del
+  venv crea DOS procesos (el lanzador del venv y el Python real), y el PID
+  de la línea "Started server process" es el del Python real, no el que
+  devuelve subprocess.Popen. Por eso se detiene por el PID del log, como
+  se ha hecho a mano hasta hoy.
+
+3.6 Puertos
+  Nunca el 8000 (el uvicorn de Gabi para n8n). El lanzador comprueba al
+  arrancar que ninguno de los puertos que usará la suite está ocupado:
+  los fijos de los scripts HTTP (8010, 8011, 8012, 8013, 8015, 8016,
+  8018, 8019, 8020) y los dos de la sección 4. Si alguno lo está, se para
+  antes de ejecutar nada.
+
+3.7 Sin reintentos
+  Ningún script se repite si falla, ni dentro de la pasada ni al final.
+  Un reintento podría perder la transacción de una prueba y esconder un
+  fallo real. Repetir un script aislado sigue siendo una decisión manual,
+  como hasta ahora.
+
+3.8 Resumen final
+  Una línea por script (nombre, código de salida, recuento extraído y
+  duración), y al final: scripts encontrados, superados/total, duración
+  total, eventos de suspensión (o "ninguno") y el veredicto: "32/32",
+  "N/32 (fallos: ...)" o "NO VÁLIDA (hubo suspensión)". El código de
+  salida del lanzador es 0 solo si la pasada es válida y todo pasa.
+
+
+================================================================
+4. LOS DOS SCRIPTS CON EL 8000 ESCRITO
+================================================================
+
+Hoy check_graceful_shutdown.py tiene el 8000 en URL_BASE (línea 49) y en
+uvicorn.Config(port=8000) (línea 119), y check_mcp_connection.py en la
+URL del transporte (línea 46) y en su docstring. Por eso se ejecutan
+desde copias con otro puerto (incidente del 2026-09-25).
+
+Cambio: cada uno lee su puerto de una variable de entorno, con un valor
+por defecto que NO es el 8000 (propuesta en P1: CHECK_PUERTO_MCP = 8021 y
+CHECK_PUERTO_APAGADO = 8022, los que se usaron hoy). Si la variable vale
+8000, el script se niega a ejecutarse con un mensaje que lo explica.
+
+Cómo se comprueba que siguen probando lo mismo:
+  a) git diff: solo cambian las líneas del puerto (y las de leer la
+     variable y rechazar el 8000); ninguna comprobación ni ninguna
+     llamada cambia. Se enseña el diff entero.
+  b) Ejecución real de cada uno con el puerto por defecto: la misma
+     salida que dieron hoy las copias (graceful_shutdown: apagado
+     completo; mcp_connection: tools ['calculate_estimate']).
+  c) Pruebas en negativo, en el scratchpad:
+     - check_mcp_connection con la variable apuntando a un puerto donde
+       no escucha nadie debe FALLAR (demuestra que usa de verdad ese
+       puerto y no otro escrito en algún sitio);
+     - con la variable a 8000, los dos se niegan antes de abrir nada;
+     - check_graceful_shutdown debe escuchar en el puerto pedido: la
+       línea "Uvicorn running on http://127.0.0.1:<puerto>" de su salida
+       lo demuestra.
+
+
+================================================================
+5. VERIFICACIÓN PREVISTA
+================================================================
+
+  V1. Una pasada completa con scripts/ejecutar_suite.py. Objetivo: 32/32
+      de una vez y "eventos de suspensión: ninguno". Si sale menos, se
+      para y se explica, sin repetir para "conseguir" el 32/32.
+  V2. Prueba en negativo de la detección: hubo_suspension() aplicada al
+      intervalo 12:25-12:35 del 2026-10-03 debe encontrar la suspensión
+      real 12:29:14 (506) - 12:29:57 (507). Y aplicada a 13:30-13:45 del
+      mismo día (experimento 2), ninguna.
+  V3. Prueba en negativo del recuento: un check de prueba en el
+      scratchpad que termina con código 1 a propósito debe salir como
+      fallo en el resumen. Y otro que termina con 0 como superado. Para
+      no tocar scripts/, el lanzador acepta una carpeta alternativa solo
+      para esta prueba (P7).
+  V4. Restauración de la suspensión: tras una pasada que se interrumpe a
+      propósito (un check de prueba que lanza una excepción no capturada
+      dentro del lanzador, o Ctrl+C), se comprueba que el finally ejecutó
+      la restauración (línea en el log del lanzador) y que el uvicorn
+      propio ya no escucha.
+  V5. "No toca lo ajeno": antes y después de V1, ningún proceso en el
+      puerto 8000 ha cambiado (mismo PID si estaba arrancado).
+
+
+================================================================
+6. RIESGOS
+================================================================
+
+  R1. Cerrar la tapa suspende aunque haya petición. Mitigación: aviso al
+      arrancar, y la detección de la sección 3.3 marca la pasada NO
+      VÁLIDA en vez de dar un falso fallo.
+  R2. Modern Standby puede tener otros eventos o Id según la versión de
+      Windows. Mitigación: V2 se hace con eventos reales de este equipo;
+      P3.
+  R3. Si el lanzador muere de forma brusca (se cierra la ventana), el
+      uvicorn propio podría quedar vivo. Mitigación: el siguiente
+      arranque detecta el puerto ocupado y se para (3.6); se detiene a
+      mano por su PID, comprobado en el puerto.
+  R4. Los cinco scripts sin sys.exit (3.4) pueden dar un 32/32 que
+      esconde un fallo lógico. No es nuevo, pero el lanzador lo hace más
+      visible al dar un veredicto único. P4.
+
+
+================================================================
+7. PREGUNTAS ABIERTAS
+================================================================
+
+  P1. Nombres y valores por defecto de las variables de entorno:
+      CHECK_PUERTO_MCP=8021 y CHECK_PUERTO_APAGADO=8022, o una sola
+      variable con dos puertos consecutivos.
+  P2. Si SetThreadExecutionState no se acepta en Windows: ¿pasada NO
+      VÁLIDA desde el principio (propuesta) o seguir y depender solo de
+      la detección del final?
+  P3. ¿Basta con los Id 506/507 (Modern Standby, los de este portátil),
+      o se añaden los de la suspensión clásica (Kernel-Power 42 al
+      entrar, Power-Troubleshooter 1 al salir) por si la suite se ejecuta
+      en otro equipo?
+  P4. Los cinco scripts sin sys.exit: ¿se dejan como limitación anotada
+      (propuesta, fuera de esta rama) o se les añade un código de salida
+      1 cuando una comprobación falla, en esta misma rama? Lo segundo
+      cambia su lógica y necesitaría su propia prueba en negativo por
+      script.
+  P5. ¿Dónde van los logs de cada pasada? Propuesta: una carpeta por
+      pasada dentro de la carpeta temporal del sistema
+      (%TEMP%\tfm_suite\<fecha-hora>\), fuera del repositorio, sin tocar
+      .gitignore. Alternativa: logs/ en el repositorio, añadida a
+      .gitignore.
+  P6. conectar_script() (paridad de statement_timeout): ¿se anota como
+      mejora para después de N0 o se planifica en una rama propia después
+      de esta?
+  P7. Para V3, ¿una opción --carpeta solo para pruebas (propuesta) o una
+      variable de entorno? En los dos casos, por defecto es scripts/.
+  P8. ¿Un tiempo máximo por script? Una conexión medio abierta en Windows
+      puede dejar un script esperando minutos (gotcha de CLAUDE.md).
+      Propuesta: 15 minutos por script; si se agota, el script se marca
+      FALLO (tiempo agotado), se detiene SOLO ese proceso hijo (el
+      lanzador lo arrancó y tiene su PID) y se sigue con el siguiente.
+      No es un reintento.
