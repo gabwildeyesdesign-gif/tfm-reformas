@@ -6,6 +6,10 @@ Documento de plan · Nivel N0 · 2026-10-03 · Rama feat/n0-aviso-gate
 (desde main = 8883a9c)
 Estado: Bloque A (plan), PENDIENTE de la revisión de Gabi y del tutor. Sin
 código todavía.
+[Actualizado 2026-10-03, tras la revisión del tutor sobre fd96923: P1-P7
+DECIDIDAS (sección 7) y tres defectos corregidos (CASO 8 que caducaba,
+CLAUDE.md desactualizado en el Bloque D, recuentos exactos de las pruebas
+en negativo). Sigue sin código; el Bloque B no ha empezado.]
 
 Fuentes: el encargo del Bloque A del 2026-10-03 (pre-decisiones 1-8 del
 tutor y decisiones de negocio D1-D4 de Gabi), la Adenda (fila 3, secciones
@@ -131,6 +135,7 @@ personal; scripts en el scratchpad):
      ahí vive algo con importes y datos personales.
   Propuesta: a). El nombre del parámetro, oportunidad_id, ya dice de qué
   es el id. Pregunta abierta P4.
+  [DECIDIDA, P4: GET /gate-avisos/{oportunidad_id}.]
 
 1.3 Autenticación (pre-decisión 2): X-Gate-Secret
   dependencies=[Depends(verificar_gate_secret)], la misma de POST
@@ -168,13 +173,14 @@ personal; scripts en el scratchpad):
                           decisión).
   fecha_solicitud         leads.created_at, en hora de Madrid (D2).
 
-  contacto (objeto) — D2 y pre-decisión 5:
+  contacto (objeto) — D2 y pre-decisión 5 (regla DECIDIDA en P1):
     nombre                leads.datos_estructurados -> 'contacto' ->> 'nombre'
     email                 ... ->> 'email'
     telefono              ... ->> 'telefono'
-    origen                "solicitud" si salen del lead; "ficha_cliente"
-                          si el lead es anterior a la clave 'contacto' y
-                          se usó la ficha de clientes. Depende de P1.
+    origen                "solicitud" si el lead tiene la clave 'contacto';
+                          "no_disponible" si no la tiene, y entonces
+                          nombre, email y telefono salen null. NUNCA se
+                          leen de la ficha de clientes (P1).
 
   reforma (objeto) — D2:
     tipo_reforma          oportunidades.tipo_reforma (la columna, "el dato
@@ -189,7 +195,8 @@ personal; scripts en el scratchpad):
 
   fotos                   leads.fotos_urls: lista de cadenas tal como se
                           guardaron (0 a 5, MAX_FOTOS_LEAD). Si la columna
-                          fuera NULL, lista vacía. D1 (ver H2 y P2).
+                          fuera NULL, lista vacía. D1 (ver H2). Nombre
+                          DECIDIDO en P2: "fotos".
 
   presupuesto (objeto) — D4:
     fecha_presupuesto     presupuestos.created_at, en hora de Madrid (D2).
@@ -209,8 +216,8 @@ personal; scripts en el scratchpad):
                           (tipo_reforma), leído AHORA. El nombre lleva
                           "_vigente" a propósito: es el umbral de hoy, que
                           puede haber cambiado desde el cálculo, y NO el
-                          que decidió el Gate. Ver 2.2 y P3.
-    (umbral_gate_aplicado, si se acepta P3: el de la foto del cálculo.)
+                          que decidió el Gate. Ver 2.2 y P3 (DECIDIDA:
+                          solo este; no se devuelve el aplicado).
 
   decision (objeto o null) — D3:
     null si no hay fila en decisiones_gate. Si la hay:
@@ -224,7 +231,7 @@ personal; scripts en el scratchpad):
     esquema de respuesta (defensa doble, como los importes en /visits).
 
   Lo que NO sale (minimización, D2): lead_token, cliente_id, lead_id,
-  presupuesto_id, canal, mensaje_original, confianza_ia, prioridad,
+  presupuesto_id (P6, DECIDIDA), los datos de la ficha de clientes (P1), canal, mensaje_original, confianza_ia, prioridad,
   aprobado_por, duracion_estimada_dias, el informe y los ids de la visita y
   de la decisión. Ninguno lo necesita administración para llamar; el único
   id que sale es oportunidad_id, que el formulario necesita. El esquema de
@@ -317,14 +324,25 @@ columna o de una operación documentada, y viaja como texto exacto.
   umbral_gate_aplicado leído de la foto (null si no la hubiera), con la
   advertencia de 2.1 d). Si se descarta, el aviso lleva solo el vigente y
   la explicación del motivo la da motivo_gate.
+  [DECIDIDA, P3 (tutor, 2026-10-03): NO se devuelve umbral_gate_aplicado;
+  solo umbral_gate_vigente. Regla de Tres:
+    a) leerlo de la foto de logs: hace depender el contrato de un JSONB de
+       auditoría sin esquema garantizado. Descartada.
+    b) solo el vigente, con ese nombre: ELEGIDA. Los umbrales están
+       cerrados desde el 2026-09-20 (B5: hoy coinciden en los 5 casos), y
+       motivo_gate ya explica por qué saltó el Gate.
+    c) columna nueva presupuestos.umbral_gate_aplicado, escrita por
+       calculate-estimate, con el mismo patrón que iva_pct_aplicado: es la
+       solución CORRECTA, pero exige una migración y tocar otro endpoint.
+       Queda como deuda técnica (sección 8 y R3).]
 
 
 ================================================================
 3. CONSULTA SQL (en el servicio)
 ================================================================
 
-Propuesta: DOS consultas dentro de la misma conexión de solo lectura,
-para que en un caso sin Gate el servicio ni siquiera LEA los datos
+DOS consultas dentro de la misma conexión de solo lectura (DECIDIDO en
+P5), para que en un caso sin Gate el servicio ni siquiera LEA los datos
 personales (minimización, RGPD), no solo que no los devuelva:
 
 Consulta 1, la puerta (sin datos personales):
@@ -344,7 +362,7 @@ Consulta 2, el caso (solo si pasó la puerta):
            l.datos_estructurados -> 'contacto' ->> 'nombre',
            l.datos_estructurados -> 'contacto' ->> 'email',
            l.datos_estructurados -> 'contacto' ->> 'telefono',
-           c.nombre, c.email, c.telefono,          -- solo si P1 = a)
+           l.datos_estructurados ? 'contacto',
            (l.datos_estructurados ->> 'm2')::numeric,
            l.datos_estructurados ->> 'nivel_acabados',
            (l.datos_estructurados ->> 'incluye_cambios_estructurales')::boolean,
@@ -355,7 +373,6 @@ Consulta 2, el caso (solo si pasó la puerta):
            d.decision, d.created_at, d.motivo, v.fecha_propuesta
     FROM oportunidades o
     JOIN leads l            ON l.id = o.lead_id
-    JOIN clientes c         ON c.id = l.cliente_id
     JOIN presupuestos p     ON p.oportunidad_id = o.id
     LEFT JOIN umbrales_gate u   ON u.tipo_reforma = o.tipo_reforma
     LEFT JOIN decisiones_gate d ON d.oportunidad_id = o.id
@@ -364,9 +381,14 @@ Consulta 2, el caso (solo si pasó la puerta):
   - "->" saca un objeto de dentro del JSONB (el de 'contacto') y "->>" saca
     un valor como TEXTO. "::numeric" y "::boolean" convierten ese texto en
     Postgres (m2 llega como Decimal exacto, sin float).
-  - JOIN normal con leads, clientes y presupuestos: siempre existen (las
-    claves foráneas son NOT NULL y la consulta 1 ya comprobó el
-    presupuesto).
+  - "datos_estructurados ? 'contacto'" pregunta si el JSONB TIENE esa
+    clave (true/false). Así el servicio distingue "sin clave" (origen
+    "no_disponible") de una clave presente, sin adivinarlo por los null.
+  - Sin JOIN con clientes (P1): la ficha no se lee en absoluto, así que es
+    imposible que su nombre o su teléfono se cuelen en el aviso
+    (minimización, y la prueba en negativo N3 lo vigila).
+  - JOIN normal con leads y presupuestos: siempre existen (las claves
+    foráneas son NOT NULL y la consulta 1 ya comprobó el presupuesto).
   - LEFT JOIN con umbrales_gate, decisiones_gate y visitas: pueden no
     existir (sin decisión, descarte sin visita), y entonces sus columnas
     llegan NULL en vez de perder la fila.
@@ -377,14 +399,9 @@ Consulta 2, el caso (solo si pasó la puerta):
   - Entre las dos consultas, ¿puede cambiar algo? Un presupuesto no se
     borra y requiere_aprobacion no vuelve a false (Gate permanente,
     Adenda 5.5), así que una oportunidad que pasó la puerta sigue con
-    Gate. Si P5 prefiere una sola consulta, se lee todo y se descarta
-    antes de construir la respuesta.
-  - Con umbral_gate_aplicado (P3), una tercera lectura de la foto:
-        SELECT detalle ->> 'umbral_gate' FROM logs
-        WHERE entity_type = 'oportunidad' AND entity_id = %s
-          AND accion = 'presupuesto_calculado'
-        ORDER BY id DESC LIMIT 1;
-    convertida a Decimal con Decimal(texto), nunca con float.
+    Gate.
+  - No hay tercera consulta: el umbral aplicado no se devuelve (P3), así
+    que el servicio no lee logs en ningún momento.
 
 
 ================================================================
@@ -418,18 +435,51 @@ Consulta 2, el caso (solo si pasó la puerta):
     dos leads con el MISMO email y distinto nombre y teléfono; el segundo
     con Gate. Su aviso trae el nombre y el teléfono del SEGUNDO lead (los de
     la ficha son los del primero), con origen "solicitud". Y un lead
-    "antiguo" sin 'contacto': su aviso sigue la regla que se decida en P1
-    (ficha con origen "ficha_cliente", o contacto null).
+    "antiguo" sin 'contacto' (P1): su aviso trae origen "no_disponible" y
+    nombre, email y telefono null, aunque su ficha de clientes SÍ tenga
+    nombre, email y teléfono (se comprueba que ninguno de los tres valores
+    de la ficha aparece en el texto de la respuesta).
   CASO 6 - decision null (caso recién calculado) y con datos: tras POST
     /gate-decisions visita_acordada, decision trae decision, fecha_decision,
     motivo null y fecha_visita; tras descartar, motivo y fecha_visita null.
     Y en ninguno de los dos aparece el informe (ni la clave ni el texto).
   CASO 7 - Fotos: un lead con 5 rutas -> las 5, en el mismo orden; un lead
     sin fotos -> [].
-  CASO 8 - Fechas con desfase de Madrid: fecha_solicitud y
-    fecha_presupuesto con el desfase de hoy en Madrid; una visita acordada
-    para un día de después del cambio de hora (+01:00) y otra de antes
-    (+02:00), comparadas con la hora local esperada.
+  CASO 8 - Fechas con desfase de Madrid:
+    - fecha_solicitud y fecha_presupuesto: con el desfase que tiene Madrid
+      en el momento de la prueba, calculado al ejecutarla.
+    - fecha_visita (defecto 1 de la revisión, corregido): las fechas de
+      las dos visitas se CALCULAN en cada ejecución con zoneinfo, nunca
+      escritas a mano. Una versión anterior de este caso decía "una visita
+      de antes del cambio de hora (+02:00) y otra de después (+01:00)":
+      habría dejado de poder crearse después del 25/10/2026 y la prueba
+      fallaría sin que el código cambiara (el mismo error que tenía
+      check_migracion_iva_y_seguimiento).
+      Lo comprobado: validar_fecha (reglas_visita.py) solo exige que la
+      fecha sea FUTURA, de lunes a viernes y que la visita quepa en una
+      franja; NO hay antelación máxima. reglas_negocio (leído el
+      2026-10-03): mañana 510-810 (08:30-13:30), tarde 1020-1200
+      (17:00-20:00), duración 60 min.
+      Por eso "a ambos lados del PRÓXIMO cambio" NO cabe siempre: si la
+      prueba se ejecuta el viernes por la tarde, el sábado o el domingo
+      anteriores al cambio, ya no queda ningún día laborable futuro ANTES
+      de él. Regla de Tres:
+        a) Primer lunes 08:30 tras el PRÓXIMO cambio y primer lunes 08:30
+           tras el SIGUIENTE (los dos cambios, buscados con zoneinfo día a
+           día). Siempre futuros, siempre lunes dentro de la franja de
+           mañana, y siempre con desfases opuestos. [ELEGIDA] Probado el
+           2026-10-03 (sin base de datos) para "hoy" = 2026-10-03,
+           2026-10-23, 2026-10-24, 2026-10-25 y 2027-03-27: en los cinco,
+           dos lunes futuros con +01:00 y +02:00.
+        b) Solo un lado del próximo cambio: no prueba el otro desfase.
+        c) Probar el desfase solo sin HTTP, en check_aviso_gate_service
+           (4.3), con fechas fijas: no caduca, pero no demuestra que la
+           respuesta HTTP lo conserve. Se hace ADEMÁS de a), no en su
+           lugar.
+      Comprobación: fecha_visita = la hora local esperada con el desfase
+      que zoneinfo da para ESE día, y los dos desfases distintos entre sí.
+      (Un lunes puede ser festivo: no importa, las reglas no detectan
+      festivos, Adenda 5.4.)
   CASO 9 - Importes exactos (D4): importe_*_con_iva y iva_pct_aplicado son
     TEXTO e iguales a las columnas; importe_*_sin_iva iguales al sin IVA de
     la foto del cálculo de ESE presupuesto (logs, por su oportunidad
@@ -450,6 +500,14 @@ Consulta 2, el caso (solo si pasó la puerta):
 4.2 Pruebas en negativo (sobre COPIAS en el scratchpad, como en
     /gate-decisions; recuento esperado: el número de comprobaciones que
     DEBEN pasar a fallar, que se fija con el total exacto en el Bloque C):
+    [Defecto 3 de la revisión, corregido: "al menos N FALLOS" no basta.
+    Cada prueba en negativo debe dar un resultado EXACTO, del tipo
+    "54/121" (como en /gate-decisions), y ese resultado, con la lista de
+    las comprobaciones que fallan, se escribe en este plan al cerrar el
+    Bloque C y en el mensaje de su commit. Si una prueba en negativo hace
+    fallar comprobaciones distintas de las previstas abajo, se explica
+    antes de seguir. Los "al menos" de la lista son solo la previsión
+    mínima, no el criterio de aceptación.]
   N1. Dependencia cambiada a verificar_webhook_secret (la prueba
       obligatoria del encargo): fallan las del CASO 1 con el valor de
       WEBHOOK_SECRET en X-Webhook-Secret (da 200) y, en cadena, la de
@@ -457,7 +515,8 @@ Consulta 2, el caso (solo si pasó la puerta):
   N2. Sin la comprobación sin_gate: el caso sin Gate da 200 con datos ->
       fallan las del CASO 4. Esperado: al menos 2 FALLOS.
   N3. Contacto leído de la ficha y no del lead: fallan las del CASO 5
-      (nombre, teléfono y origen). Esperado: al menos 3 FALLOS.
+      (nombre, teléfono y origen del lead con email repetido, y los null
+      del lead sin 'contacto'). Esperado: al menos 3 FALLOS.
   N4. Desfase fijo +02:00 en vez de ZONA_MADRID: falla la fecha de la
       visita de después del cambio de hora. Esperado: al menos 1 FALLO.
   N5. Un INSERT en logs dentro del servicio: falla el CASO 11. Esperado:
@@ -472,8 +531,14 @@ Consulta 2, el caso (solo si pasó la puerta):
   (IVA 0), un con_iva que termina en ,005 tras multiplicar, el ejemplo de
   la Adenda (7500,00 -> 9075,00 -> 7500,00) y la vuelta exacta para una
   lista amplia de importes sin IVA generados (sin_iva -> con_iva ->
-  sin_iva). Y la regla del contacto de P1 (lead con 'contacto', sin
-  'contacto'). En negativo: con float, al menos un caso falla.
+  sin_iva). Y la regla del contacto de P1 (lead con 'contacto' -> origen
+  "solicitud"; sin 'contacto' -> origen "no_disponible" y tres null). Y la
+  conversión a hora de Madrid con fechas FIJAS a los dos lados de un
+  cambio de hora (por ejemplo 23/10/2026 -> +02:00 y 26/10/2026 -> +01:00,
+  como check_visits_service): aquí no caducan, porque la función es pura y
+  no exige que la fecha sea futura. En negativo: con float, al menos un
+  caso de importes falla; con un desfase fijo, el de invierno falla. Sus
+  resultados en negativo, también EXACTOS (defecto 3).
 
 4.4 Regresión
   check_gate_decisions_http (121/121), check_visits_http (55/55),
@@ -528,6 +593,7 @@ Consulta 2, el caso (solo si pasó la puerta):
   H3. D18.5.1 dice que el importe va "en el aviso de Telegram al equipo
       (WF2)"; el encargo habla de un email. El canal no cambia este
       endpoint, pero conviene que la documentación diga uno solo. Ver P7.
+  [Resueltos el 2026-10-03: H1 con P1 (b), H2 con P2 y H3 con P7.]
 
 
 ================================================================
@@ -548,6 +614,30 @@ Consulta 2, el caso (solo si pasó la puerta):
   CORRECTAS tal cual; 5 correcta para los leads nuevos, con el hallazgo H1
   para los antiguos (P1); 7 resuelta con la propuesta de 1.2 (P4).
 
+  Preguntas P1-P7, DECIDIDAS el 2026-10-03 (revisión del tutor sobre
+  fd96923; P1 y P7 de Gabi):
+    P1. Opción b): un lead sin la clave 'contacto' da contacto con nombre,
+        email y telefono a null y origen "no_disponible"; con la clave,
+        origen "solicitud". Por qué: los 17 leads sin 'contacto' son datos
+        de prueba; POST /leads ya guarda siempre el contacto, así que ese
+        estado no se repetirá; y la ficha de clientes puede tener el
+        nombre y el teléfono de OTRA solicitud anterior con el mismo
+        email, justo lo que evita la pre-decisión 5. Consecuencias: la
+        consulta 2 ya no hace JOIN con clientes (sección 3); el CASO 5
+        comprueba "no_disponible" con los tres null; N3 se mantiene.
+    P2. El campo se llama "fotos": dice lo que es sin prometer URLs (H2).
+    P3. No se devuelve umbral_gate_aplicado; solo umbral_gate_vigente
+        (Regla de Tres en 2.2). La columna presupuestos.
+        umbral_gate_aplicado queda como deuda técnica (sección 8, R3).
+    P4. Ruta GET /gate-avisos/{oportunidad_id} (Regla de Tres en 1.2).
+    P5. Dos consultas, como se proponía (sección 3): un caso sin Gate no
+        llega a leer datos personales.
+    P6. Sin presupuesto_id en la respuesta (minimización; el formulario
+        trabaja con oportunidad_id).
+    P7. El canal de WF2 es el EMAIL. D19 (2026-09-26) decidió el aviso a
+        administración por email, y Telegram más adelante; D18.5.1 es
+        anterior. En el Bloque D, nota fechada en D18, sin reescribirlo.
+
 
 ================================================================
 8. FUERA DE ALCANCE
@@ -566,6 +656,15 @@ Consulta 2, el caso (solo si pasó la puerta):
     reescribir evidencia; D3 de leads dice que datos_estructurados es
     inmutable).
   - Validar o transformar las rutas de las fotos (H2).
+  - Cerrar los 5 casos de prueba que siguen en 'pendiente_aprobacion'
+    (oportunidades 248-252, de leads de prueba sin 'contacto') con POST
+    /gate-decisions (descartar) ANTES de activar WF3, para que no generen
+    recordatorios. Lo hará Gabi, no esta rama (P1).
+  - DEUDA TÉCNICA (P3, opción c): columna presupuestos.umbral_gate_aplicado,
+    escrita por calculate-estimate con el mismo patrón que
+    iva_pct_aplicado, para que el umbral que decidió el Gate quede fijo en
+    el presupuesto. Exige una migración y tocar calculate-estimate; cuando
+    exista, el aviso podrá devolverlo sin leer logs.
 
 
 ================================================================
@@ -578,12 +677,12 @@ Consulta 2, el caso (solo si pasó la puerta):
   R2. La deducción del sin IVA depende de cómo calcula estimate_service
       (2.1). Mitigación: la prueba del CASO 9 compara con la foto del
       cálculo y fallaría si el cálculo cambiara.
-  R3. umbral_gate_vigente puede no ser el que decidió el Gate (2.2).
-      Mitigación: el nombre del campo, y P3.
-  R4. Si se acepta P3, el contrato depende de una clave de un JSONB de
-      logs ('umbral_gate'), sin esquema garantizado. Mitigación: null si
-      falta, y prueba que lo compara.
-  R5. La llave X-Gate-Secret abre ahora también la LECTURA de datos
+  R3. umbral_gate_vigente puede no ser el que decidió el Gate (2.2), si un
+      umbral cambia después del cálculo. Mitigación: el nombre del campo
+      ("_vigente"), motivo_gate, y que los umbrales están cerrados desde el
+      2026-09-20. Solución de fondo, como deuda técnica (P3 c, sección 8):
+      la columna presupuestos.umbral_gate_aplicado.
+  R4. La llave X-Gate-Secret abre ahora también la LECTURA de datos
       personales: si se filtrara, expondría más que antes. Es la misma
       llave y el mismo cliente (administración); se acepta, con la misma
       advertencia de no darla nunca al Agente 2.
@@ -592,6 +691,10 @@ Consulta 2, el caso (solo si pasó la puerta):
 ================================================================
 10. PREGUNTAS ABIERTAS
 ================================================================
+
+  [Actualizado 2026-10-03: TODAS DECIDIDAS; el resultado y su porqué están
+  en la sección 7. Se conserva abajo el texto de las preguntas tal como se
+  plantearon.]
 
   P1. Leads anteriores a la clave 'contacto' (H1; hoy, los 5 casos con
       Gate). Regla de Tres:
@@ -638,5 +741,24 @@ Consulta 2, el caso (solo si pasó la puerta):
      (contrato, códigos, orden, solo lectura, minimización, importes,
      limitaciones), CLAUDE.md ("Dos puertas", lo hecho y verificado, la
      suite) y este plan marcado como IMPLEMENTADO con los hashes. [PARA]
+     Añadido el 2026-10-03 (revisión del tutor):
+       - D18 (docs/Decisiones_D18_...md): nota fechada junto a D18.5.1, SIN
+         reescribirlo, diciendo que el canal de WF2 es el email desde D19
+         (2026-09-26), con Telegram más adelante (P7).
+       - CLAUDE.md, estado (defecto 2 de la revisión): todavía dice que POST
+         /gate-decisions está "pendiente de merge" y que es el "Bloque
+         actual". Se pone al día: gate-decisions integrado en main en
+         24cf60f, y esta rama (feat/n0-aviso-gate) como bloque actual.
+       - CLAUDE.md, regla de uso de la suite (defecto 2): dice que la
+         pantalla y la suspensión están en "Nunca" estando enchufado
+         ("ajuste ya hecho por Gabi"), y ya no es así. Pasa a: enchufado,
+         tapa abierta, y pantalla y suspensión a 30 minutos estando
+         enchufado (decisión de Gabi del 2026-10-03: no deja el portátil
+         sin suspenderse de forma permanente); si la suite dura más, se
+         mueve el ratón a mitad. La comprobación de Kernel-Power 506/507 al
+         terminar NO cambia y es la que decide si la pasada vale. Como es
+         registro de decisiones: nota fechada, sin reescribir lo anterior.
+       - Los resultados EXACTOS de las pruebas en negativo (defecto 3) ya
+         estarán escritos en 4.2 desde el cierre del Bloque C.
   Cada bloque, un commit con los recuentos reales en el mensaje y git push.
   Nada de merge a main sin la confirmación de Gabi, y con --ff-only.
