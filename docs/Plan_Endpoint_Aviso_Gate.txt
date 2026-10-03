@@ -4,8 +4,7 @@ PLAN: endpoint de SOLO LECTURA para el aviso del Gate
 
 Documento de plan · Nivel N0 · 2026-10-03 · Rama feat/n0-aviso-gate
 (desde main = 8883a9c)
-Estado: Bloque A (plan), PENDIENTE de la revisión de Gabi y del tutor. Sin
-código todavía.
+Estado: Bloque A APROBADO el 2026-10-03 (cf51b92); Bloque B en curso.
 [Actualizado 2026-10-03, tras la revisión del tutor sobre fd96923: P1-P7
 DECIDIDAS (sección 7) y tres defectos corregidos (CASO 8 que caducaba,
 CLAUDE.md desactualizado en el Bloque D, recuentos exactos de las pruebas

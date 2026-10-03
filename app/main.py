@@ -22,6 +22,10 @@ from psycopg2.extras import Json
 # Los cuatro routers del proyecto, cada uno con su propio archivo en
 # app/api/. "as ..._api" les da un nombre corto que deja claro de dónde
 # vienen cuando más abajo se hace app.include_router(...).
+# (Desde el 2026-10-03 son cinco: el quinto, aviso_gate, va justo debajo.)
+# Router de GET /gate-avisos/{oportunidad_id}: el aviso del Gate, solo
+# lectura (plan docs/Plan_Endpoint_Aviso_Gate.txt).
+from app.api import aviso_gate as aviso_gate_api
 from app.api import estimates as estimates_api
 from app.api import gate_decisions as gate_decisions_api
 from app.api import leads as leads_api
@@ -112,6 +116,13 @@ app.include_router(visits_api.router)
 # administración registra el resultado de su llamada en un caso de Gate.
 # Tiene su propio secreto (X-Gate-Secret), que el Agente 2 no tiene.
 app.include_router(gate_decisions_api.router)
+
+# Quinto router: GET /gate-avisos/{oportunidad_id} (app/api/aviso_gate.py).
+# Solo REST, sin tool MCP, y de SOLO LECTURA: lo llaman WF2 (el aviso a
+# administración por email) y el formulario de POST /gate-decisions. Usa la
+# misma llave que /gate-decisions (X-Gate-Secret), porque devuelve importes
+# y datos personales de casos con Gate que el Agente 2 no debe ver.
+app.include_router(aviso_gate_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna
