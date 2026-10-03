@@ -8,6 +8,9 @@ COMPORTA como debe, no solo que existe:
       NULL (un lead recién creado no ha tenido contacto todavía).
   S2. Todas las filas la tienen a NULL: en este bloque nadie la escribe
       todavía (el barrido de D13 es la sesión siguiente).
+      (Nota 2026-10-03: S2 ya no se exige, solo se informa con [INFO].
+      POST /gate-decisions escribe fecha_ultimo_contacto (P5), así que
+      dejó de ser cierto; ver el comentario fechado junto al recuento.)
   S3. oportunidades_estado_check admite 'seguimiento_pendiente' y sigue
       admitiendo los siete valores anteriores, sin perder ninguno.
   S4. Un estado inventado se sigue rechazando.
