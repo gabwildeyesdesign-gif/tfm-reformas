@@ -632,6 +632,9 @@ LIMITACIONES (asumidas en N0):
     tabla, un informe como "texto\n" pasaría el CHECK. En el plan, P11
     sigue marcada como PENDIENTE; lo aplicado en paso10 equivale a su
     opción a) (dejarlo como está).
+    (Nota 2026-10-03: P11 está ya DECIDIDA en el plan: se acepta como
+    limitación documentada, opción a); Gabi, 2026-09-28, al aprobar
+    439ff02.)
   - Festivos no detectados (heredado de /visits): solo se excluyen sábados
     y domingos.
 

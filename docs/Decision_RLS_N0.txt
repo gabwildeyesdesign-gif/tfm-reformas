@@ -157,6 +157,13 @@ Alternativas consideradas (Rule of Three):
 B podría complementar a A como defensa en profundidad; queda anotado
 como sugerencia, no se aplica en N0.
 
+(Nota 2026-10-03: Supabase anunció por email que, desde el 30/10/2026, deja de conceder
+automáticamente los permisos de la Data API a las tablas NUEVAS de public en los proyectos
+existentes. Las tablas ya creadas conservan sus GRANT y siguen protegidas solo por RLS. Para este
+proyecto el cambio refuerza la opción A: las tablas nuevas quedarán cerradas a anon y authenticated
+por partida doble (sin GRANT y con RLS). NO se añaden GRANT: el backend se conecta como propietario
+y no usa la Data API. RLS sigue siendo obligatorio en cada tabla nueva.)
+
 
 ================================================================
 5. CUÁNDO LAS POLÍTICAS DEJAN DE SER OPCIONALES

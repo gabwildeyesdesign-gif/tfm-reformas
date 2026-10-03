@@ -9,8 +9,11 @@ P1-P10 decididas (sección 6). Bloque B (migración paso10) en curso.
 
 **[Actualizado 2026-10-01] IMPLEMENTADO Y VERIFICADO** en la rama
 feat/n0-gate-decisions, pendiente de merge a main (bloques y hashes en la
-sección 10; trabajo posterior en la sección 11). P11 sigue PENDIENTE de
-decisión formal: lo aplicado en paso10 equivale a su opción a).
+sección 10; trabajo posterior en la sección 11). P11 DECIDIDA: se acepta
+como limitación documentada (Gabi, 2026-09-28, al aprobar 439ff02); es su
+opción a), la que ya aplicó paso10. [Actualizado 2026-10-03; antes decía:
+"P11 sigue PENDIENTE de decisión formal: lo aplicado en paso10 equivale a
+su opción a)".]
 
 Fuentes: el encargo del Bloque A (contexto D19 del 26/09), la CORRECCIÓN
 posterior de Gabi (decision = visita_acordada | descartar, visita
@@ -638,7 +641,9 @@ P10. DECIDIDA a) (2026-09-28): se añade en esta rama la comprobación de
          sin la misma protección que /gate-decisions.
 
 
-P11. PENDIENTE (nueva, 2026-09-28). btrim(informe) solo quita el carácter
+P11. DECIDIDA: se acepta como limitación documentada (Gabi, 2026-09-28, al
+     aprobar 439ff02), opción a). [Actualizado 2026-10-03; antes decía
+     "PENDIENTE (nueva, 2026-09-28)".] btrim(informe) solo quita el carácter
      ESPACIO; Python .strip() (Pydantic) quita también tabuladores, saltos
      de línea y el espacio duro. Un informe "texto\n" o "\t\t" escrito a
      mano en la tabla pasaría el CHECK.
@@ -793,4 +798,6 @@ P11. PENDIENTE (nueva, 2026-09-28). btrim(informe) solo quita el carácter
   - El mensaje fijo del router de n8n para el estado 'perdida' (P6).
   - La deuda técnica D3 (sección 7): mover los tres estados a
     reglas_visita.py la próxima vez que se toque /visits.
-  - P11: decisión formal pendiente (sección 6).
+  - P11: DECIDIDA: se acepta como limitación documentada (Gabi,
+    2026-09-28, al aprobar 439ff02); ya no es trabajo pendiente (sección
+    6). [Actualizado 2026-10-03; antes decía "decisión formal pendiente".]

@@ -424,13 +424,22 @@ UniqueViolation), sin sin_gate 120/121, estado antes que repetición
 el servicio 13/14 y 12/14. Suite completa 31/32 (el fallo es
 check_tipo_reforma_constraint). Detalle: docs/Plan_Endpoint_Gate_Decisions.txt
 y la sección 5.5 de la Adenda (limitaciones: Gate permanente, decisión
-definitiva, operador no identificado, P11 pendiente).
+definitiva, operador no identificado y P11, aceptada como limitación
+documentada el 2026-09-28).
 
-Scripts de verificación frágiles (anotados, sin arreglar):
-check_tipo_reforma_constraint exige que oportunidades esté vacía y hoy
-tiene filas reales, así que siempre da "HAY FALLOS" (obsoleto desde el
-paso 1; sus pruebas del CHECK sí pasan). Y hay tokens fijos compartidos
-entre scripts: "tok-estr" lo usan check_calculate_estimate_http y
+check_tipo_reforma_constraint arreglado (rama feat/n0-gate-decisions,
+commit 145dcea, 2026-10-03): su comprobación final contaba TODAS las
+oportunidades de la tabla y exigía 0, así que daba "HAY FALLOS" siempre
+que hubiera oportunidades reales. Ahora cuenta solo las suyas: las que
+cuelgan del cliente con su EMAIL_PRUEBA (@example.invalid, único por el
+índice clientes_email_lower_key). Con la tabla real llena (20
+oportunidades): CORRECTO por primera vez. En negativo, una copia que deja
+guardada una oportunidad PROPIA antes de la comprobación da HAY FALLOS
+("oportunidades descartables restantes: 1"); sus filas se borraron por id
+exacto.
+
+Scripts de verificación frágiles (anotados, sin arreglar): hay tokens
+fijos compartidos entre scripts: "tok-estr" lo usan check_calculate_estimate_http y
 check_mcp_calculate_estimate, así que si uno se corta antes de limpiar,
 el otro recibe el lead viejo (convendría un prefijo por script o
 uuid4). check_graceful_shutdown y check_mcp_connection tienen el puerto
@@ -441,8 +450,36 @@ docs/TFM_Resumen_Sesion_Contacto_e_Idempotencia_N0.txt, sección 8, la de
 check_migracion_m2_leads (max(tipo) sobre todos los logs) quedó corregida
 el 2026-09-26 (6bde841); en check_exception_handler sigue abierta la de
 su prueba D, que solo mira el código 201.
+Conexiones directas de los scripts sin protección frente a cortes: tres
+cortes en esta rama, todos con OperationalError "server closed the
+connection unexpectedly" en una conexión abierta con psycopg2.connect
+directo, que no tiene las protecciones del pool (keepalives y validación
+con SELECT 1). El primero, en check_visits_http el 2026-09-30 (Bloque C1,
+anotado en el mensaje de 520aae1); el segundo, en la conexión de
+observación de check_transactional_connection, caso 6, el 2026-10-03
+(145dcea); el tercero, en la de check_gate_decisions_http, caso 8, el
+mismo día (d029322), que dejó 10 oportunidades propias sin limpiar hasta
+la siguiente ejecución. Repetidos aisladamente, los dos de hoy dieron OK.
+Hipótesis SIN VERIFICAR: una conexión que
+pasa un rato sin usarse durante una suite larga muere por un corte de red.
+Solución propuesta para después de N0: una función compartida para las
+conexiones de los scripts. No se arregla en esta rama.
+check_migracion_iva_y_seguimiento tiene el mismo defecto que tenía
+check_tipo_reforma_constraint: su prueba "ninguna fila tiene valor
+todavía" mira oportunidades.fecha_ultimo_contacto en TODA la tabla, no
+solo en lo suyo. El 2026-10-03 falló (16/17) por las oportunidades de
+prueba que dejó el corte de check_gate_decisions_http, y fallará siempre
+en cuanto se registre una decisión real del Gate, que escribe esa fecha.
+Sin arreglar.
 
-Suite de verificación (2026-10-01): 32 scripts check_*.py, 31/32. Desde
+Suite de verificación (2026-10-03): 32 scripts check_*.py. Ninguno falla
+ya por su propia lógica: check_tipo_reforma_constraint, el fallo fijo
+anterior, da CORRECTO desde 145dcea. Las dos pasadas de hoy NO dieron
+32/32 de una vez: 31/32 (145dcea) y 30/32 (d029322), en los dos casos por
+cortes del pooler en conexiones directas de los scripts (ver frágiles);
+los scripts afectados, repetidos aisladamente, pasaron (11/11 sin fallos,
+121/121 y 17/17). Antes (2026-10-01): 31/32, con
+check_tipo_reforma_constraint como único fallo. Desde
 la rama de /gate-decisions se suman check_migracion_decisiones_gate,
 check_gate_decisions_http (puerto 8019, nunca el 8000),
 check_gate_decisions_service y check_schema_actual_ejecutable (ejecuta
