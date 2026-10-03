@@ -16,6 +16,7 @@ endpoints y revisión técnica final.
 | 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md` |
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST |
+| 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
 autenticación del webhook): además del cuerpo, toda petición debe traer la
@@ -648,6 +649,145 @@ scripts/check_migracion_decisiones_gate.py (38/38),
 scripts/check_gate_decisions_service.py (14/14) y
 scripts/check_gate_decisions_http.py (121/121), con ocho pruebas en
 negativo (detalle en el commit 36c6ec2).
+
+5.6 GET /gate-avisos/{oportunidad_id} (añadido el 2026-10-03, rama
+feat/n0-aviso-gate)
+
+Para qué: devuelve los datos de un caso con Gate que necesita
+administración para llamar al cliente. Lo usan WF2 (el aviso a
+administración por email; ver el paso 1 de la sección 3) y el formulario de
+n8n de POST /gate-decisions, para mostrar si el caso ya está gestionado.
+Nunca un agente de IA: devuelve importes y datos personales de un caso con
+Gate, que D18.5.1 prohíbe dar al Agente 2. Solo REST, sin tool MCP, y de
+SOLO LECTURA. Plan completo, decisiones D1-D4 y P1-P7:
+docs/Plan_Endpoint_Aviso_Gate.txt.
+
+Autenticación: la misma de POST /gate-decisions (5.5), cabecera
+X-Gate-Secret con el valor de GATE_SECRET. NO se acepta X-Webhook-Secret:
+esa llave la tiene la herramienta del Agente 2. El valor de WEBHOOK_SECRET
+da 401 tanto en X-Webhook-Secret como en X-Gate-Secret (verificado). El 401
+es idéntico al de /leads y /gate-decisions ({"detail": "No autorizado"},
+WWW-Authenticate: APIKey) y va antes que la validación del parámetro de la
+ruta (sin cabecera y con id "abc": 401, verificado).
+
+Entrada: solo el parámetro de la ruta, oportunidad_id, entero > 0
+(Annotated[int, Path(gt=0)]). Sin cuerpo. Lo envía un workflow
+determinista, no un LLM (1.1a no aplica).
+
+Respuesta 200, campo a campo (fechas en hora de Madrid con su desfase;
+importes y m2 como Decimal, que viaja en el JSON como TEXTO exacto):
+  oportunidad_id        oportunidades.id (el formulario lo necesita para
+                        llamar a POST /gate-decisions).
+  estado_oportunidad    oportunidades.estado; uno de los 8 valores de
+                        EstadoOportunidad (app/schemas/common.py), que
+                        replica el CHECK oportunidades_estado_check.
+  fecha_solicitud       leads.created_at.
+  contacto              nombre, email y telefono de leads.datos_estructurados
+                        -> 'contacto' (los de ESTA solicitud), con origen
+                        "solicitud". Si el lead no tiene esa clave: los tres
+                        null y origen "no_disponible". NUNCA la ficha de
+                        clientes, que puede ser de otra solicitud anterior
+                        con el mismo email (P1 del plan).
+  reforma               tipo_reforma (columna oportunidades.tipo_reforma), y
+                        m2, nivel_acabados e incluye_cambios_estructurales
+                        de leads.datos_estructurados (m2 extraído en SQL
+                        como numeric, sin pasar por float).
+  fotos                 leads.fotos_urls tal como se guardaron (0 a 5
+                        rutas; [] si no hay). No se valida que sean URLs.
+  presupuesto           fecha_presupuesto (presupuestos.created_at),
+                        motivo_gate, iva_pct_aplicado, importe_min_con_iva e
+                        importe_max_con_iva (columnas), importe_min_sin_iva e
+                        importe_max_sin_iva (DEDUCIDOS, ver abajo) y
+                        umbral_gate_vigente (ver abajo).
+  decision              null si no hay decisión registrada; si la hay:
+                        decision, fecha_decision (decisiones_gate.created_at),
+                        motivo (solo con descartar) y fecha_visita
+                        (visitas.fecha_propuesta de la visita acordada; null
+                        si se descartó). NUNCA el informe de la llamada.
+
+Lo que NO sale (minimización, RGPD): lead_token, cliente_id, lead_id,
+presupuesto_id, los datos de la ficha de clientes, canal,
+mensaje_original, confianza_ia, prioridad, aprobado_por,
+duracion_estimada_dias, el informe y los ids de la visita y de la decisión.
+Defensa doble: la consulta no los lee (tampoco hace JOIN con clientes) y
+todos los modelos de la respuesta tienen extra="forbid" (verificado: claves
+exactas en cada nivel y ninguna prohibida).
+
+Importes sin IVA: no se guardan en presupuestos, y se DEDUCEN del importe
+con IVA guardado y del IVA aplicado en ese cálculo:
+    importe_*_sin_iva = redondear(importe_*_con_iva / (1 + iva_pct_aplicado / 100))
+con la MISMA función redondear de estimate_service (céntimos,
+ROUND_HALF_UP). Es exacto por construcción: el importe con IVA salió de
+redondear(sin_iva × k), con k = 1 + iva/100 >= 1, así que su error de
+redondeo es como mucho 0,005 €; al dividir por k queda en menos de 0,005 €,
+y volver a redondear a céntimos devuelve el sin IVA original. Verificado con
+los 12 presupuestos reales (12/12 iguales al sin IVA de la foto del cálculo
+en logs) y con un barrido de 1.200.000 importes (IVA 21, 10, 4 y 0) sin
+ninguna diferencia. Recalcular con las tarifas actuales se descartó porque
+mentiría si han cambiado desde el cálculo; no devolverlos, porque el Gate se
+evalúa SIN IVA (1.2) y administración no podría compararlos con el umbral.
+
+umbral_gate_vigente: umbrales_gate.umbral de la categoría, leído AHORA. El
+nombre lleva "_vigente" a propósito: es el umbral de hoy, que puede no ser
+el que decidió el Gate si se cambia después del cálculo. El motivo lo
+explica motivo_gate. El umbral que se aplicó de verdad solo está en la foto
+del cálculo en logs, y no se lee de ahí (P3 del plan: no se hace depender
+el contrato de un JSONB de auditoría sin esquema).
+
+Formato de los errores de negocio: el mismo que /visits y /gate-decisions,
+{"detail": {"motivo": "<código>", "mensaje": "<texto>"}}.
+
+| Código | motivo | Cuándo | Reintento en n8n |
+|---|---|---|---|
+| 200 | — | Oportunidad con Gate: devuelve el caso, tenga o no decisión | — |
+| 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET en cualquiera de las dos cabeceras; antes que el 422 | NO |
+| 422 | (Pydantic) | oportunidad_id no es un entero > 0 ("0", "-1", "abc") | NO |
+| 404 | oportunidad_no_encontrada | No existe la oportunidad (también un id que no cabe en la columna, como 2147483648 o 99999999999999999999: 404, nunca 500, verificado) | NO |
+| 409 | sin_presupuesto | La oportunidad no tiene presupuesto | NO |
+| 409 | sin_gate | requiere_aprobacion = false: NUNCA se devuelven datos de un caso sin Gate | NO |
+| 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+No hay 503 (no usa reglas_negocio) ni 201 (no crea nada).
+
+Orden de las comprobaciones: 401 -> 422 -> 404 -> 409 sin_presupuesto ->
+409 sin_gate -> 200. Igual que /gate-decisions hasta sin_gate. No depende
+del estado: un caso con Gate ya decidido ('visita_agendada', 'perdida' o,
+tras la visita, 'ganada') sigue devolviendo su aviso, con su decisión.
+
+Dos consultas en la misma conexión de solo lectura: la primera (la
+"puerta") no lee ningún dato personal y decide 404 / 409; la segunda solo
+se ejecuta si hay Gate. Así, en un caso sin Gate, el servicio ni siquiera
+lee el contacto (verificado: el 409 sin_gate trae solo motivo y mensaje, y
+ni el nombre, ni el email, ni el teléfono, ni los importes de ese lead).
+
+SOLO LECTURA: usa get_db_connection(), que termina con rollback, y no
+escribe nada, tampoco en logs, fecha_ultimo_contacto ni updated_at
+(verificado: recuentos de filas propias y fechas iguales antes y después de
+una tanda de 200, 404, 409, 401 y 422). Tampoco bloquea filas. Repetir la
+misma petición devuelve el mismo cuerpo, byte a byte. Consecuencia: la base
+de datos no registra si WF2 ya avisó; eso es cosa de WF2 ("una sola vez",
+sección 3).
+
+LIMITACIONES (asumidas en N0):
+  - Leads sin la clave 'contacto': los anteriores al 2026-09-25 (datos de
+    prueba) dan contacto con nombre, email y teléfono null y origen
+    "no_disponible". POST /leads guarda siempre esa clave desde entonces,
+    así que no se repetirá. Hoy afecta a los 5 casos de prueba con Gate
+    (oportunidades 248-252), que se cerrarán antes de activar WF3.
+  - Umbral aplicado: no se devuelve (solo el vigente). DEUDA TÉCNICA: una
+    columna presupuestos.umbral_gate_aplicado, escrita por
+    calculate-estimate con el mismo patrón que iva_pct_aplicado.
+  - Las rutas de las fotos se devuelven tal como se guardaron, sin validar.
+  - Una vez en n8n y en el email de WF2, los datos personales y los
+    importes ya no los protege esta API.
+
+Implementación: app/services/aviso_gate_service.py (obtener_aviso,
+deducir_sin_iva, a_madrid), app/api/aviso_gate.py, app/schemas/aviso_gate.py
+y EstadoOportunidad en app/schemas/common.py; quinto include_router en
+app/main.py. Verificación: scripts/check_aviso_gate_http.py (75/75) y
+scripts/check_aviso_gate_service.py (18/18), con ocho pruebas en negativo,
+una de ellas (N6, float) mutante equivalente (detalle en la sección 4.2 del
+plan y en el commit b6e9adf).
 
 6. Revisión técnica final — hallazgos y resolución
 

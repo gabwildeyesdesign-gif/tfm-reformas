@@ -74,6 +74,13 @@ actual: Nivel N0 (núcleo mínimo aprobable).
   - Antes de empezar: portátil ENCHUFADO, con la pantalla y la suspensión
     en "Nunca" cuando está enchufado (ajuste ya hecho por Gabi en
     Windows), y la tapa abierta. Se anota la hora de inicio.
+    (Nota 2026-10-03, decisión de Gabi: ya NO se deja en "Nunca", para no
+    tener el portátil sin suspenderse de forma permanente. Ahora: portátil
+    ENCHUFADO, tapa abierta, y pantalla y suspensión a 30 minutos cuando
+    está enchufado. La suite dura unos 7 minutos (34 scripts, el
+    2026-10-03); si un día dura más de 30, se mueve el ratón a mitad. La
+    comprobación de Kernel-Power 506/507 al terminar NO cambia y es la que
+    decide si la pasada vale.)
   - Al terminar: se comprueba en el registro de Windows si hubo algún
     Kernel-Power 506 (entra en Modern Standby) o 507 (sale) entre la hora
     de inicio y la de fin. Si los hubo, la pasada NO VALE: no cuenta ni
@@ -150,6 +157,13 @@ Desde el 2026-09-26, POST /visits (solo REST, tercer include_router),
 integrado en main (7934fa6). Desde el 2026-10-01, en la rama
 feat/n0-gate-decisions (pendiente de merge), POST /gate-decisions (solo
 REST, cuarto include_router), con su propia cabecera X-Gate-Secret.
+(Nota 2026-10-03: POST /gate-decisions ya está integrado en main,
+24cf60f. Desde el 2026-10-03, en la rama feat/n0-aviso-gate (pendiente de
+merge), GET /gate-avisos/{oportunidad_id}: solo REST, sin tool MCP, de
+SOLO LECTURA, quinto include_router, con la misma cabecera X-Gate-Secret
+que /gate-decisions (devuelve importes y datos personales de casos con
+Gate, que el Agente 2 no debe ver). No forma parte de los 5 endpoints
+originales.)
 create-followup-task sigue siendo un docstring de una línea.
 Lo que sigue es la especificación completa, no el estado actual.
 
@@ -243,6 +257,15 @@ SOLO REST.
   como OBSOLETA y nadie la lee: editarla no tiene ningún efecto.
   El proyecto tiene por tanto 9 tablas, no 8. (Desde paso10, 2026-09-28,
   son 10: se añadió decisiones_gate.)
+- EstadoOportunidad (app/schemas/common.py, desde el 2026-10-03) replica
+  el CHECK oportunidades_estado_check: los mismos 8 valores, en el mismo
+  orden (nueva, cualificada, pendiente_aprobacion, visita_agendada,
+  presupuesto_enviado, seguimiento_pendiente, ganada, perdida). Defensa
+  doble: si se cambia uno, hay que cambiar el otro; si la base de datos
+  admitiera un estado que el Enum no tiene, GET /gate-avisos daría un 500
+  al leer una oportunidad en ese estado. Hoy solo lo usa
+  AvisoGateResponse.estado_oportunidad; los demás servicios siguen
+  escribiendo los estados como textos sueltos (pendiente, otra rama).
 - m2 tiene tope: más de 0 y hasta 500 (MAX_M2_LEAD en app/schemas/common.py,
   y CHECK chk_leads_m2_rango en leads, defensa doble como en D5). Es Decimal,
   no float. OJO: el CHECK va sobre la expresión (datos_estructurados ->>
@@ -312,6 +335,15 @@ SOLO REST.
 > 8000 no arrancará (R4). Se aplica la misma regla de siempre: **no hacer
 > merge a `main` sin la confirmación explícita de Gabi**, y siempre con
 > `--ff-only`.
+>
+> **(Nota 2026-10-03: el párrafo anterior está superado.)** POST
+> /gate-decisions está **integrado en `main` en 24cf60f** (fast-forward,
+> confirmado por Gabi; GATE_SECRET ya estaba en su .env).
+> **Bloque actual: GET /gate-avisos/{oportunidad_id}**, el endpoint de solo
+> lectura para el aviso del Gate, implementado y verificado en la rama
+> `feat/n0-aviso-gate`, **pendiente de merge** (Bloques A a D cerrados;
+> plan docs/Plan_Endpoint_Aviso_Gate.txt). Misma regla: no hacer merge sin
+> la confirmación explícita de Gabi, y siempre con `--ff-only`.
 >
 > El router de n8n (D18.9: Chat Trigger → GET /leads/session/{lead_token}
 > → Switch → Agente 1 o Agente 2) se construye en n8n, fuera de este
@@ -459,6 +491,33 @@ y la sección 5.5 de la Adenda (limitaciones: Gate permanente, decisión
 definitiva, operador no identificado y P11, aceptada como limitación
 documentada el 2026-09-28).
 
+GET /gate-avisos/{oportunidad_id} (rama feat/n0-aviso-gate, 2026-10-03,
+pendiente de merge; plan fd96923 y cf51b92, código f3beb9a, pruebas
+b6e9adf): los datos de un caso con Gate para el aviso de WF2 (email) y el
+formulario de /gate-decisions. Solo lectura, solo casos con Gate (404 /
+409 sin_presupuesto / 409 sin_gate), X-Gate-Secret, contacto de la
+solicitud (null y origen "no_disponible" en los leads sin 'contacto'),
+importes con IVA (columnas) y sin IVA (DEDUCIDOS, exactos por
+construcción), umbral_gate_vigente y la decisión sin el informe. Contrato
+y limitaciones: sección 5.6 de la Adenda. estado_oportunidad usa el Enum
+EstadoOportunidad (corrección del tutor sobre el Bloque B; prueba mínima
+19/19 tras el cambio). check_aviso_gate_http 75/75 (puerto 8023;
+2147483648 y 99999999999999999999 -> 404, nunca 500; visitas calculadas
+con zoneinfo, 2026-10-26T08:30+01:00 y 2027-03-29T08:30+02:00; 30
+peticiones, 0 respuestas 500). check_aviso_gate_service 18/18 (barrido de
+1.200.000 importes con IVA 21, 10, 4 y 0, 0 distintos, 33.000 en la
+frontera de redondeo). En negativo, sobre copias: N1 dependencia del
+webhook 27/75 (48 fallos en cascada: la llave del webhook abre y la del
+Gate deja de abrir); N2 sin sin_gate 72/75 y 17/18; N3 contacto de la
+ficha 71/75 y 15/18; N4 desfase fijo 73/75 y 17/18; N5 escribe en logs
+74/75; N6 float 75/75 y 18/18, MUTANTE EQUIVALENTE no detectable por
+diseño (margen mínimo de 0,00087 € hasta la frontera con IVA 21 %, error
+de float del orden de 1e-8 € con el máximo de NUMERIC(10,2); float sigue
+prohibido por D4); N7 informe en la respuesta 72/75; N8 sin redondear el
+sin IVA 71/75 y 15/18. Regresión: check_gate_decisions_http 121/121,
+check_visits_http 55/55, check_lead_session_http 24/24. Suite completa
+34/34 en UNA pasada válida (ver "Suite de verificación").
+
 check_tipo_reforma_constraint arreglado (rama feat/n0-gate-decisions,
 commit 145dcea, 2026-10-03): su comprobación final contaba TODAS las
 oportunidades de la tabla y exigía 0, así que daba "HAY FALLOS" siempre
@@ -537,6 +596,11 @@ retira ese testimonio: no notó las suspensiones. Manda el registro.
 Conclusión: la causa de los cortes es la suspensión del portátil (3 de 3,
 más el experimento: 15 min sin usarse NO matan la conexión y la
 suspensión sí). Ya no hay causa "sin determinar".)
+(Nota 2026-10-03, rama feat/n0-aviso-gate: check_foreign_keys informa
+"Total de FOREIGN KEY en el esquema: 9", pero hay 6 restricciones de clave
+foránea: cuenta por COLUMNAS, y la clave doble (visita_id, oportunidad_id)
+de decisiones_gate hacia visitas sale como 4 filas. Anotado, sin arreglar.
+Es uno de los cinco scripts de P4: su salida se revisa a mano.)
 
 Suite de verificación (2026-10-03): 32 scripts check_*.py. Ninguno falla
 ya por su propia lógica: check_tipo_reforma_constraint, el fallo fijo
@@ -553,6 +617,12 @@ docs/schema_actual.sql en un esquema de prueba dentro de una transacción
 que termina en ROLLBACK y lo compara con public: 10/10). Se ejecuta con el
 procedimiento seguro: check_graceful_shutdown y check_mcp_connection desde
 una copia con otro puerto, y solo se detiene el uvicorn propio, por su PID.
+(Nota 2026-10-03, rama feat/n0-aviso-gate: la suite tiene ahora 34
+scripts, con check_aviso_gate_http y check_aviso_gate_service. 34/34 en
+UNA pasada válida el 2026-10-03, de 17:45:51 a 17:52:45, con la regla de
+uso (Gabi confirmó enchufado y tapa abierta) y sin ningún Kernel-Power
+506/507 en el intervalo ("ninguna suspension: la pasada vale"). Salida de
+los cinco scripts de P4 revisada a mano: sin fallos.)
 
 Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
@@ -568,6 +638,15 @@ get_business_rules y request_missing_information, la concurrencia
 del Session pooler bajo carga, la tabla de excepciones de la Adenda
 (hoy un error no controlado de services/ sale como 500 genérico), y la
 idempotencia frente a reintentos de n8n (D7, limitación asumida en N0).
+(Nota 2026-10-03, añadido al cerrar la rama feat/n0-aviso-gate, fuera de
+ella: reutilizar EstadoOportunidad en los servicios que escriben los
+estados como textos sueltos (gate_decisions_service, visits_service,
+estimate_service); la columna presupuestos.umbral_gate_aplicado (deuda
+técnica, escrita por calculate-estimate como iva_pct_aplicado); cerrar los
+5 casos de prueba 248-252 en 'pendiente_aprobacion' (POST /gate-decisions,
+descartar) antes de activar WF3, lo hará Gabi; y una regla de negocio por
+decidir: las visitas no tienen antelación máxima (validar_fecha solo exige
+que la fecha sea futura, de lunes a viernes y dentro de una franja).)
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas

@@ -5,6 +5,23 @@ PLAN: endpoint de SOLO LECTURA para el aviso del Gate
 Documento de plan · Nivel N0 · 2026-10-03 · Rama feat/n0-aviso-gate
 (desde main = 8883a9c)
 Estado: Bloque A APROBADO el 2026-10-03 (cf51b92); Bloque B en curso.
+
+**[Actualizado 2026-10-03] IMPLEMENTADO Y VERIFICADO** en la rama
+feat/n0-aviso-gate, pendiente de merge a main (solo con la confirmación de
+Gabi y --ff-only). Hashes de cada bloque:
+  A (plan):              fd96923, y su revisión cf51b92 (P1-P7 decididas
+                         y tres defectos corregidos).
+  B (esquema, servicio,
+     ruta):              f3beb9a (prueba mínima 19/19).
+  C (pruebas):           b6e9adf (75/75, 18/18, N1-N8 exactos con N6 como
+                         mutante equivalente, regresión 121/121, 55/55 y
+                         24/24, suite 34/34 en una pasada válida), con la
+                         corrección del tutor sobre el Bloque B
+                         (EstadoOportunidad).
+  D (documentación):     el commit que añade esta nota (un commit no puede
+                         contener su propio hash; ver git log): fila 7 y
+                         sección 5.6 de la Adenda, nota fechada en D18 y
+                         CLAUDE.md al día.
 [Actualizado 2026-10-03, tras la revisión del tutor sobre fd96923: P1-P7
 DECIDIDAS (sección 7) y tres defectos corregidos (CASO 8 que caducaba,
 CLAUDE.md desactualizado en el Bloque D, recuentos exactos de las pruebas

@@ -84,6 +84,9 @@ varias oportunidades devuelve la primera, igual que la idempotencia, y deja un `
    darte una información más precisa."* (evitar "agente" y "valor elevado"). El Code node no renderiza el
    importe y **el importe no entra en el contexto del Agente 2** en casos de Gate. Sí va en el aviso de
    Telegram al equipo (WF2).
+   *(Nota 2026-10-03: desde D19 (2026-09-26), el canal de WF2 es el **email**; Telegram, más adelante.
+   Los datos del aviso los da GET /gate-avisos/{oportunidad_id}, con importes y solo para casos con Gate;
+   ver docs/Plan_Endpoint_Aviso_Gate.txt, P7, y la sección 5.6 de la Adenda.)*
 2. **Visita técnica gratuita.** Solo se cobra si el arquitecto debe emitir un informe; el agente comunica el
    importe de `recargo_informe_tecnico` (fuente única, coherente con el cálculo).
 3. **Umbrales del Gate sin cambios** (D9): 13.000 € baño/cocina, 10.000 € integral/parcial, sin IVA.
