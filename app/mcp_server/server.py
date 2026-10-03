@@ -14,6 +14,8 @@ Se monta dentro de FastAPI, en /mcp, desde app/main.py (un solo proceso,
 decisión de arquitectura por la RAM de 8 GB).
 """
 
+# secrets: módulo estándar; se usa su compare_digest para comparar el token
+# en tiempo constante (ver verify_token, más abajo).
 import secrets
 
 # Annotated (biblioteca estándar, módulo typing) permite pegarle a un tipo
@@ -24,6 +26,8 @@ import secrets
 # suelto, del Field(gt=0) de EstimateRequest.
 from typing import Annotated
 
+# FastMCP: la clase del servidor MCP del paquete fastmcp (el standalone,
+# no el SDK oficial "mcp"). Más abajo se crea la instancia "mcp".
 from fastmcp import FastMCP
 
 # ToolError: la forma que tiene una tool de fastmcp de decir "esto ha
@@ -38,9 +42,14 @@ from fastmcp.exceptions import ToolError
 # devolver cuando el token es válido; fastmcp lo guarda para que las
 # tools puedan saber quién llama.
 from fastmcp.server.auth import AccessToken, TokenVerifier
+# Field de Pydantic: la regla "gt=0" y la descripción del parámetro de la
+# tool, dentro de Annotated (ver arriba).
 from pydantic import Field
 
+# El secreto de la puerta /mcp, leído del .env en app/config.py.
 from app.config import MCP_SECRET
+# El esquema de la respuesta del cálculo: fastmcp lo usa como esquema de
+# salida de la tool.
 from app.schemas.estimates import EstimateResponse
 
 # Se importa el MÓDULO del servicio, y no la función suelta, porque la
@@ -177,6 +186,8 @@ mcp = FastMCP(
 # endpoints def, así que no congela el servidor.
 @mcp.tool
 def calculate_estimate(
+    # Único parámetro: un entero mayor que 0. La descripción la ve el agente
+    # en el esquema de la tool. "-> EstimateResponse" es el tipo de retorno.
     oportunidad_id: Annotated[int, Field(gt=0, description="Id de la oportunidad del cliente")],
 ) -> EstimateResponse:
     """
@@ -216,6 +227,8 @@ def calculate_estimate(
         # El agente solo necesita saber qué ha pasado, no el traceback.
         raise ToolError("No existe ninguna oportunidad con ese id.") from None
     except estimate_service.EstadoNoPermiteCalculo:
+        # La oportunidad existe pero su estado no admite el cálculo. Mismo
+        # "from None" que arriba, por el mismo motivo.
         raise ToolError(
             "Esta oportunidad no está en un estado que permita calcular un presupuesto."
         ) from None

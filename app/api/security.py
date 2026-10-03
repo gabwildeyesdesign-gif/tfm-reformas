@@ -21,6 +21,9 @@ los tres secretos del sistema (WEBHOOK_SECRET, MCP_SECRET y GATE_SECRET)
 son distintos entre sí (plan de /gate-decisions, P4 y P10).
 """
 
+# secrets: módulo estándar de Python para trabajar con secretos. Aquí se
+# usa su función compare_digest, que compara en tiempo constante (ver
+# _secreto_coincide, más abajo).
 import secrets
 
 # HTTPException es la forma de decirle a FastAPI "corta aquí y responde
@@ -226,6 +229,8 @@ async def verificar_gate_secret(
     GATE_SECRET. En cualquier otro caso, 401 idéntico al de /leads (misma
     función _no_autorizado), y el endpoint no se ejecuta.
     """
+    # La misma comparación que en verificar_webhook_secret, pero contra el
+    # secreto del Gate. Si no coincide (o no vino), se corta con el 401.
     if not _secreto_coincide(secreto_recibido, _SECRETO_GATE_ESPERADO):
         raise _no_autorizado()
 
@@ -283,6 +288,10 @@ def _no_autorizado() -> HTTPException:
     cabecera o si era incorrecta, para no dar pistas a quien esté
     probando.
     """
+    # Se DEVUELVE la excepción, no se lanza: quien llama escribe
+    # "raise _no_autorizado()". Así el "raise" queda a la vista en el sitio
+    # donde se corta la petición. status_code es el código HTTP, detail el
+    # texto del cuerpo y headers las cabeceras extra de la respuesta.
     return HTTPException(
         status_code=401,
         detail="No autorizado",

@@ -39,12 +39,15 @@ from pathlib import Path
 import psycopg2
 from dotenv import load_dotenv
 
+# Sin esto, en Windows la consola puede no mostrar tildes ni eñes.
 sys.stdout.reconfigure(encoding="utf-8")
 
 # parents[2]: este archivo vive en scripts/migraciones_ejecutadas/.
 RAIZ_REPO = Path(__file__).resolve().parents[2]
+# Carga el .env de la raíz para que os.getenv("DATABASE_URL") lo encuentre.
 load_dotenv(RAIZ_REPO / ".env")
 
+# Nombres de la tabla y de la restricción que se reescribe, en un solo sitio.
 TABLA = "decisiones_gate"
 CHECK_COHERENCIA = "chk_decisiones_gate_coherencia"
 
@@ -57,6 +60,7 @@ CONDICION_NUEVA = (
     "(decision <> 'descartar' OR (motivo IS NOT NULL AND visita_id IS NULL))"
 )
 
+# Una sola conexión y su cursor (el objeto que envía el SQL y lee resultados).
 cn = psycopg2.connect(os.getenv("DATABASE_URL"))
 cur = cn.cursor()
 
@@ -69,7 +73,9 @@ def definicion_actual():
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = %s::regclass AND conname = %s;",
         (TABLA, CHECK_COHERENCIA),
     )
+    # Una fila si existe la restricción; None si no.
     fila = cur.fetchone()
+    # Su definición, o None.
     return fila[0] if fila else None
 
 
@@ -88,7 +94,10 @@ def definicion_normalizada_de_la_nueva():
     guardado, lo que borra la tabla temporal como si nunca hubiera
     existido. decisiones_gate no se toca.
     """
+    # Punto de guardado dentro de la transacción: se podrá volver a él sin
+    # deshacer lo que hubiera antes.
     cur.execute("SAVEPOINT normalizar;")
+    # try / finally: pase lo que pase dentro, el finally deshace la tabla.
     try:
         # TEMP: la tabla solo existe en esta conexión y desaparece sola.
         # Aun así se deshace con el ROLLBACK TO del finally.
@@ -102,10 +111,12 @@ def definicion_normalizada_de_la_nueva():
             );
             """
         )
+        # SQL: cómo ha guardado Postgres el CHECK "c" de la tabla temporal.
         cur.execute(
             "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
             "WHERE conrelid = 'normalizar_coherencia'::regclass AND conname = 'c';"
         )
+        # El texto normalizado. El "return" no impide que corra el finally.
         return cur.fetchone()[0]
     finally:
         # Siempre: deshacer la tabla temporal y quitar el punto de guardado.
@@ -113,6 +124,7 @@ def definicion_normalizada_de_la_nueva():
         cur.execute("RELEASE SAVEPOINT normalizar;")
 
 
+# Foto de la definición actual ANTES de cambiar nada.
 print("=== ANTES ===")
 antes = definicion_actual()
 print(f"    {CHECK_COHERENCIA}: {antes}")
@@ -123,15 +135,18 @@ try:
     # ------------------------------------------------------------------
     # 0. La tabla y la restricción deben existir (paso10 aplicado)
     # ------------------------------------------------------------------
+    # Sin restricción no hay nada que reescribir: se para con un error claro.
     if antes is None:
         raise RuntimeError(f"{CHECK_COHERENCIA} no existe: ¿se aplicó paso10?")
 
     # ------------------------------------------------------------------
     # 1. ¿Ya es la definición nueva? (idempotencia)
     # ------------------------------------------------------------------
+    # Cómo quedaría la definición nueva una vez guardada por Postgres.
     objetivo = definicion_normalizada_de_la_nueva()
     print(f"\n  1. definición nueva, normalizada por Postgres: {objetivo}")
 
+    # Si ya coincide (segunda ejecución), no se hace nada.
     if antes == objetivo:
         print(f"  2. {CHECK_COHERENCIA} ya tiene la definición nueva: no se toca")
     else:
@@ -144,6 +159,8 @@ try:
         # ADD CONSTRAINT ... CHECK comprueba también las filas que ya
         # existen: si alguna incumpliera la regla nueva, fallaría, y el
         # except desharía también el DROP (hoy la tabla está vacía).
+        # SQL 1: borra la restricción vieja. SQL 2: la crea con el mismo
+        # nombre y la condición nueva.
         cur.execute(f"ALTER TABLE {TABLA} DROP CONSTRAINT {CHECK_COHERENCIA};")
         cur.execute(f"ALTER TABLE {TABLA} ADD CONSTRAINT {CHECK_COHERENCIA} CHECK ({CONDICION_NUEVA});")
         print(f"  2. {CHECK_COHERENCIA} -> sustituida por la definición nueva")
@@ -152,14 +169,17 @@ try:
     cn.commit()
     print("  commit() ejecutado")
 except Exception:
+    # Deshace todo lo del try y vuelve a lanzar el error para verlo.
     cn.rollback()
     print("  ERROR: rollback() ejecutado, no se ha cambiado nada")
     raise
 
+# Foto DESPUÉS, y comprobación de que coincide con la definición nueva.
 print("\n=== DESPUÉS ===")
 despues = definicion_actual()
 print(f"    {CHECK_COHERENCIA}: {despues}")
 print(f"    ¿igual a la definición nueva? {despues == objetivo}")
 
+# Se cierran el cursor y la conexión.
 cur.close()
 cn.close()

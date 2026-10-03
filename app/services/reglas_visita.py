@@ -23,6 +23,8 @@ lógica de ninguna regla. Cambios solo de organización:
 Como todo services/, este archivo NO importa fastapi ni fastmcp.
 """
 
+# Los tipos de fecha y hora de la librería estándar: date (un día), time
+# (una hora del día) y datetime (un instante: día y hora, con zona).
 from datetime import date, datetime, time
 
 # ZoneInfo: las zonas horarias oficiales (base de datos IANA). En Windows
@@ -49,6 +51,7 @@ CLAVE_TARDE_FIN = "visita_tarde_fin_min"
 CLAVE_DURACION = "duracion_visita_min"
 CLAVES_REGLAS = (CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN, CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN, CLAVE_DURACION)
 
+# 1440: el valor máximo que puede tener una de esas claves (medianoche).
 MINUTOS_POR_DIA = 24 * 60
 
 # Log de configuración incompleta. La acción no depende de quién lo
@@ -77,6 +80,8 @@ class RechazoNegocio(Exception):
     def __init__(self, motivo: str, mensaje: str):
         # super().__init__(mensaje) hace que str(excepción) sea el mensaje.
         super().__init__(mensaje)
+        # Se guardan los dos como atributos para que el adaptador los lea
+        # (error.motivo, error.mensaje) al construir la respuesta HTTP.
         self.motivo = motivo
         self.mensaje = mensaje
 
@@ -94,7 +99,9 @@ class ConfiguracionIncompleta(RechazoNegocio):
     """
 
     def __init__(self, motivo: str, mensaje: str, faltan: list[str]):
+        # El motivo y el mensaje los guarda la clase base (RechazoNegocio).
         super().__init__(motivo, mensaje)
+        # Y la lista de claves con problemas, como atributo propio.
         self.faltan = faltan
 
 
@@ -117,6 +124,7 @@ def combinar_fecha_hora_madrid(fecha: date, hora: time) -> datetime:
     o se repite al cambiar el reloj (entre las 02:00 y las 03:00), así que
     no hay horas inexistentes ni ambiguas que tratar.
     """
+    # Une el día y la hora con la zona de Madrid (ver el docstring).
     return datetime.combine(fecha, hora, tzinfo=ZONA_MADRID)
 
 
@@ -124,6 +132,8 @@ def _hhmm(minutos: int) -> str:
     """Minutos desde medianoche -> texto "HH:MM" (510 -> "08:30")."""
     # divmod(a, b) devuelve a la vez el cociente y el resto: (8, 30).
     horas, mins = divmod(minutos, 60)
+    # ":02d" escribe el número con dos cifras, con un cero delante si hace
+    # falta: 8 -> "08".
     return f"{horas:02d}:{mins:02d}"
 
 
@@ -157,6 +167,7 @@ def validar_fecha(inicio: datetime, ahora: datetime, reglas: dict[str, int]) -> 
             f"Las visitas son de lunes a viernes, y el {inicio:%d/%m/%Y} es fin de semana.",
         )
 
+    # Las dos franjas como pares (inicio, fin) en minutos, y la duración.
     manana = (reglas[CLAVE_MANANA_INICIO], reglas[CLAVE_MANANA_FIN])
     tarde = (reglas[CLAVE_TARDE_INICIO], reglas[CLAVE_TARDE_FIN])
     duracion = reglas[CLAVE_DURACION]
@@ -170,6 +181,8 @@ def validar_fecha(inicio: datetime, ahora: datetime, reglas: dict[str, int]) -> 
     # 13:30 justas) y 12:45 no (terminaría a las 13:45).
     # any(...) es True si al menos una de las franjas cumple la condición.
     cabe = any(ini <= empieza and termina <= fin for ini, fin in (manana, tarde))
+    # Si no cabe en ninguna, se rechaza con un mensaje que dice las franjas
+    # y a qué hora terminaría la visita pedida.
     if not cabe:
         raise FechaNoValida(
             "fuera_de_franja",
@@ -200,6 +213,10 @@ def leer_reglas_visita(cursor) -> tuple[dict[str, int], list[str]]:
 
     Recibe el cursor de quien la llama para leer DENTRO de su transacción.
     """
+    # SQL: lee la clave y el valor de las filas de reglas_negocio cuya
+    # clave está en la lista CLAVES_REGLAS. "= ANY(%s)" significa "es igual
+    # a alguno de los elementos de la lista"; psycopg2 convierte la lista
+    # de Python en un array de Postgres.
     cursor.execute(
         "SELECT clave, valor FROM reglas_negocio WHERE clave = ANY(%s);",
         (list(CLAVES_REGLAS),),
@@ -207,26 +224,37 @@ def leer_reglas_visita(cursor) -> tuple[dict[str, int], list[str]]:
     # dict(...) sobre una lista de pares (clave, valor) crea un diccionario.
     leidas = dict(cursor.fetchall())
 
+    # Los dos resultados empiezan vacíos y se rellenan en el bucle.
     reglas: dict[str, int] = {}
     problemas: list[str] = []
+    # Se recorren las claves ESPERADAS (no las leídas), para detectar las
+    # que faltan.
     for clave in CLAVES_REGLAS:
+        # .get(clave) devuelve None si la clave no se leyó.
         valor = leidas.get(clave)
+        # Caso 1: la fila no existe.
         if valor is None:
             problemas.append(f"{clave}: no existe")
+        # Caso 2: existe pero tiene decimales o está fuera del día.
         elif valor != valor.to_integral_value() or not (0 <= valor <= MINUTOS_POR_DIA):
             # to_integral_value() redondea al entero; si cambia, es que
             # tenía decimales (510.50 minutos no tiene sentido aquí).
             problemas.append(f"{clave}: valor no válido ({valor})")
+        # Caso 3: valor válido; se guarda como int (llegaba como Decimal).
         else:
             reglas[clave] = int(valor)
 
     # Coherencia, solo si las filas implicadas son válidas.
+    # Cada franja tiene que empezar antes de terminar.
     for ini, fin in ((CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN), (CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN)):
         if ini in reglas and fin in reglas and reglas[ini] >= reglas[fin]:
             problemas.append(f"{ini} ({reglas[ini]}) no es menor que {fin} ({reglas[fin]})")
+    # Una visita de 0 minutos no tiene sentido (los negativos ya los
+    # rechazó el caso 2).
     if reglas.get(CLAVE_DURACION) == 0:
         problemas.append(f"{CLAVE_DURACION}: debe ser mayor que 0")
 
+    # Se devuelven los dos: quien llama decide qué hacer si hay problemas.
     return reglas, problemas
 
 
@@ -243,6 +271,9 @@ def registrar_configuracion_incompleta(cursor, oportunidad_id: int, problemas: l
     llama debe lanzar la excepción DESPUÉS del commit (rechazo diferido),
     o este INSERT se desharía con el rollback.
     """
+    # SQL: inserta UNA fila en logs, asociada a la oportunidad, con la
+    # acción "visita_configuracion_incompleta" y, como JSONB, la lista de
+    # problemas y el origen. Los %s se rellenan con la tupla de debajo.
     cursor.execute(
         "INSERT INTO logs (entity_type, entity_id, accion, detalle) VALUES (%s, %s, %s, %s);",
         (

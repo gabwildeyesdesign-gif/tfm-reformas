@@ -8,10 +8,16 @@ franja) dependen de valores de reglas_negocio y del reloj de la base de
 datos, así que viven en app/services/visits_service.py.
 """
 
+# Los tipos de fecha y hora de la librería estándar: date (un día), time
+# (una hora del día) y datetime (día y hora juntos, con su desfase).
 from datetime import date, datetime, time
 
+# De Pydantic: BaseModel (la clase base de todo esquema), ConfigDict (la
+# configuración del modelo), Field (límites de un campo, como max_length) y
+# field_validator (decorador para validar un campo concreto).
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Constantes y validadores compartidos con otros esquemas (common.py).
 from app.schemas.common import (
     MAX_LEAD_TOKEN,
     MAX_TEXTO_VISITA,
@@ -58,20 +64,31 @@ class VisitaCreate(BaseModel):
     # La lógica vive en app/schemas/common.py (compartida con
     # GateDecisionCreate desde el 2026-09-30); aquí solo se engancha cada
     # comprobación a su campo. El motivo de cada una está explicado allí.
+    # @classmethod es obligatorio para @field_validator en Pydantic 2: el
+    # validador se ejecuta antes de que exista el objeto, así que recibe la
+    # clase (cls) y no una instancia (self).
 
+    # Engancha la comprobación de formato YYYY-MM-DD al campo "fecha".
     @field_validator("fecha", mode="before")
     @classmethod
     def validar_fecha(cls, valor):
+        # Devuelve el valor si es válido; si no, el validador lanza
+        # ValueError y Pydantic responde 422.
         return fecha_en_formato_exacto(valor)
 
+    # Engancha la comprobación de formato HH:MM al campo "hora".
     @field_validator("hora", mode="before")
     @classmethod
     def validar_hora(cls, valor):
+        # Igual que la fecha: valor válido o ValueError (422).
         return hora_en_formato_exacto(valor)
 
+    # Recorta los espacios de los extremos de "texto_cliente" ANTES de que
+    # se mida su longitud (min_length y max_length).
     @field_validator("texto_cliente", mode="before")
     @classmethod
     def recortar_texto_cliente(cls, valor):
+        # Devuelve el texto ya recortado, que es el que se guardará.
         return texto_sin_espacios_en_los_extremos(valor)
 
 

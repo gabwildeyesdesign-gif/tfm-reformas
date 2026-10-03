@@ -1,7 +1,11 @@
 """Configuración global de la aplicación (variables de entorno, constantes)."""
 
+# os: módulo estándar de Python para hablar con el sistema operativo; aquí
+# solo se usa os.getenv(), que lee una variable de entorno por su nombre.
 import os
 
+# load_dotenv: función del paquete python-dotenv que lee el archivo .env y
+# copia sus líneas NOMBRE=valor a las variables de entorno del proceso.
 from dotenv import load_dotenv
 
 # Carga las variables definidas en el archivo .env como si fueran variables

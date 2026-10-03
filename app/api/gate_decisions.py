@@ -13,9 +13,16 @@ Traduce HTTP -> llamada a services/ -> HTTP, y decide qué código HTTP
 corresponde a cada rechazo.
 """
 
+# De FastAPI: APIRouter (agrupa las rutas de este archivo), Depends (declara
+# una dependencia que se ejecuta antes del endpoint), HTTPException (corta
+# y responde con un código de error) y Response (la respuesta HTTP, para
+# poder cambiarle el código de estado).
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+# La dependencia que comprueba la cabecera X-Gate-Secret (app/api/security.py).
 from app.api.security import verificar_gate_secret
+# Los esquemas Pydantic de la entrada (lo que se valida del cuerpo JSON) y
+# de la salida (lo único que puede salir en la respuesta).
 from app.schemas.gate_decisions import GateDecisionCreate, GateDecisionResponse
 
 # Los rechazos COMPARTIDOS con /visits (FechaNoValida, ConfiguracionIncompleta)
@@ -79,6 +86,9 @@ def post_gate_decisions(data: GateDecisionCreate, response: Response) -> GateDec
     caso de Gate: visita_acordada (con fecha y hora) o descartar (con
     motivo). La decisión es definitiva. Nunca devuelve importes.
     """
+    # Se delega TODO el trabajo en services/ (comprobaciones, escritura en
+    # la base de datos). Si algo no se permite, services/ lanza una de sus
+    # excepciones de rechazo, que se traducen a HTTP en el "except".
     try:
         resultado = registrar_decision(data)
     # RechazoNegocio es la base de TODOS los rechazos: los propios (que
@@ -92,6 +102,8 @@ def post_gate_decisions(data: GateDecisionCreate, response: Response) -> GateDec
         # getattr(objeto, nombre, por_defecto): solo ConfiguracionIncompleta
         # tiene el atributo "faltan"; las demás no lo añaden.
         faltan = getattr(error, "faltan", None)
+        # Si el rechazo trae la lista de claves de configuración que faltan
+        # (solo el 503), se añade al detalle para que se vea qué falta.
         if faltan is not None:
             detalle["faltan"] = faltan
         # type(error) es la clase concreta; con ella se busca el código en
@@ -99,6 +111,9 @@ def post_gate_decisions(data: GateDecisionCreate, response: Response) -> GateDec
         raise HTTPException(status_code=CODIGO_HTTP[type(error)], detail=detalle)
 
     # Repetición exacta de la decisión ya registrada: no se ha creado nada.
+    # resultado.creado lo decide services/; aquí solo se cambia el código
+    # HTTP del 201 por defecto a 200.
     if not resultado.creado:
         response.status_code = 200
+    # FastAPI filtra este objeto con response_model y lo envía como JSON.
     return resultado

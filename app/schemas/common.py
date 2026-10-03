@@ -65,6 +65,8 @@ class NivelAcabados(str, Enum):
     UNIQUE (tipo_reforma, nivel_acabados) para que no haya duplicados.
     """
 
+    # Igual que en TipoReforma: a la izquierda el nombre en Python, a la
+    # derecha el valor real de la base de datos (sin tildes).
     BASICO = "basico"
     MEDIO = "medio"
     ALTO = "alto"
@@ -216,13 +218,17 @@ def fecha_en_formato_exacto(valor):
     # forma, se rechaza.
     if not isinstance(valor, str) or not PATRON_FECHA.match(valor):
         raise ValueError("la fecha debe tener el formato YYYY-MM-DD, por ejemplo 2026-10-23")
+    # Formato correcto: se devuelve sin tocar para que Pydantic siga.
     return valor
 
 
 def hora_en_formato_exacto(valor):
     """Deja pasar solo un texto "HH:MM" (24 horas); si no, ValueError."""
+    # Mismo esquema que la fecha: si no es texto o no cumple PATRON_HORA,
+    # ValueError, que Pydantic convierte en un 422 que nombra el campo.
     if not isinstance(valor, str) or not PATRON_HORA.match(valor):
         raise ValueError("la hora debe tener el formato HH:MM (24 horas), por ejemplo 08:30 o 17:00")
+    # Formato correcto: se devuelve sin tocar; Pydantic lo convierte a time.
     return valor
 
 
@@ -233,4 +239,6 @@ def texto_sin_espacios_en_los_extremos(valor):
     rechaza el min_length=1 del campo. Si no es texto, se deja pasar tal
     cual para que Pydantic dé su propio error de tipo.
     """
+    # Expresión condicional en una línea: "A if condición else B". Si es
+    # texto, se devuelve recortado; si no, el valor tal cual llegó.
     return valor.strip() if isinstance(valor, str) else valor

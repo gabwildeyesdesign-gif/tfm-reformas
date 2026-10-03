@@ -41,12 +41,18 @@ Uso:
 No modifica NADA en la base de datos: solo hace SELECT.
 """
 
+# os: para leer variables de entorno (os.getenv).
 import os
+# sys: para la codificación de la consola y para sys.exit.
 import sys
+# datetime y timezone: para la fecha y hora (en UTC) de la cabecera.
 from datetime import datetime, timezone
+# Path: para construir rutas y escribir el archivo.
 from pathlib import Path
 
+# psycopg2: la biblioteca con la que Python habla con PostgreSQL.
 import psycopg2
+# load_dotenv: lee el .env y mete sus valores como variables de entorno.
 from dotenv import load_dotenv
 
 # La consola de Windows no usa UTF-8 por defecto.
@@ -59,8 +65,10 @@ sys.stdout.reconfigure(encoding="utf-8")
 # directorio de trabajo. Es la misma tecnica que ya se uso en
 # scripts/check_graceful_shutdown.py.
 RAIZ = Path(__file__).resolve().parents[1]
+# El archivo que se genera. El operador "/" de Path une trozos de ruta.
 SALIDA = RAIZ / "docs" / "schema_actual.sql"
 
+# Carga el .env de la raíz y lee la cadena de conexión.
 load_dotenv(RAIZ / ".env")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -93,14 +101,20 @@ def tipo_sql(tipo, longitud, precision, escala, defecto):
     de "integer" con ese default: hay que reconocer el patron para
     volver a escribirlo como SERIAL.
     """
+    # Un default con nextval(...) delata una columna SERIAL (o BIGSERIAL si
+    # la columna es bigint).
     if defecto and "nextval(" in defecto:
         return "BIGSERIAL" if tipo == "bigint" else "SERIAL"
 
+    # El nombre corto si está en la tabla; si no, el nombre largo en mayúsculas.
     base = TIPOS_CORTOS.get(tipo, tipo.upper())
+    # Los textos con longitud máxima: VARCHAR(150).
     if longitud is not None:
         return f"{base}({longitud})"
+    # Los numéricos con precisión y escala: NUMERIC(10,2).
     if tipo == "numeric" and precision is not None:
         return f"{base}({precision},{escala})"
+    # El resto, tal cual: INTEGER, TEXT, JSONB...
     return base
 
 
@@ -130,7 +144,9 @@ def ordenar_tablas(tablas, dependencias):
     # Copia de las dependencias, para ir tachando sin tocar el original.
     # set(...) crea un conjunto: una colección sin repetidos.
     pendientes = {t: set(dependencias.get(t, set())) for t in tablas}
+    # Aquí se van apuntando las tablas en el orden en que se escribirán.
     orden = []
+    # Mientras quede alguna tabla sin colocar.
     while pendientes:
         # Tablas cuyas dependencias ya están todas escritas.
         disponibles = sorted(t for t, deps in pendientes.items() if not deps)
@@ -142,6 +158,8 @@ def ordenar_tablas(tablas, dependencias):
                 f"{sorted(pendientes)}: no hay ningún orden que permita crearlas. "
                 "No se escribe schema_actual.sql."
             )
+        # La primera disponible (alfabéticamente) se coloca y se quita de
+        # las pendientes.
         siguiente = disponibles[0]
         orden.append(siguiente)
         del pendientes[siguiente]
@@ -149,20 +167,25 @@ def ordenar_tablas(tablas, dependencias):
         # discard() quita un elemento de un conjunto si está (y no falla si no).
         for deps in pendientes.values():
             deps.discard(siguiente)
+    # Todas colocadas: este es el orden de escritura.
     return orden
 
 
 def main():
+    # Sin cadena de conexión no se puede hacer nada: se para con un mensaje.
     if not DATABASE_URL:
         print("ERROR: no se encontro DATABASE_URL en el .env")
         sys.exit(1)
 
+    # Una sola conexión y su cursor (el objeto que envía el SQL).
     conexion = psycopg2.connect(DATABASE_URL)
     cursor = conexion.cursor()
 
     # ---- 1. Que tablas hay -------------------------------------------
     # No se escribe la lista a mano a proposito: si manana aparece una
     # tabla nueva, este script la recoge sin que nadie lo edite.
+    # SQL: los nombres de las tablas normales (BASE TABLE, no vistas) del
+    # esquema public, en orden alfabético.
     cursor.execute(
         """
         SELECT table_name
@@ -171,10 +194,13 @@ def main():
         ORDER BY table_name;
         """
     )
+    # Lista con el primer (y único) valor de cada fila: el nombre.
     tablas = [fila[0] for fila in cursor.fetchall()]
     print(f"Tablas encontradas: {len(tablas)} -> {', '.join(tablas)}")
 
     # ---- 2. Columnas de cada tabla -----------------------------------
+    # SQL: para cada columna de public, su tabla, nombre, tipo, longitud,
+    # precisión, escala, si admite NULL, su default y su posición.
     cursor.execute(
         """
         SELECT table_name, column_name, data_type,
@@ -189,6 +215,7 @@ def main():
     # setdefault(clave, []) devuelve la lista existente, o crea una vacia
     # la primera vez que se ve esa tabla.
     columnas = {}
+    # fila[0] es el nombre de la tabla: cada fila va a la lista de su tabla.
     for fila in cursor.fetchall():
         columnas.setdefault(fila[0], []).append(fila)
 
@@ -211,6 +238,7 @@ def main():
         ORDER BY tc.table_name, tc.constraint_type;
         """
     )
+    # Diccionario tabla -> lista de (tipo, nombre, columnas).
     restricciones = {}
     for tabla, tipo, nombre, cols in cursor.fetchall():
         restricciones.setdefault(tabla, []).append((tipo, nombre, cols))
@@ -238,6 +266,7 @@ def main():
         WHERE n.nspname = 'public' AND k.contype = 'f';
         """
     )
+    # nombre de la clave -> su definición; tabla -> tablas a las que apunta.
     definiciones_fk = {}
     dependencias = {}
     for nombre, definicion, tabla_origen, tabla_destino in cursor.fetchall():
@@ -259,6 +288,8 @@ def main():
     # (con la forma "columna IS NOT NULL"); se filtran, porque el NOT
     # NULL ya se escribe en la propia linea de la columna y repetirlo
     # como CHECK seria ruido.
+    # SQL: tabla, nombre y expresión de cada CHECK de public, sin los
+    # automáticos de NOT NULL (el NOT LIKE '%IS NOT NULL').
     cursor.execute(
         """
         SELECT tc.table_name, tc.constraint_name, cc.check_clause
@@ -272,6 +303,7 @@ def main():
         ORDER BY tc.table_name, tc.constraint_name;
         """
     )
+    # Diccionario tabla -> lista de (nombre, expresión).
     checks = {}
     for tabla, nombre, clausula in cursor.fetchall():
         checks.setdefault(tabla, []).append((nombre, clausula))
@@ -289,6 +321,8 @@ def main():
     # los que respaldan una restriccion (cada PK y cada UNIQUE crean su
     # propio indice con el mismo nombre), porque esos ya salen dentro del
     # CREATE TABLE y aparecerian dos veces.
+    # SQL: la definición de cada índice de public para el que NO existe una
+    # restricción con su mismo nombre.
     cursor.execute(
         """
         SELECT i.indexdef
@@ -300,11 +334,14 @@ def main():
         ORDER BY i.tablename, i.indexname;
         """
     )
+    # Lista con la sentencia CREATE INDEX de cada uno.
     indices_sueltos = [fila[0] for fila in cursor.fetchall()]
 
     # ---- 4. Filas por tabla, solo como dato informativo --------------
     conteos = {}
     for tabla in tablas:
+        # SQL: filas de esa tabla. El nombre va entre comillas dobles, que
+        # en SQL marcan un nombre de tabla. Viene del catálogo, no de fuera.
         cursor.execute(f'SELECT COUNT(*) FROM "{tabla}";')
         conteos[tabla] = cursor.fetchone()[0]
 
@@ -312,7 +349,10 @@ def main():
     # Se va acumulando en una lista de lineas y al final se unen todas.
     # Es mas eficiente que ir concatenando textos uno a uno.
     lineas = []
+    # Fecha y hora actuales en UTC, como texto ("2026-10-03 10:00:00 UTC").
     ahora = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    # La cabecera del archivo: líneas de comentario SQL (empiezan por --).
+    # "=" * 74 repite el carácter 74 veces para dibujar una raya.
     lineas.append("-- " + "=" * 74)
     lineas.append("-- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE")
     lineas.append("--")
@@ -328,28 +368,38 @@ def main():
     lineas.append("-- " + "=" * 74)
     lineas.append("")
 
+    # Un CREATE TABLE por tabla, en el orden topológico del paso 3c.
     for tabla in orden_tablas:
+        # Separador con el nombre de la tabla y sus filas.
         lineas.append("")
         lineas.append("-- " + "-" * 72)
         lineas.append(f"-- Tabla: {tabla}   ({conteos[tabla]} filas en el momento del volcado)")
         lineas.append("-- " + "-" * 72)
         lineas.append(f"CREATE TABLE {tabla} (")
 
+        # Las líneas de dentro del CREATE TABLE (columnas y restricciones).
         definiciones = []
+        # Cada fila de columnas se desempaqueta en sus nueve datos; "_" y
+        # "_pos" son los que no se usan (la tabla y la posición).
         for (_, nombre, tipo, longitud, prec, escala,
              nullable, defecto, _pos) in columnas[tabla]:
+            # Nombre alineado a 24 caracteres (":<24") y el tipo.
             partes = [f"    {nombre:<24}", tipo_sql(tipo, longitud, prec, escala, defecto)]
+            # is_nullable "NO" significa NOT NULL.
             if nullable == "NO":
                 partes.append("NOT NULL")
             # El default de una columna SERIAL ya esta representado por
             # la propia palabra SERIAL; repetirlo seria incorrecto.
             if defecto and "nextval(" not in defecto:
                 partes.append(f"DEFAULT {defecto}")
+            # Las partes, unidas con espacios, forman la línea de la columna.
             definiciones.append(" ".join(partes))
 
         # Las restricciones de tabla se escriben dentro del CREATE TABLE,
         # detras de las columnas.
+        # .get(tabla, []): una tabla sin restricciones da una lista vacía.
         for tipo, nombre, cols in restricciones.get(tabla, []):
+            # PK y UNIQUE se escriben con sus columnas.
             if tipo == "PRIMARY KEY":
                 definiciones.append(f"    CONSTRAINT {nombre} PRIMARY KEY ({cols})")
             elif tipo == "UNIQUE":
@@ -362,6 +412,7 @@ def main():
                     raise RuntimeError(f"No se encontró la definición de la clave foránea {nombre}")
                 definiciones.append(f"    CONSTRAINT {nombre} {definiciones_fk[nombre]}")
 
+        # Los CHECK de la tabla, detrás de las demás restricciones.
         for nombre, clausula in checks.get(tabla, []):
             definiciones.append(f"    CONSTRAINT {nombre} CHECK {clausula}")
 
@@ -369,12 +420,15 @@ def main():
         # salto de linea: la ultima se queda sin coma, que es justo lo
         # que exige la sintaxis de SQL.
         lineas.append(",\n".join(definiciones))
+        # El paréntesis que cierra el CREATE TABLE.
         lineas.append(");")
 
+    # Sección de índices sueltos, con su cabecera.
     lineas.append("")
     lineas.append("-- " + "=" * 74)
     lineas.append("-- Indices que no respaldan ninguna restriccion (pg_indexes)")
     lineas.append("-- " + "=" * 74)
+    # Una lista vacía cuenta como False: si no hay ninguno, se dice.
     if indices_sueltos:
         # indexdef ya viene como una sentencia CREATE INDEX completa; solo
         # le falta el punto y coma final.
@@ -387,6 +441,8 @@ def main():
     lineas.append("-- " + "=" * 74)
     lineas.append("-- Row Level Security")
     lineas.append("-- " + "=" * 74)
+    # SQL: nombre de cada tabla normal de public y si tiene RLS activado
+    # (pg_class.relrowsecurity).
     cursor.execute(
         """
         SELECT relname, relrowsecurity
@@ -396,35 +452,46 @@ def main():
         """
     )
     for nombre_tabla, rls_activo in cursor.fetchall():
+        # Con RLS: la sentencia que lo activa, para recrearlo igual.
         if rls_activo:
             lineas.append(f"ALTER TABLE {nombre_tabla:<16} ENABLE ROW LEVEL SECURITY;")
+        # Sin RLS: solo un comentario que lo deja a la vista.
         else:
             lineas.append(f"-- {nombre_tabla}: RLS NO habilitada")
 
+    # Línea vacía final.
     lineas.append("")
 
+    # Todas las líneas unidas con saltos de línea: el texto del archivo.
     contenido = "\n".join(lineas)
+    # Crea la carpeta docs/ si no existiera (exist_ok=True: sin error si ya está).
     SALIDA.parent.mkdir(parents=True, exist_ok=True)
     # newline="\n": sin el, en Windows write_text convierte cada salto de
     # linea en CRLF (el problema que documenta .gitattributes).
     SALIDA.write_text(contenido, encoding="utf-8", newline="\n")
 
+    # Se cierran el cursor y la conexión.
     cursor.close()
     conexion.close()
 
+    # Resumen en consola: dónde se escribió y cuántas cosas lleva.
     print(f"\nEscrito: {SALIDA}")
     print(f"  {len(contenido)} caracteres, {len(lineas)} lineas")
     print(f"  Tablas volcadas: {len(tablas)}")
+    # sum(...) suma la longitud de la lista de cada tabla: el total.
     total_restricciones = sum(len(v) for v in restricciones.values())
     total_checks = sum(len(v) for v in checks.values())
     print(f"  Restricciones PK/UNIQUE/FK: {total_restricciones}")
     print(f"  CHECK: {total_checks}")
     print(f"  Indices sin restriccion: {len(indices_sueltos)}")
 
+    # Última defensa: un archivo vacío (o solo con espacios) es un error.
     if len(contenido.strip()) == 0:
         print("ERROR: el archivo ha quedado vacio")
         sys.exit(1)
 
 
+# Solo se ejecuta main() cuando el archivo se lanza directamente
+# (python scripts/dump_schema.py), no cuando otro archivo lo importa.
 if __name__ == "__main__":
     main()

@@ -7,9 +7,16 @@ tiene lógica de negocio ni SQL. Traduce HTTP -> llamada a services/ ->
 HTTP, y decide qué código HTTP corresponde a cada rechazo.
 """
 
+# De FastAPI: APIRouter (agrupa las rutas de este archivo), Depends (declara
+# una dependencia que se ejecuta antes del endpoint), HTTPException (corta
+# y responde con un código de error) y Response (la respuesta HTTP, para
+# poder cambiarle el código de estado).
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+# La dependencia que comprueba la cabecera X-Webhook-Secret (la misma que
+# POST /leads).
 from app.api.security import verificar_webhook_secret
+# Los esquemas Pydantic de la entrada y de la salida de este endpoint.
 from app.schemas.visits import VisitaCreate, VisitaResponse
 # Los rechazos COMPARTIDOS con /gate-decisions (FechaNoValida,
 # ConfiguracionIncompleta) y su base común RechazoNegocio viven en
@@ -22,6 +29,9 @@ from app.services.visits_service import (
     solicitar_visita,
 )
 
+# APIRouter: un "mini-FastAPI" con las rutas de este archivo. main.py lo
+# engancha a la aplicación con include_router. tags agrupa las rutas en
+# /docs bajo el título "visitas".
 router = APIRouter(tags=["visitas"])
 
 # Qué código HTTP corresponde a cada familia de rechazo de services/.
@@ -55,11 +65,18 @@ CODIGO_HTTP = {
     status_code=201,
     dependencies=[Depends(verificar_webhook_secret)],
 )
+# def y no async def: solicitar_visita hace llamadas BLOQUEANTES a Postgres,
+# y FastAPI ejecuta las funciones def en su pool de hilos.
+#   data: el cuerpo JSON, ya validado con VisitaCreate (si no cumple, 422
+#     sin llegar a esta función).
+#   response: la respuesta HTTP, para poder cambiar su código a 200.
 def post_visits(data: VisitaCreate, response: Response) -> VisitaResponse:
     """
     Registra la SOLICITUD de visita técnica de un cliente (no es una
     reserva: administración llama para confirmar). Nunca devuelve importes.
     """
+    # Todo el trabajo lo hace services/; si algo no se permite, lanza una
+    # excepción de rechazo que se traduce a HTTP en el "except".
     try:
         resultado = solicitar_visita(data)
     # RechazoNegocio es la base de TODOS: los propios de /visits (que
@@ -75,11 +92,14 @@ def post_visits(data: VisitaCreate, response: Response) -> VisitaResponse:
         # getattr(objeto, nombre, por_defecto): solo ConfiguracionIncompleta
         # tiene el atributo "faltan"; las demás no lo añaden.
         faltan = getattr(error, "faltan", None)
+        # Solo el 503 trae "faltan": se añade al detalle para ver qué falta.
         if faltan is not None:
             detalle["faltan"] = faltan
+        # Se corta la petición con el código de la tabla y el detalle.
         raise HTTPException(status_code=CODIGO_HTTP[type(error)], detail=detalle)
 
     # Repetición con la misma fecha: no se ha creado nada, así que 200.
     if not resultado.creado:
         response.status_code = 200
+    # FastAPI filtra este objeto con response_model y lo envía como JSON.
     return resultado

@@ -23,7 +23,10 @@ app/api/gate_decisions.py decide el código HTTP de cada una.
 # JSONB (logs.detalle).
 from psycopg2.extras import Json
 
+# La conexión de escritura del pool: commit al salir del "with" si todo va
+# bien, rollback si se lanza una excepción dentro.
 from app.db.connection import get_transactional_connection
+# El Enum de las decisiones y los esquemas de entrada y de salida.
 from app.schemas.gate_decisions import (
     DecisionGate,
     GateDecisionCreate,
@@ -149,7 +152,9 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
     # perdería. Se guarda aquí y se lanza después del commit.
     rechazo_diferido = None
 
+    # Desde aquí hasta el final del "with", todo es UNA transacción.
     with get_transactional_connection() as conn:
+        # El cursor envía las consultas y lee sus resultados.
         cursor = conn.cursor()
 
         # --------------------------------------------------------------
@@ -181,7 +186,10 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
             """,
             (data.oportunidad_id,),
         )
+        # fetchone(): la única fila del resultado, o None si no hay ninguna.
         fila = cursor.fetchone()
+        # Sin fila no existe la oportunidad: 404. Al lanzar dentro del
+        # "with", se hace rollback (y se suelta el bloqueo).
         if fila is None:
             raise OportunidadNoEncontrada(
                 "oportunidad_no_encontrada",
@@ -196,11 +204,13 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         # --------------------------------------------------------------
         # sin_gate va ANTES que la decisión previa: una oportunidad sin Gate
         # nunca puede tener decisión, y el motivo útil es sin_gate (1.9).
+        # presupuesto_id None: el LEFT JOIN no encontró presupuesto.
         if presupuesto_id is None:
             raise EstadoNoPermiteDecision(
                 "sin_presupuesto",
                 "La oportunidad todavía no tiene presupuesto calculado, así que no hay ningún Gate que decidir.",
             )
+        # requiere_aprobacion False: el presupuesto no activó el Gate.
         if not requiere_aprobacion:
             raise EstadoNoPermiteDecision(
                 "sin_gate",
@@ -228,9 +238,12 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
             """,
             (oportunidad_id,),
         )
+        # La decisión previa, o None si todavía no hay ninguna.
         previa = cursor.fetchone()
 
+        # Solo hay algo que comprobar si ya existe una decisión.
         if previa is not None:
+            # Desempaquetado: una variable por columna del SELECT.
             previa_id, previa_decision, previa_motivo, previa_visita_id, previa_fecha = previa
 
             # ¿Es la MISMA decisión? (plan, 1.6)
@@ -240,10 +253,13 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
             #     inicio aunque este esté en hora de Madrid.
             #   descartar: misma decisión y mismo motivo (P3).
             if previa_decision == decision_texto:
+                # Misma decisión: falta comparar la fecha (visita) o el
+                # motivo (descarte). Cada comparación da True o False.
                 if data.decision == DecisionGate.VISITA_ACORDADA:
                     es_repeticion = previa_fecha == inicio
                 else:
                     es_repeticion = previa_motivo == motivo_texto
+            # Decisión distinta: nunca es una repetición.
             else:
                 es_repeticion = False
 
@@ -279,6 +295,7 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         # --------------------------------------------------------------
         # 5. ¿El estado permite decidir? (409)
         # --------------------------------------------------------------
+        # Solo desde 'pendiente_aprobacion'; cualquier otro estado, 409.
         if estado != ESTADO_PENDIENTE_APROBACION:
             raise EstadoNoPermiteDecision(
                 "estado_no_permitido",
@@ -289,9 +306,11 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         # --------------------------------------------------------------
         # 6. Preparar la decisión
         # --------------------------------------------------------------
+        # Rama de la visita acordada (la del descarte es el "else" de abajo).
         if data.decision == DecisionGate.VISITA_ACORDADA:
             # Reglas de visita, las MISMAS de /visits (503 si faltan).
             reglas, problemas = leer_reglas_visita(cursor)
+            # Una lista vacía cuenta como False: solo entra si hay problemas.
             if problemas:
                 # Rastro para administración, firmado con el origen
                 # "gate_decisions", y excepción DIFERIDA (ver arriba).
@@ -311,10 +330,13 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
                 # P1: ¿ya hay una visita activa? No debería (/visits
                 # rechaza los casos con Gate), pero sin esta comprobación el
                 # índice único parcial de visitas lo rechazaría con un 500.
+                # SQL: busca una visita de esta oportunidad cuyo estado sea
+                # uno de los activos ('solicitada' o 'confirmada').
                 cursor.execute(
                     "SELECT id FROM visitas WHERE oportunidad_id = %s AND estado = ANY(%s);",
                     (oportunidad_id, list(ESTADOS_VISITA_ACTIVA)),
                 )
+                # La visita activa, o None si no hay; si la hay, 409.
                 activa = cursor.fetchone()
                 if activa is not None:
                     raise EstadoNoPermiteDecision(
@@ -335,8 +357,12 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
                     """,
                     (oportunidad_id, inicio, VISITA_CONFIRMADA, TEXTO_VISITA_ACORDADA),
                 )
+                # Las dos columnas del RETURNING, desempaquetadas.
                 visita_id, fecha_guardada = cursor.fetchone()
+                # Postgres la devuelve en UTC; astimezone la expresa en hora
+                # de Madrid (mismo instante) para la respuesta y el log.
                 fecha_madrid = fecha_guardada.astimezone(ZONA_MADRID)
+                # Estado al que pasará la oportunidad en el paso 7.
                 nuevo_estado = ESTADO_OPORTUNIDAD_CON_VISITA
         else:
             # Descartar: no hay visita.
@@ -347,6 +373,8 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         # --------------------------------------------------------------
         # 7. Escritura (solo si no hay un 503 pendiente)
         # --------------------------------------------------------------
+        # Si hay un 503 pendiente no se escribe nada más; solo queda el log
+        # de configuración incompleta, que se confirma al salir del "with".
         if rechazo_diferido is None:
             # La decisión. visita_id es None al descartar; al acordar, la
             # clave foránea doble (visita_id, oportunidad_id) garantiza que
@@ -391,11 +419,15 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
                 "visita_id": visita_id,
                 "fecha_propuesta": fecha_madrid.isoformat() if fecha_madrid is not None else None,
             }
+            # SQL: inserta UNA fila en logs, asociada a la oportunidad, con
+            # la acción "gate_decision_registrada" y el detalle como JSONB.
             cursor.execute(
                 "INSERT INTO logs (entity_type, entity_id, accion, detalle) VALUES (%s, %s, %s, %s);",
                 (LOG_ENTITY_TYPE_OPORTUNIDAD, oportunidad_id, ACCION_DECISION_REGISTRADA, Json(detalle)),
             )
 
+            # La respuesta de una decisión NUEVA (creado=True -> 201). Se
+            # construye aquí y se devuelve fuera del "with", tras el commit.
             respuesta = GateDecisionResponse(
                 decision_id=decision_id,
                 oportunidad_id=oportunidad_id,
@@ -409,6 +441,8 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
 
     # Fuera del "with": la transacción ya se ha confirmado (con el log del
     # 503 dentro, si lo hubo).
+    # Si quedó un 503 pendiente, se lanza ahora, con el log ya guardado.
     if rechazo_diferido is not None:
         raise rechazo_diferido
+    # Si no, la decisión se escribió y confirmó: se devuelve la respuesta.
     return respuesta

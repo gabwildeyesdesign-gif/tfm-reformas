@@ -10,7 +10,10 @@ sea futura y caiga en una franja...) viven en
 app/services/gate_decisions_service.py.
 """
 
+# Los tipos de fecha y hora de la librería estándar: date (un día), time
+# (una hora del día) y datetime (día y hora juntos, con su desfase).
 from datetime import date, datetime, time
+# Enum: para los conjuntos CERRADOS de valores (DecisionGate, MotivoDescarte).
 from enum import Enum
 
 # Self (Python 3.11+): el tipo "una instancia de esta misma clase". Lo usa
@@ -56,6 +59,8 @@ class MotivoDescarte(str, Enum):
     del CHECK chk_decisiones_gate_motivo (migración paso10).
     """
 
+    # A la izquierda el nombre en Python; a la derecha el valor que viaja en
+    # el JSON y se guarda en decisiones_gate.motivo.
     PRECIO = "precio"
     PLAZO = "plazo"
     NO_CONTESTA = "no_contesta"
@@ -108,6 +113,7 @@ class GateDecisionCreate(BaseModel):
     # ejecuta antes de que exista el objeto, así que recibe la clase (cls)
     # y no una instancia (self).
 
+    # Engancha la comprobación de formato YYYY-MM-DD al campo "fecha".
     @field_validator("fecha", mode="before")
     @classmethod
     def validar_fecha(cls, valor):
@@ -119,6 +125,7 @@ class GateDecisionCreate(BaseModel):
             return None
         return fecha_en_formato_exacto(valor)
 
+    # Engancha la comprobación de formato HH:MM al campo "hora".
     @field_validator("hora", mode="before")
     @classmethod
     def validar_hora(cls, valor):
@@ -127,6 +134,7 @@ class GateDecisionCreate(BaseModel):
             return None
         return hora_en_formato_exacto(valor)
 
+    # Recorta los espacios del "informe" antes de medir su longitud.
     @field_validator("informe", mode="before")
     @classmethod
     def recortar_informe(cls, valor):
@@ -144,6 +152,7 @@ class GateDecisionCreate(BaseModel):
     # datos. Es la misma regla que el CHECK chk_decisiones_gate_coherencia,
     # adelantada a la puerta para dar un 422 claro en vez de un 500.
 
+    # "-> Self": devuelve el propio objeto ya comprobado (ver el import).
     @model_validator(mode="after")
     def comprobar_combinacion(self) -> Self:
         if self.decision == DecisionGate.VISITA_ACORDADA:

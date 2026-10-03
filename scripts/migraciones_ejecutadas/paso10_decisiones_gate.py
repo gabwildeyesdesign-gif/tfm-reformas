@@ -98,6 +98,7 @@ def existe_tabla():
     # interno de la tabla, o NULL si no existe. Es la forma de preguntar
     # "¿existe?" sin que Postgres lance un error si la respuesta es no.
     cur.execute("SELECT to_regclass(%s) IS NOT NULL;", (f"public.{TABLA}",))
+    # La única columna de la única fila: True o False.
     return cur.fetchone()[0]
 
 
@@ -109,44 +110,58 @@ def definicion_restriccion(tabla, nombre):
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = %s::regclass AND conname = %s;",
         (tabla, nombre),
     )
+    # Una fila si la restricción existe; None si no.
     fila = cur.fetchone()
+    # La definición si hay fila; None si no.
     return fila[0] if fila else None
 
 
 def restricciones_tabla():
     """Nombre -> definición de cada restricción de decisiones_gate (vacío si no existe)."""
+    # Sin tabla no hay restricciones (y "::regclass" daría error).
     if not existe_tabla():
         return {}
+    # SQL: nombre y definición de TODAS las restricciones de la tabla,
+    # ordenadas por nombre.
     cur.execute(
         "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = %s::regclass ORDER BY conname;",
         (TABLA,),
     )
+    # dict sobre pares (nombre, definición) da el diccionario nombre -> definición.
     return dict(cur.fetchall())
 
 
 def rls_activado():
     """True si la tabla tiene RLS activado (None si no existe)."""
+    # Sin tabla no hay nada que mirar.
     if not existe_tabla():
         return None
     # pg_class guarda una fila por tabla; relrowsecurity es el interruptor
     # de RLS de esa tabla.
     cur.execute("SELECT relrowsecurity FROM pg_class WHERE oid = %s::regclass;", (TABLA,))
+    # True o False.
     return cur.fetchone()[0]
 
 
 def regla():
     """(valor, descripción) de horas_recordatorio_gate, o None si no existe."""
+    # SQL: el valor y la descripción de la fila de reglas_negocio con esa clave.
     cur.execute("SELECT valor, descripcion FROM reglas_negocio WHERE clave = %s;", (CLAVE_REGLA,))
+    # La fila (valor, descripción), o None si no existe.
     return cur.fetchone()
 
 
 def mostrar_estado():
     """Imprime el estado de todo lo que toca esta migración."""
+    # La UNIQUE nueva de visitas (None si todavía no existe).
     print(f"    visitas.{UNIQUE_VISITAS}: {definicion_restriccion('visitas', UNIQUE_VISITAS)}")
+    # Si la tabla existe, y cada una de sus restricciones.
     print(f"    tabla {TABLA} existe: {existe_tabla()}")
     for nombre, definicion in restricciones_tabla().items():
         print(f"    {nombre}: {definicion}")
+    # El interruptor de RLS.
     print(f"    RLS activado: {rls_activado()}")
+    # La regla horas_recordatorio_gate, o "no existe".
     fila = regla()
     if fila is None:
         print(f"    {CLAVE_REGLA}: no existe")
@@ -156,6 +171,7 @@ def mostrar_estado():
         print(f"    {CLAVE_REGLA} = {fila[0]}  descripción: {fila[1]!r}")
 
 
+# Foto del estado ANTES de cambiar nada, para compararla con la del final.
 print("=== ANTES ===")
 mostrar_estado()
 
@@ -175,9 +191,13 @@ try:
     #
     # ALTER TABLE ... ADD CONSTRAINT no admite IF NOT EXISTS: la
     # repetibilidad se consigue preguntando antes a pg_constraint.
+    # Solo si todavía no existe: se crea.
     if definicion_restriccion("visitas", UNIQUE_VISITAS) is None:
+        # SQL: añade a visitas la restricción UNIQUE sobre la pareja
+        # (id, oportunidad_id), con su nombre propio.
         cur.execute(f"ALTER TABLE visitas ADD CONSTRAINT {UNIQUE_VISITAS} UNIQUE (id, oportunidad_id);")
         print(f"\n  1. visitas.{UNIQUE_VISITAS} -> creada")
+    # Si ya existía (segunda ejecución), no se toca.
     else:
         print(f"\n  1. visitas.{UNIQUE_VISITAS} ya existía: no se toca")
 
@@ -265,6 +285,7 @@ try:
         );
         """
     )
+    # "asegurada": creada ahora o ya existente (IF NOT EXISTS no distingue).
     print(f"  2. {TABLA} -> tabla asegurada")
 
     # ------------------------------------------------------------------
@@ -307,8 +328,10 @@ except Exception:
     print("  ERROR: rollback() ejecutado, no se ha cambiado nada")
     raise
 
+# Foto del estado DESPUÉS, para compararla con la de ANTES.
 print("\n=== DESPUÉS ===")
 mostrar_estado()
 
+# Se cierran el cursor y la conexión con la base de datos.
 cur.close()
 cn.close()

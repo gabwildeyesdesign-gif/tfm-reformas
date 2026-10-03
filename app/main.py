@@ -1,21 +1,41 @@
+# sys: módulo estándar; aquí se usa sys.stderr, el canal de salida de errores
+# de la consola, en el manejador de errores no controlados.
 import sys
+# asynccontextmanager: decorador estándar que convierte una función con
+# "yield" en un context manager asíncrono (algo que se usa con "async with").
+# Hace falta para el lifespan, que FastAPI espera con esa forma.
 from contextlib import asynccontextmanager
 
+# psycopg2: el driver de PostgreSQL; aquí solo se usa su clase de error
+# base, psycopg2.Error, en /health/db.
 import psycopg2
+# FastAPI: la clase de la aplicación web. HTTPException: excepción que
+# FastAPI convierte en una respuesta HTTP con el código que se le indique.
+# Request: el objeto con los datos de la petición (ruta, método...).
 from fastapi import FastAPI, HTTPException, Request
+# JSONResponse: construye a mano una respuesta HTTP con cuerpo JSON.
 from fastapi.responses import JSONResponse
+# Json: envoltorio de psycopg2 que convierte un diccionario de Python en
+# un valor JSONB al pasarlo como parámetro de una consulta.
 from psycopg2.extras import Json
 
+# Los cuatro routers del proyecto, cada uno con su propio archivo en
+# app/api/. "as ..._api" les da un nombre corto que deja claro de dónde
+# vienen cuando más abajo se hace app.include_router(...).
 from app.api import estimates as estimates_api
 from app.api import gate_decisions as gate_decisions_api
 from app.api import leads as leads_api
 from app.api import visits as visits_api
+# Las funciones del pool de conexiones (app/db/connection.py): abrirlo,
+# cerrarlo y pedirle prestada una conexión de lectura o de escritura.
 from app.db.connection import (
     close_pool,
     get_db_connection,
     get_transactional_connection,
     init_pool,
 )
+# mcp: el servidor MCP ya configurado (con su tool y su autenticación) en
+# app/mcp_server/server.py. Aquí solo se monta dentro de FastAPI.
 from app.mcp_server.server import mcp
 
 # Convertimos el servidor MCP en una aplicacion ASGI montable dentro de
@@ -24,6 +44,9 @@ from app.mcp_server.server import mcp
 mcp_app = mcp.http_app(path="/")
 
 
+# @asynccontextmanager es un decorador: envuelve la función de debajo para
+# que se pueda usar como "async with combined_lifespan(app):". FastAPI la
+# usa así: ejecuta hasta el "yield" al arrancar y el resto al apagarse.
 @asynccontextmanager
 async def combined_lifespan(app: FastAPI):
     """
@@ -103,6 +126,9 @@ LOG_ENTITY_TYPE_SISTEMA = "sistema"
 LOG_ENTITY_ID_SIN_ENTIDAD = 0
 
 
+# Este decorador registra la función de debajo como manejador de cualquier
+# excepción de tipo Exception (es decir, de casi todas) que ningún endpoint
+# haya capturado. El docstring de la función explica qué cubre y qué no.
 @app.exception_handler(Exception)
 def manejador_error_no_controlado(request: Request, exc: Exception):
     """
@@ -157,8 +183,19 @@ def manejador_error_no_controlado(request: Request, exc: Exception):
     # respuesta y ocultando el error original. Registrar es deseable;
     # responder es obligatorio.
     try:
+        # get_transactional_connection() presta una conexión del pool y, al
+        # salir del "with", hace commit si todo fue bien o rollback si hubo
+        # un error. Así el INSERT queda guardado sin un commit escrito aquí.
         with get_transactional_connection() as conn:
+            # El cursor es el objeto con el que se envían consultas por la
+            # conexión y se leen sus resultados.
             cursor = conn.cursor()
+            # SQL: inserta UNA fila en logs con el tipo de entidad
+            # "sistema", el id centinela 0, la acción "error_no_controlado"
+            # y el detalle (tipo, mensaje, ruta y método) como JSONB. Los
+            # %s los rellena psycopg2 con los valores de la tupla de
+            # debajo, en el mismo orden, de forma segura (sin pegar texto
+            # dentro del SQL).
             cursor.execute(
                 """
                 INSERT INTO logs (entity_type, entity_id, accion, detalle)
@@ -171,6 +208,8 @@ def manejador_error_no_controlado(request: Request, exc: Exception):
                     Json(detalle),
                 ),
             )
+            # Se cierra el cursor (no la conexión: esa la devuelve el
+            # "with" al pool al terminar).
             cursor.close()
     except Exception as error_registro:
         # Si el registro en la base de datos falla, NO se relanza la
@@ -214,12 +253,17 @@ def manejador_error_no_controlado(request: Request, exc: Exception):
     )
 
 
+# @app.get("/health") registra la función de debajo como la que atiende
+# las peticiones GET a la ruta /health.
 @app.get("/health")
 def health():
     """Endpoint minimo para comprobar que el servidor esta vivo."""
+    # FastAPI convierte este diccionario en una respuesta JSON con código
+    # 200: si llega, el servidor está arrancado y atendiendo.
     return {"status": "ok"}
 
 
+# Igual que el anterior, para GET /health/db.
 @app.get("/health/db")
 def health_db():
     """
@@ -236,11 +280,16 @@ def health_db():
         # el "with" nos presta una conexion del pool, y al salir (pase
         # lo que pase dentro) la devuelve sola gracias a su finally.
         with get_db_connection() as conn:
+            # Cursor para enviar la consulta (ver el manejador de arriba).
             cursor = conn.cursor()
+            # SQL: cuenta las filas de clientes. El número en sí no importa;
+            # lo que se comprueba es que Postgres responde a una consulta
+            # real sobre una tabla real.
             cursor.execute("SELECT COUNT(*) FROM clientes")
             # fetchone() devuelve una tupla con una sola fila, ej. (0,).
             # [0] saca el primer (y unico) valor de esa tupla.
             clientes_count = cursor.fetchone()[0]
+            # Se cierra el cursor; la conexión vuelve al pool con el "with".
             cursor.close()
     except psycopg2.Error as error:
         # psycopg2.Error es la clase base de la que heredan todos los
@@ -253,4 +302,5 @@ def health_db():
             detail=f"Error de base de datos: {error}",
         )
 
+    # Si se llega aquí, la consulta funcionó: 200 con el recuento.
     return {"status": "ok", "clientes_count": clientes_count}
