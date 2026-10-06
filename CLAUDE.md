@@ -164,6 +164,8 @@ SOLO LECTURA, quinto include_router, con la misma cabecera X-Gate-Secret
 que /gate-decisions (devuelve importes y datos personales de casos con
 Gate, que el Agente 2 no debe ver). No forma parte de los 5 endpoints
 originales.)
+(Nota 2026-10-06: GET /gate-avisos ya NO está pendiente de merge: está
+integrado en main, 002cf48, comprobado en GitHub.)
 create-followup-task sigue siendo un docstring de una línea.
 Lo que sigue es la especificación completa, no el estado actual.
 
@@ -345,6 +347,19 @@ SOLO REST.
 > plan docs/Plan_Endpoint_Aviso_Gate.txt). Misma regla: no hacer merge sin
 > la confirmación explícita de Gabi, y siempre con `--ff-only`.
 >
+> **(Nota 2026-10-06: el párrafo anterior está superado.)** GET
+> /gate-avisos/{oportunidad_id} está **integrado en `main` en 002cf48**
+> (fast-forward de la rama `feat/n0-aviso-gate`, 5 commits, confirmado por
+> Gabi; comprobado en GitHub el 2026-10-06: `main` = `002cf48`). La rama
+> `feat/n0-aviso-gate` sigue existiendo en GitHub, apuntando al mismo
+> commit; queda pendiente borrarla.
+> **No hay ningún bloque de backend abierto.** El trabajo actual está en n8n,
+> fuera de este repositorio: WF2 (aviso del Gate por email y Telegram)
+> funciona y está publicado; el formulario del Gate (registra la decisión
+> con POST /gate-decisions) está en curso. El siguiente bloque de backend
+> previsto es el listado de pendientes para el recordatorio de WF3 (en su
+> propia rama). Misma regla de siempre para cualquier merge.
+>
 > El router de n8n (D18.9: Chat Trigger → GET /leads/session/{lead_token}
 > → Switch → Agente 1 o Agente 2) se construye en n8n, fuera de este
 > repositorio; su endpoint está en main desde el 2026-09-25. Le falta el
@@ -365,6 +380,10 @@ SOLO REST.
 > de solo lectura para el aviso del Gate (antes de WF2), WF2, WF3, el
 > formulario de n8n con su credencial X-Gate-Secret, el mensaje del router
 > para 'perdida' y la deuda técnica D3.
+> (Nota 2026-10-06: de esa lista ya están hechos el endpoint de solo
+> lectura para el aviso del Gate (en main, 002cf48) y WF2 (publicado en
+> n8n). Siguen pendientes WF3, el formulario de n8n, el mensaje del router
+> para 'perdida' y la deuda técnica D3.)
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -517,6 +536,8 @@ prohibido por D4); N7 informe en la respuesta 72/75; N8 sin redondear el
 sin IVA 71/75 y 15/18. Regresión: check_gate_decisions_http 121/121,
 check_visits_http 55/55, check_lead_session_http 24/24. Suite completa
 34/34 en UNA pasada válida (ver "Suite de verificación").
+(Nota 2026-10-06: "pendiente de merge" ya no es cierto: integrado en main,
+002cf48.)
 
 check_tipo_reforma_constraint arreglado (rama feat/n0-gate-decisions,
 commit 145dcea, 2026-10-03): su comprobación final contaba TODAS las
