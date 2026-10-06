@@ -384,6 +384,32 @@ SOLO REST.
 > lectura para el aviso del Gate (en main, 002cf48) y WF2 (publicado en
 > n8n). Siguen pendientes WF3, el formulario de n8n, el mensaje del router
 > para 'perdida' y la deuda técnica D3.)
+>
+> **(Nota 2026-10-06, noche: corrige dos afirmaciones de este bloque que ya
+> no son ciertas.)**
+> 1. `main` está en `612a822`, no en `002cf48`. Las ramas
+>    `feat/n0-aviso-gate` y `docs/claude-md-estado-2026-10-06` ya NO existen
+>    en GitHub (comprobado con la lista de ramas del repositorio el
+>    2026-10-06). En GitHub siguen tres ramas antiguas, ya integradas en
+>    `main` (su último commit está en el historial de `main`):
+>    `feat/n0-schemas-leads` (11417fe), `feat/n0-calculate-estimate`
+>    (baedbfe) y `feat/n0-iva-y-seguimiento` (e74f4a6). Se pueden borrar.
+> 2. El formulario del Gate en n8n (`WF_formulario_gate`, Fase 1) ya NO
+>    está "en curso": está **cerrado y publicado** (2026-10-06). Llama a GET
+>    /gate-avisos y a POST /gate-decisions con la credencial X-Gate-Secret.
+>    Con él se registraron los descartes de los 5 casos de prueba 248-252
+>    (registros 489, 490, 492 y 493; el de la 250 no se anotó). Por lo
+>    tanto, de la lista de "Trabajo posterior" siguen pendientes WF3, el
+>    mensaje del router para 'perdida' y la deuda técnica D3. La rama de
+>    VISITA acordada (201) del formulario no se ha probado aún de punta a
+>    punta.
+> 3. WF2 lleva un ENLACE al formulario (un botón en el email y un enlace en
+>    Telegram) con el número de oportunidad ya escrito. No es un botón de
+>    aprobación: "sin botones ni nodo Wait" de D19 se sigue cumpliendo en el
+>    sentido de que WF2 no espera ninguna respuesta.
+> 4. **El repositorio es PÚBLICO** (comprobado en GitHub el 2026-10-06). Los
+>    JSON exportados de n8n llevan el chatId de Telegram y el email de
+>    administración: no se suben al repositorio sin sanearlos antes.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -489,7 +515,9 @@ POST /gate-decisions (rama feat/n0-gate-decisions, 2026-09-28 a
 plan): administración registra el resultado de su llamada a un cliente con
 Gate (D19): visita_acordada (fecha y hora; crea una visita 'confirmada' y
 la oportunidad pasa a 'visita_agendada') o descartar (motivo; pasa a
-'perdida'), con el informe siempre. Cabecera X-Gate-Secret propia. Tabla
+'perdida'), con el informe siempre. (Nota 2026-10-06: "pendiente de merge"
+ya no es cierto: integrado en main en 24cf60f, que está en el historial de
+main.) Cabecera X-Gate-Secret propia. Tabla
 nueva decisiones_gate (paso10 + paso10b, con RLS):
 check_migracion_decisiones_gate 38/38 (en negativo, quitando cada
 restricción, de 34/38 a 37/38). Reglas de fecha compartidas con /visits en
@@ -668,6 +696,12 @@ técnica, escrita por calculate-estimate como iva_pct_aplicado); cerrar los
 descartar) antes de activar WF3, lo hará Gabi; y una regla de negocio por
 decidir: las visitas no tienen antelación máxima (validar_fecha solo exige
 que la fecha sea futura, de lunes a viernes y dentro de una franja).)
+(Nota 2026-10-06: los 5 casos de prueba 248-252 YA están cerrados, con
+descartes registrados desde el formulario del Gate. WF3 ya se puede activar.
+Lo demás de la nota anterior sigue pendiente. Pendiente también:
+create-followup-task, uno de los 5 endpoints originales, sigue siendo un
+docstring de una línea: hay que implementarlo o justificar formalmente que
+sale del alcance de N0.)
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
@@ -715,6 +749,23 @@ rápida, no sustituye esa documentación. Contiene:
 - Plan_Endpoint_Gate_Decisions.txt — plan de POST /gate-decisions (D19,
   P1-P11, bloques con sus hashes y trabajo posterior). D19 no tiene todavía
   documento de decisiones propio: su contexto está en la sección 1.1.
+  (Nota 2026-10-06: los documentos de D19 a D24 existen en el Proyecto de
+  claude.ai de Gabi, pero NO están en este repositorio todavía; copiarlos
+  a docs/ está pendiente. Hasta entonces, aquí no se puede consultar su
+  texto.)
+- Plan_Endpoint_Aviso_Gate.txt — plan de GET /gate-avisos/{oportunidad_id}
+  (P1-P7 decididas, bloques A a D con sus hashes).
+- Plan_Ejecutor_Suite.txt — lanzador de la suite que impide la suspensión
+  de Windows. APLAZADO el 2026-10-03; lo sustituye la regla de uso de este
+  archivo.
+- Plan_calculate_estimate.txt — plan de POST /calculate-estimate.
+- Plan_Fase1_Autenticacion_Webhook.txt — SUPERADO (lo dice su primera
+  línea); lo implementado está en
+  TFM_Resumen_Sesion_Autenticacion_Webhook_y_Notas_N0.txt.
+
+Fuera de docs/: prompts/agente1_captura.md es el prompt del Agente 1
+(captura de datos en el chat). No está comprobado que coincida con el que
+tiene hoy el nodo del agente en n8n.
 
 ## Esquema de la base de datos: cuál de los dos .sql manda
 
