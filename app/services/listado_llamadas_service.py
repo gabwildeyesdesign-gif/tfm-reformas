@@ -66,6 +66,13 @@ from app.services.reglas_visita import ZONA_MADRID, ConfiguracionIncompleta
 CLAVE_RECORDATORIO_GATE = "horas_recordatorio_gate"
 CLAVE_SEGUIMIENTO = "horas_seguimiento_presupuesto"
 
+# Máximo de horas de cada regla: un año (P6 del plan, corregida el
+# 2026-10-07). Sin máximo, un valor enorme (reglas_negocio.valor admite
+# hasta 99.999.999) hacía que "ahora - esas horas" cayera fuera del rango
+# de fechas de Postgres: error "timestamp out of range" y respuesta 500 en
+# vez del 503 controlado (demostrado con una prueba real).
+MAX_HORAS_REGLA = 8760
+
 # Estados de la oportunidad de cada apartado (columna oportunidades.estado).
 ESTADO_GATE = "pendiente_aprobacion"
 ESTADO_POR_ABRIR = "presupuesto_enviado"
@@ -101,8 +108,8 @@ def validar_reglas_listado(leidas: dict[str, Decimal]) -> tuple[dict[str, int], 
     problemas: lista de textos, vacía si todo está bien. No se adivina
                ningún valor (P3 del plan: nada de 24 o 48 por defecto).
 
-    Una regla es válida si existe y su valor es un ENTERO mayor que 0, sin
-    máximo (P6): 24.50 o 0 son problemas.
+    Una regla es válida si existe y su valor es un ENTERO entre 1 y
+    MAX_HORAS_REGLA (8760, un año; P6): 24.50, 0 o 8761 son problemas.
     """
     # Las claves se toman de las constantes AHORA (no al cargar el archivo),
     # para que un cambio en memoria de una prueba se note aquí.
@@ -119,9 +126,11 @@ def validar_reglas_listado(leidas: dict[str, Decimal]) -> tuple[dict[str, int], 
         if valor is None:
             problemas.append(f"{clave}: no existe")
         # Existe pero tiene decimales (to_integral_value() redondea al
-        # entero: si cambia, los tenía) o no es mayor que 0.
-        elif valor != valor.to_integral_value() or valor <= 0:
-            problemas.append(f"{clave}: valor no válido ({valor}); debe ser un entero mayor que 0")
+        # entero: si cambia, los tenía), o no está entre 1 y el máximo.
+        elif valor != valor.to_integral_value() or not (1 <= valor <= MAX_HORAS_REGLA):
+            problemas.append(
+                f"{clave}: valor no válido ({valor}); debe ser un entero entre 1 y {MAX_HORAS_REGLA}"
+            )
         # Válida: se guarda como int (llegaba como Decimal('48.00')).
         else:
             reglas[clave] = int(valor)
@@ -386,37 +395,37 @@ def obtener_listado() -> ListadoLlamadasResponse:
     # get_db_connection(): conexión de solo lectura; al salir del "with"
     # hace rollback y la devuelve al pool, también si hay una excepción.
     with get_db_connection() as conn:
-        # El cursor envía las consultas y lee sus resultados.
-        cursor = conn.cursor()
+        # "with conn.cursor() as cursor": el cursor (que envía las
+        # consultas y lee sus resultados) se cierra SIEMPRE al salir de
+        # este bloque, también si salta una excepción (el 503 o un error
+        # de Postgres). La conexión la devuelve el "with" de fuera.
+        with conn.cursor() as cursor:
+            # 1. PRIMERA orden de la transacción: REPEATABLE READ (una sola
+            #    foto para las cinco consultas) y READ ONLY (Postgres rechaza
+            #    cualquier escritura). Tiene que ir antes de cualquier otra
+            #    consulta; si no, Postgres da error.
+            cursor.execute(SQL_MODO_TRANSACCION)
 
-        # 1. PRIMERA orden de la transacción: REPEATABLE READ (una sola
-        #    foto para las cinco consultas) y READ ONLY (Postgres rechaza
-        #    cualquier escritura). Tiene que ir antes de cualquier otra
-        #    consulta; si no, Postgres da error.
-        cursor.execute(SQL_MODO_TRANSACCION)
+            # 2. El reloj: now() de Postgres. Dentro de la transacción no
+            #    cambia, así que es el mismo "ahora" para todos los plazos.
+            cursor.execute("SELECT now();")
+            # fetchone()[0]: la única columna de la única fila.
+            ahora = cursor.fetchone()[0]
 
-        # 2. El reloj: now() de Postgres. Dentro de la transacción no
-        #    cambia, así que es el mismo "ahora" para todos los plazos.
-        cursor.execute("SELECT now();")
-        # fetchone()[0]: la única columna de la única fila.
-        ahora = cursor.fetchone()[0]
+            # 3. Las dos reglas. SQL: clave y valor de las filas cuya clave está
+            #    en la lista; "= ANY(%s)" es "igual a alguno de la lista".
+            cursor.execute(
+                "SELECT clave, valor FROM reglas_negocio WHERE clave = ANY(%s);",
+                ([CLAVE_RECORDATORIO_GATE, CLAVE_SEGUIMIENTO],),
+            )
+            # dict(...) sobre pares (clave, valor) crea el diccionario.
+            reglas, problemas = validar_reglas_listado(dict(cursor.fetchall()))
+            # Con algún problema: 503, SIN escribir ningún log (P3). Lanzarla
+            # dentro del "with" es seguro: no hay nada que confirmar.
+            if problemas:
+                raise ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIGURACION, problemas)
 
-        # 3. Las dos reglas. SQL: clave y valor de las filas cuya clave está
-        #    en la lista; "= ANY(%s)" es "igual a alguno de la lista".
-        cursor.execute(
-            "SELECT clave, valor FROM reglas_negocio WHERE clave = ANY(%s);",
-            ([CLAVE_RECORDATORIO_GATE, CLAVE_SEGUIMIENTO],),
-        )
-        # dict(...) sobre pares (clave, valor) crea el diccionario.
-        reglas, problemas = validar_reglas_listado(dict(cursor.fetchall()))
-        # Con algún problema: 503, SIN escribir ningún log (P3). Lanzarla
-        # dentro del "with" es seguro: no hay nada que confirmar.
-        if problemas:
-            raise ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIGURACION, problemas)
-
-        # 4. Los cinco apartados, en la misma transacción.
-        listado = leer_listado(cursor, reglas, ahora)
-        # Se cierra el cursor; la conexión la devuelve el "with" al pool.
-        cursor.close()
+            # 4. Los cinco apartados, en la misma transacción.
+            listado = leer_listado(cursor, reglas, ahora)
 
     return listado

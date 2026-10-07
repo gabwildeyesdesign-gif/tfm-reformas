@@ -342,7 +342,7 @@ dato personal; script en el scratchpad):
   |---|---|---|---|
   | 200 | — | Siempre que la llave sea correcta y las dos reglas existan y sean válidas (las listas pueden venir vacías) | — |
   | 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET en cualquiera de las dos cabeceras | NO |
-  | 503 | configuracion_incompleta | Falta horas_recordatorio_gate o horas_seguimiento_presupuesto, o su valor no es un entero > 0. faltan nombra las claves. NO se escribe log (1.10) | Inútil hasta que se arregle la regla, pero inofensivo (no escribe nada) |
+  | 503 | configuracion_incompleta | Falta horas_recordatorio_gate o horas_seguimiento_presupuesto, o su valor no es un entero > 0 [corregido 2026-10-07, P6: entero entre 1 y 8760]. faltan nombra las claves. NO se escribe log (1.10) | Inútil hasta que se arregle la regla, pero inofensivo (no escribe nada) |
   | 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
 
   No hay 422 (no hay entrada), ni 404 ni 409 (no se pide ninguna
@@ -551,7 +551,8 @@ Consulta 2, el reloj y las reglas:
     SELECT now();
     SELECT clave, valor FROM reglas_negocio WHERE clave = ANY(%s);
   - Se comprueba cada clave: existe, y su valor (NUMERIC(10,2), llega
-    como Decimal) es un ENTERO mayor que 0 (24.50 o 0 -> problema). Misma
+    como Decimal) es un ENTERO mayor que 0 (24.50 o 0 -> problema) [corregido
+    2026-10-07, P6: y como mucho 8760]. Misma
     forma que leer_reglas_visita: devuelve (reglas, problemas), sin
     adivinar nada. Con problemas -> 503 (sección 1.10).
   - Validación pura aparte, validar_reglas_listado(leidas), para probarla
@@ -693,6 +694,8 @@ ver R2.
       problema que nombra la clave. Y la rama else de la excepción: si NO
       sale ConfiguracionIncompleta cuando debe, FALLO explícito ("la
       excepción se ha tragado"), regla de CLAUDE.md.
+      [Añadido 2026-10-07, P6 corregida:] 8760 -> válido; 8761 y 99999999
+      -> problema (503), en las dos reglas.
   S4. contacto_de: con 'contacto' -> sus datos y origen "solicitud"; sin
       'contacto' -> nombre y telefono None y origen "no_disponible".
   S5. LÍMITE EXACTO del plazo, contra la base de datos, SIN dejar nada:
@@ -809,6 +812,11 @@ ver R2.
     Y no se ha escrito ningún log que mencione ese nombre falso (marca
     propia: logs con id > id_base y detalle que contenga el uuid -> 0).
     Se restaura el nombre real y se comprueba que vuelve el 200.
+    [Añadido 2026-10-07, P6 corregida:] valor fuera de rango por HTTP, sin
+    tocar la fila: se envuelve EN MEMORIA validar_reglas_listado para que
+    reciba 99999999 (y 8761) en horas_seguimiento_presupuesto en lugar del
+    valor leído, y llame a la función real -> 503 configuracion_incompleta,
+    "faltan" con el valor y el rango; nunca 500.
   CASO 14 - Solo lectura (pre-decisión 3): antes y después de una tanda de
     200, 401 y 503, los recuentos de filas PROPIAS en clientes, leads,
     oportunidades, presupuestos, visitas, decisiones_gate y logs (los de
@@ -852,6 +860,9 @@ ver R2.
   N10. Sin la exclusión de d): fallan el CASO 8 ("no en d") y el CASO 9.
   N11. Plazos escritos en el código (24 y 48 fijos, sin leer
        reglas_negocio): falla el CASO 13 (da 200 con la clave falsa).
+  N12. [Añadida 2026-10-07, revisión del tutor] Sin el máximo de 8760: el
+       caso 99999999 da 500 por HTTP en el CASO 13 (y 8761 da 200), y en
+       S3 los casos 8761 y 99999999 dejan de ser problema.
 
 6.5 Regresión y suite
   check_aviso_gate_http (75/75), check_gate_decisions_http (121/121),
@@ -1010,6 +1021,22 @@ ver R2.
     P5. DECIDIDA: "sin visita" = ninguna visita salvo las canceladas.
     P6. DECIDIDA: horas_seguimiento_presupuesto, entero mayor que 0, sin
         máximo.
+        [CORREGIDA 2026-10-07, revisión del tutor sobre 011b668: DECIDIDA,
+        entero entre 1 y 8760 (un año), para las DOS reglas
+        (MAX_HORAS_REGLA en el servicio); un valor mayor es un problema
+        más -> 503 configuracion_incompleta, con su texto en "faltan".
+        La afirmación anterior ("sin máximo: un valor enorme solo vacía el
+        apartado") era FALSA y no estaba comprobada. Comprobado el
+        2026-10-07 con una prueba real (transacción READ ONLY terminada en
+        ROLLBACK, sin tocar la fila): validar_reglas_listado aceptaba
+        99999999.00 (el mayor entero de NUMERIC(10,2)), y leer_listado con
+        ese valor lanzaba DatetimeFieldOverflow, pgcode 22008, "timestamp
+        out of range" (por HTTP, un 500). El SQL suelto: 8760 h -> 2025,
+        10.000.000 h -> año 885; 20.000.000 h -> Postgres sí lo calcula
+        (antes de Cristo), pero Python no puede representar el año -256
+        (ValueError; en leer_listado no ocurre, porque esa fecha solo se
+        compara dentro del SQL); 99.999.999 h -> "timestamp out of range".
+        Con el máximo: 8760 válido; 8761, 99999999, 0 y 24.50 -> problema.]
     P7. DECIDIDA: se incluyen generado_en, dia_visitas y reglas.
     P8. DECIDIDA y CONFIRMADA por Gabi el 2026-10-07 (D25.16; no afecta
         al código): los casos de prueba antiguos NO se tocan en esta rama
