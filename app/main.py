@@ -29,6 +29,10 @@ from app.api import aviso_gate as aviso_gate_api
 from app.api import estimates as estimates_api
 from app.api import gate_decisions as gate_decisions_api
 from app.api import leads as leads_api
+# Router de GET /llamadas-del-dia: la lista diaria de llamadas de WF3, solo
+# lectura (desde el 2026-10-07, el sexto; plan
+# docs/Plan_Endpoint_Listado_WF3.txt).
+from app.api import listado_llamadas as listado_llamadas_api
 from app.api import visits as visits_api
 # Las funciones del pool de conexiones (app/db/connection.py): abrirlo,
 # cerrarlo y pedirle prestada una conexión de lectura o de escritura.
@@ -123,6 +127,13 @@ app.include_router(gate_decisions_api.router)
 # misma llave que /gate-decisions (X-Gate-Secret), porque devuelve importes
 # y datos personales de casos con Gate que el Agente 2 no debe ver.
 app.include_router(aviso_gate_api.router)
+
+# Sexto router: GET /llamadas-del-dia (app/api/listado_llamadas.py). Solo
+# REST, sin tool MCP, y de SOLO LECTURA: lo llama WF3 (n8n) cada día
+# laborable para enviar a administración la lista de llamadas. Usa la
+# llave del Gate (X-Gate-Secret), porque devuelve nombres y teléfonos de
+# todos los clientes pendientes, que el Agente 2 no debe ver.
+app.include_router(listado_llamadas_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna

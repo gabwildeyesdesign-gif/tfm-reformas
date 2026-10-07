@@ -8,6 +8,9 @@ Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
 [Actualizado 2026-10-07: Bloque A APROBADO por el tutor sobre a04d4c4.
 P1-P9 DECIDIDAS (sección 10) y plazos decididos (D25.15, sección 3.2).
 Bloque B en curso.]
+[Actualizado 2026-10-07: Bloque B APROBADO (39c117b), con la desviación
+del check aceptada (sin valor exacto ni recuento de toda la tabla). P8
+confirmada por Gabi (D25.16). Bloque C en curso.]
 
 Fuentes: el encargo del Bloque A del 2026-10-07 (decisiones D25.2, D25.4,
 D25.7 y D25.8 ya tomadas, y pre-decisiones 1-10 del tutor), la Adenda (fila
@@ -991,7 +994,7 @@ ver R2.
     10 Recogida en la sección 8.
 
   Preguntas P1-P9, DECIDIDAS el 2026-10-07 (revisión del tutor sobre
-  a04d4c4; P8 pendiente de confirmar por Gabi):
+  a04d4c4; P8 confirmada por Gabi el mismo día, D25.16):
     P1. DECIDIDA: GET /llamadas-del-dia.
     P2. DECIDIDA: apartados separados y "motivo" en cada elemento. En
         textos y documentos, la etiqueta del apartado a) es "Gate sin
@@ -1008,10 +1011,11 @@ ver R2.
     P6. DECIDIDA: horas_seguimiento_presupuesto, entero mayor que 0, sin
         máximo.
     P7. DECIDIDA: se incluyen generado_en, dia_visitas y reglas.
-    P8. DECIDIDA (pendiente de confirmar por Gabi; no afecta al código):
-        los casos de prueba antiguos NO se tocan en esta rama ni a mano.
-        Se cerrarán desde el formulario cuando exista la ampliación de
-        seguimientos. Precisión de números: la revisión habla de "los 8
+    P8. DECIDIDA y CONFIRMADA por Gabi el 2026-10-07 (D25.16; no afecta
+        al código): los casos de prueba antiguos NO se tocan en esta rama
+        ni a mano. Se cerrarán desde el formulario cuando exista la
+        ampliación de seguimientos, y servirán como datos de prueba de esa
+        ampliación. Precisión de números: la revisión habla de "los 8
         casos"; son los 8 seguimientos por abrir de hoy (B6), de los que
         4 son de leads sin 'contacto' (H4), que eran el objeto de la
         pregunta. La decisión es la misma para los 8.
