@@ -593,8 +593,9 @@ laborable), cada elemento con oportunidad_id, motivo, tipo_reforma,
 contacto {nombre, telefono, origen} y sus fechas en hora de Madrid. NUNCA
 email ni importes. Plazos ESTRICTOS desde presupuestos.created_at con
 horas_recordatorio_gate (24) y horas_seguimiento_presupuesto (48, regla
-NUEVA, migración paso11), enteros entre 1 y 8760 (sin máximo, 99.999.999
-daba "timestamp out of range" y un 500: demostrado y corregido). Solo
+NUEVA, migración paso11), enteros entre 1 y 8760 (antes no había máximo y
+99.999.999 daba "timestamp out of range" y un 500: demostrado y
+corregido). Solo
 lectura con SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY como
 primera orden; 503 configuracion_incompleta SIN log, con [AVISO] en stderr.
 Contrato y limitaciones: fila 8 y sección 5.7 de la Adenda.
