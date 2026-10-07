@@ -1,0 +1,1053 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: regla de 48 h y endpoint de SOLO LECTURA con la lista diaria de
+llamadas para WF3 (GET /llamadas-del-dia, nombre propuesto en 1.2)
+
+Documento de plan · Nivel N0 · 2026-10-07 · Rama feat/n0-listado-wf3
+(desde main = ead4b3e)
+Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+
+Fuentes: el encargo del Bloque A del 2026-10-07 (decisiones D25.2, D25.4,
+D25.7 y D25.8 ya tomadas, y pre-decisiones 1-10 del tutor), la Adenda (fila
+5 y secciones 2, 3, 5.4 y 5.6), docs/Plan_Endpoint_Aviso_Gate.txt (modelo
+de formato: es el último endpoint de solo lectura), el código y la base de
+datos real, comprobados el mismo día (sección 0).
+
+Nota sobre nombres: D25.x son las decisiones de Gabi citadas en el encargo.
+El documento de D25 NO está en este repositorio (tampoco los de D19 a D24,
+según CLAUDE.md); aquí se recogen tal como las cita el encargo, sin poder
+contrastar su texto. P1-P9 son las preguntas abiertas de ESTE plan
+(sección 10); no tienen nada que ver con las P de otros planes. Las
+"pre-decisiones" son las 10 del tutor en el encargo.
+
+
+================================================================
+0. COMPROBACIONES HECHAS ANTES DE ESCRIBIR ESTE PLAN (solo lectura)
+================================================================
+
+Leído:
+  - CLAUDE.md, entera ("Cómo trabajamos", regla de uso de la suite con la
+    nota del 2026-10-03, limitación P4, puertos, borrados, gotchas).
+  - Adenda: fila 5 de la tabla y sección 2 (create-followup-task y sus dos
+    disparadores), sección 3 (flujo del Gate, recordatorio de WF3 en el
+    paso 5), 5.4 (POST /visits: estados de visita, 503, festivos) y 5.6
+    (GET /gate-avisos: llave, contacto, solo lectura).
+  - docs/Plan_Endpoint_Aviso_Gate.txt, entero (modelo de este plan).
+  - Código modelo: app/api/aviso_gate.py, app/services/aviso_gate_service.py,
+    app/schemas/aviso_gate.py, app/api/security.py (verificar_gate_secret),
+    app/services/visits_service.py, app/services/reglas_visita.py,
+    app/db/connection.py (get_db_connection) y el paso 6b de
+    app/services/estimate_service.py.
+  - scripts/migraciones_ejecutadas/paso10_decisiones_gate.py (modelo de
+    migración que añade una regla) y paso7_iva_y_seguimiento.py (D13).
+  - scripts/check_aviso_gate_http.py (modelo de pruebas) y la prueba 2b de
+    scripts/check_visits_service.py (el 503 provocado EN MEMORIA, sin tocar
+    reglas_negocio).
+  - docs/schema_actual.sql: oportunidades, presupuestos, leads, visitas,
+    reglas_negocio y logs.
+  - docs/TFM_Decisiones_Modelo_Datos_Leads.txt (estado
+    seguimiento_pendiente) e Informe_Decisiones_N0 (fila de D13).
+  - git log --oneline -8 y git status -sb: main = origin/main = ead4b3e,
+    árbol limpio. El "main = ead4b3e" del encargo es correcto.
+
+Comprobado en el CÓDIGO:
+  - C1. app/api/followup_tasks.py y app/services/followup_service.py son
+    un docstring de una línea cada uno: nadie escribe todavía
+    'seguimiento_pendiente' (lo hará create-followup-task, rama siguiente).
+  - C2. estimate_service (paso 6b) pasa la oportunidad de 'nueva' a
+    'presupuesto_enviado' (sin Gate) o 'pendiente_aprobacion' (con Gate)
+    en la MISMA transacción que el INSERT del presupuesto. Por tanto
+    presupuestos.created_at es, a efectos prácticos, el momento en que la
+    oportunidad entró en esos dos estados.
+  - C3. POST /gate-decisions escribe fecha_ultimo_contacto = now() (P5 de
+    su plan). Ningún otro endpoint la escribe hoy.
+  - C4. POST /visits deja la oportunidad en 'visita_agendada' y la visita
+    en 'solicitada'; POST /gate-decisions (visita_acordada) crea la visita
+    ya 'confirmada'. NINGÚN endpoint pasa una visita de 'solicitada' a
+    'confirmada' (Adenda 5.4), y NINGUNO saca a una oportunidad de
+    'seguimiento_pendiente' salvo POST /visits (lo admite como estado de
+    partida).
+  - C5. El 503 de /visits escribe un log visita_configuracion_incompleta
+    ASOCIADO A UNA OPORTUNIDAD (logs.entity_id = oportunidad_id) y difiere
+    la excepción hasta después del commit. logs.entity_id es INTEGER NOT
+    NULL (schema_actual.sql).
+  - C6. get_db_connection() presta una conexión ya validada (SELECT 1 +
+    rollback) y termina con rollback. La siguiente orden que se envíe abre
+    una transacción nueva.
+  - C7. "creado_en" no aparece en NINGÚN archivo del repositorio (grep en
+    .py, .txt, .md y .sql: 0 resultados). Ver H3.
+  - C8. El patrón de contacto de GET /gate-avisos (P1 de su plan):
+    datos_estructurados -> 'contacto', con origen "solicitud" o
+    "no_disponible"; nunca la ficha de clientes. OrigenContacto vive en
+    app/schemas/aviso_gate.py.
+
+Comprobado en la BASE DE DATOS REAL (2026-10-07, now() = 13:09 UTC =
+15:09 en Madrid; solo SELECT en una sesión readonly, sin imprimir ningún
+dato personal; script en el scratchpad):
+  - B1. Oportunidades por estado: nueva 8, pendiente_aprobacion 1,
+    perdida 5, presupuesto_enviado 12, visita_agendada 1. TOTAL 27.
+    (cualificada, seguimiento_pendiente y ganada: 0.)
+  - B2. Visitas por estado: confirmada 1. TOTAL 1. (solicitada,
+    completada y cancelada: 0.) La única visita activa es del 13/10/2026
+    y su oportunidad está en 'visita_agendada'.
+  - B3. Presupuestos: 19, de ellos 7 con Gate. Como mucho uno por
+    oportunidad (UNIQUE, confirmado: máximo 1).
+  - B4. fecha_ultimo_contacto NO NULL: 6 oportunidades (visita_agendada 1
+    y perdida 5), todas escritas por POST /gate-decisions (C3).
+  - B5. reglas_negocio (12 filas): horas_recordatorio_gate = 24.00 EXISTE
+    (paso10). NO existe ninguna regla de horas de seguimiento: la de 48 h
+    hay que crearla (paso11). Las demás: dias_espera_decision_post_visita
+    5, duracion_visita_min 60, iva_estandar_pct 21, margen_empresa_pct 15,
+    max_fotos_lead 5, recargo_informe_tecnico 600,
+    umbral_aprobacion_manual 10000 (OBSOLETA), y las 4 de franjas.
+  - B6. Candidatos de HOY con 24 h y 48 h:
+      a) Gates sin decisión de más de 24 h: 1.
+      b) Seguimientos por abrir de más de 48 h: 8; de ellos, 4 de leads
+         SIN la clave 'contacto' (ver H4).
+      c) Seguimientos abiertos: 0.
+      d) Visitas 'solicitada': 0.
+      e) Visitas del próximo día laborable (jueves 08/10/2026): 0.
+      'presupuesto_enviado' con alguna visita activa: 0.
+  - B7. presupuestos.created_at - oportunidades.created_at: mínimo 1,7 s,
+    máximo 18 min. Hoy da casi igual una base que otra; ver H3 para por
+    qué no da igual en general.
+  - B8. Transacción "REPEATABLE READ, READ ONLY" a través del Session
+    pooler de Supabase: aceptada (SHOW transaction_isolation = repeatable
+    read; transaction_read_only = on), y un "UPDATE logs ... WHERE false"
+    dentro de ella se rechaza con ReadOnlySqlTransaction (código 25006).
+    Es la base de 1.9.
+  - B9. Los puertos 8024 y 8025: nadie escucha y ningún script los usa
+    (los usados son 8010, 8011, 8012, 8015, 8016, 8018, 8019 y 8023).
+
+
+================================================================
+1. CONTRATO
+================================================================
+
+1.1 Quién lo llama y para qué
+  WF3 (n8n, todavía no construido) se ejecutará cada día laborable a las
+  9:00 y enviará a administración UNA lista con las llamadas del día
+  (D25.2). n8n no lee la base de datos (D21.6), así que necesita que un
+  endpoint le dé esa lista ya hecha. Este endpoint NO cambia ningún
+  estado: el paso de 'presupuesto_enviado' a 'seguimiento_pendiente' lo
+  hará POST /create-followup-task, en la rama siguiente, llamado por WF3
+  para cada elemento del apartado "seguimientos por abrir".
+
+  Validación de la pre-decisión 1 (solo REST, sin tool MCP): CORRECTA. Lo
+  llama un workflow determinista. Una tool MCP pondría nombres y teléfonos
+  de muchos clientes al alcance de un agente, y ningún agente lo necesita.
+
+1.2 Ruta (pre-decisión 9), con su Regla de Tres
+  a) GET /llamadas-del-dia                                   [PROPUESTA]
+     A favor: dice lo que devuelve, en el idioma de quien lo usa
+     (administración recibe "las llamadas del día"), y no depende de qué
+     workflow lo llame. En contra: "del día" podría hacer pensar que admite
+     una fecha; no la admite: la lista se calcula en el momento de la
+     llamada (1.4).
+  b) GET /wf3/listado (o /barridos/diario)
+     A favor: deja claro quién lo usa. En contra: ata la API al nombre de
+     un workflow de n8n, y esa numeración ya se redefinió una vez (P8 del
+     plan de /gate-decisions); si vuelve a cambiar, la ruta mentiría.
+  c) GET /seguimientos/pendientes
+     A favor: corta. En contra: los Gates y las visitas NO son
+     seguimientos; y "seguimientos" es justo el dominio de
+     create-followup-task y de la ampliación de D25.9-D25.11, que podría
+     necesitar esa ruta para otra cosa.
+  Propuesta: a). Pregunta abierta P1.
+
+1.3 Autenticación (pre-decisión 2): X-Gate-Secret
+  dependencies=[Depends(verificar_gate_secret)], la misma de POST
+  /gate-decisions y GET /gate-avisos. NO verificar_webhook_secret:
+  WEBHOOK_SECRET lo tiene la herramienta HTTP del Agente 2, y este
+  endpoint devuelve nombres y teléfonos de todos los clientes pendientes.
+  Validación: CORRECTA. Es una herramienta de administración, y WF3 usará
+  la misma credencial "Header Auth" PROPIA del Gate que ya tienen WF2 y el
+  formulario (nunca la del Agente 2).
+  El 401 es idéntico al de /leads, /gate-decisions y /gate-avisos (misma
+  función _no_autorizado): {"detail": "No autorizado"} con
+  WWW-Authenticate: APIKey.
+  Pruebas obligatorias (sección 6): el valor de WEBHOOK_SECRET da 401 en
+  X-Gate-Secret y en X-Webhook-Secret, y prueba en negativo N1 con la
+  dependencia cambiada a la del webhook.
+
+1.4 Entrada
+  NINGUNA: ni cuerpo, ni parámetros de ruta, ni parámetros de consulta. La
+  lista depende solo del reloj de la base de datos (now() de Postgres, el
+  mismo criterio que validar_fecha en reglas_visita.py) y de los datos.
+  Consecuencia: no hay 422 posible. Un parámetro de consulta desconocido
+  (por ejemplo ?fecha=...) FastAPI lo ignora; no se usa para nada.
+  Por qué sin fecha: una fecha de entrada permitiría pedir "la lista de
+  otro día", que no tiene sentido con datos que cambian (el estado de hoy
+  no es el de ayer) y abriría casos de prueba sin uso real.
+
+1.5 Respuesta 200, campo a campo
+  Todas las fechas con hora, en hora de Madrid con su desfase (como en
+  /visits, /gate-decisions y /gate-avisos): Postgres devuelve TIMESTAMPTZ
+  en UTC y el servicio lo pasa a ZONA_MADRID con .astimezone(), así que en
+  el JSON sale "2026-10-08T09:00:00+02:00" o "...+01:00" según el día.
+
+  Nivel raíz:
+    generado_en            now() de Postgres al hacer la consulta, en hora
+                           de Madrid. Es el "ahora" con el que se midieron
+                           todos los plazos (una sola transacción, 3.4).
+    dia_visitas            La fecha (YYYY-MM-DD, sin hora) del próximo día
+                           laborable, en Madrid: el día del apartado
+                           visitas_proximo_laborable (3.3). Sirve a WF3
+                           para titular ese apartado ("visitas del lunes
+                           12/10").
+    reglas                 Objeto con los dos plazos usados, leídos de
+                           reglas_negocio en ESTA llamada:
+                             horas_recordatorio_gate        (entero, 24)
+                             horas_seguimiento_presupuesto  (entero, 48)
+                           Así el email de WF3 puede decir "más de 24 h"
+                           sin escribir el número en n8n (D13, D25.7).
+                           No son datos personales. Ver P7.
+    gates_sin_decision           lista de LlamadaOportunidad   (apartado a)
+    seguimientos_por_abrir       lista de LlamadaOportunidad   (apartado b)
+    seguimientos_abiertos        lista de LlamadaOportunidad   (apartado c)
+    visitas_sin_confirmar        lista de LlamadaVisita        (apartado d)
+    visitas_proximo_laborable    lista de LlamadaVisita        (apartado e)
+  Las cinco listas existen SIEMPRE (vacías: []), nunca null, para que n8n
+  no tenga que distinguir "no hay" de "no ha venido".
+
+  LlamadaOportunidad (apartados a, b y c):
+    oportunidad_id         oportunidades.id. El único identificador: el
+                           formulario del Gate y create-followup-task
+                           trabajan con él.
+    motivo                 Etiqueta fija del apartado (D25.8, ver H1 y
+                           P2): 'gate_sin_decision', 'seguimiento_por_abrir'
+                           o 'seguimiento_abierto'. Lista cerrada (Enum).
+    tipo_reforma           oportunidades.tipo_reforma (la columna, "el
+                           dato de negocio"; TipoReforma de common.py).
+    contacto               Objeto ContactoLlamada (abajo).
+    fecha_presupuesto      presupuestos.created_at, en hora de Madrid: la
+                           fecha que justifica estar en la lista (3.1).
+
+  LlamadaVisita (apartados d y e):
+    oportunidad_id         visitas.oportunidad_id.
+    motivo                 'visita_sin_confirmar' o
+                           'visita_proximo_laborable' (P2).
+    tipo_reforma           oportunidades.tipo_reforma.
+    contacto               Objeto ContactoLlamada.
+    estado_visita          visitas.estado: 'solicitada' o 'confirmada'
+                           (Enum de dos valores: solo esos dos pueden
+                           salir).
+    fecha_visita           visitas.fecha_propuesta, en hora de Madrid (el
+                           inicio de la visita).
+    fecha_solicitud_visita visitas.created_at, en hora de Madrid: cuándo se
+                           pidió (o se acordó) la visita. Es la fecha que
+                           justifica el apartado d) ("lleva X días sin
+                           confirmar").
+
+  ContactoLlamada (misma regla que GET /gate-avisos, P1 de su plan):
+    nombre                 leads.datos_estructurados -> 'contacto' ->> 'nombre'
+    telefono               leads.datos_estructurados -> 'contacto' ->> 'telefono'
+    origen                 "solicitud" si el lead tiene la clave
+                           'contacto'; "no_disponible" si no la tiene, y
+                           entonces nombre y telefono salen null. NUNCA la
+                           ficha de clientes. Reutiliza el Enum
+                           OrigenContacto de app/schemas/aviso_gate.py.
+    SIN email (pre-decisión 6): para llamar basta el teléfono, y la ficha
+    completa ya la da el formulario (GET /gate-avisos) en los casos con
+    Gate. Por eso NO se reutiliza ContactoAviso, que sí tiene email.
+
+  Lo que NO sale (minimización, RGPD, pre-decisión 6): email, cualquier
+  importe (con o sin IVA), umbral, iva_pct_aplicado, motivo_gate,
+  lead_token, cliente_id, lead_id, presupuesto_id, visita_id, m2,
+  nivel_acabados, fotos, texto_cliente de la visita, el informe del Gate,
+  canal, mensaje_original, confianza_ia, prioridad, estado de la
+  oportunidad (el apartado ya lo dice) y los datos de la ficha de
+  clientes. Defensa doble, como en /gate-avisos: las consultas no los leen
+  y todos los modelos de la respuesta tienen extra="forbid".
+
+1.6 Los cinco apartados (pre-decisión 4), con su condición exacta
+  "Plazo" = presupuestos.created_at < now() - <horas de la regla>
+  (ESTRICTO: "más de 24 h"; justo en el límite NO entra; ver 3.2).
+
+  a) gates_sin_decision
+       oportunidades.estado = 'pendiente_aprobacion'
+       Y plazo con horas_recordatorio_gate.
+     No hace falta mirar decisiones_gate: POST /gate-decisions cambia el
+     estado en la misma transacción en que registra la decisión, así que
+     una oportunidad en 'pendiente_aprobacion' no tiene decisión (y al
+     registrarla "el recordatorio se detiene solo", Adenda 3, paso 5).
+     Orden: presupuestos.created_at ascendente (lo más antiguo primero),
+     y oportunidades.id como desempate.
+
+  b) seguimientos_por_abrir
+       oportunidades.estado = 'presupuesto_enviado'
+       Y oportunidades.fecha_ultimo_contacto IS NULL
+       Y ninguna visita de esa oportunidad en un estado distinto de
+         'cancelada' (P5)
+       Y plazo con horas_seguimiento_presupuesto.
+     "Sin visita": una visita 'cancelada' solo existe hoy cuando otra la
+     sustituye (POST /visits), así que no cuenta; una 'completada' sí
+     cuenta (el cliente SÍ reservó y la visita se hizo). Hoy, con los
+     endpoints de N0, una oportunidad en 'presupuesto_enviado' nunca
+     tiene visita (POST /visits la pasa a 'visita_agendada', C4): esta
+     condición es una DEFENSA frente a ediciones a mano, y la prueba lo
+     comprueba con una visita insertada por SQL (6.3, CASO 5).
+     Orden: como a).
+
+  c) seguimientos_abiertos
+       oportunidades.estado = 'seguimiento_pendiente'.
+     Sin plazo: ya pasaron las 48 h cuando se abrió. Hoy 0 filas (nadie
+     escribe ese estado hasta create-followup-task).
+     Orden: como a). La "fecha que justifica" es fecha_presupuesto; la de
+     apertura del seguimiento no existe todavía (la definirá
+     create-followup-task; fuera de alcance, sección 8).
+
+  d) visitas_sin_confirmar
+       visitas.estado = 'solicitada'
+       Y la visita NO cae en dia_visitas (esas van solo en e; ver H5 y
+         P4: "sin repeticiones").
+     Incluye solicitudes con fecha ya pasada (P9): administración tiene
+     que llamar igual. Hoy 0 filas.
+     Orden: visitas.created_at ascendente (la petición más antigua
+     primero), visitas.id como desempate.
+
+  e) visitas_proximo_laborable
+       visitas.estado IN ('solicitada', 'confirmada')
+       Y fecha_propuesta >= inicio de dia_visitas en Madrid
+       Y fecha_propuesta <  inicio del día siguiente en Madrid.
+     dia_visitas = el siguiente día de lunes a viernes después de HOY en
+     Madrid (3.3). Festivos: no se tienen en cuenta (misma limitación que
+     las visitas, Adenda 5.4).
+     Orden: fecha_propuesta ascendente (la visita más temprana del día
+     primero), visitas.id como desempate.
+
+  Sin repeticiones (D25.2): con los endpoints de N0, una oportunidad solo
+  puede estar en dos apartados a la vez en un caso: una visita
+  'solicitada' para dia_visitas (d y e). La exclusión de d) lo resuelve.
+  Los apartados a, b y c se excluyen entre sí por el estado; y una
+  oportunidad con visita activa está en 'visita_agendada', que no es
+  ninguno de los tres. La prueba lo comprueba (6.3, CASO 9: ningún
+  oportunidad_id propio sale dos veces en la respuesta).
+  Interpretación de D25.2 (P4): "sin repeticiones dentro del día" = un
+  barrido diario y ningún elemento dos veces en la misma lista. Que un
+  Gate sin decidir vuelva a salir MAÑANA es lo esperado: es el
+  recordatorio diario (Adenda 3, paso 5).
+
+1.7 Tabla de códigos
+  Formato de los errores de negocio: el mismo que /visits y
+  /gate-decisions, {"detail": {"motivo": "<código>", "mensaje": "<texto>",
+  "faltan": [...]}} en el 503.
+
+  | Código | motivo | Cuándo | Reintento en n8n |
+  |---|---|---|---|
+  | 200 | — | Siempre que la llave sea correcta y las dos reglas existan y sean válidas (las listas pueden venir vacías) | — |
+  | 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET en cualquiera de las dos cabeceras | NO |
+  | 503 | configuracion_incompleta | Falta horas_recordatorio_gate o horas_seguimiento_presupuesto, o su valor no es un entero > 0. faltan nombra las claves. NO se escribe log (1.10) | Inútil hasta que se arregle la regla, pero inofensivo (no escribe nada) |
+  | 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+  No hay 422 (no hay entrada), ni 404 ni 409 (no se pide ninguna
+  oportunidad concreta), ni 201 (no crea nada).
+
+1.8 Orden de las comprobaciones
+  401 -> 503 (reglas) -> 200.
+  Las reglas se leen ANTES que cualquier dato personal: con la
+  configuración rota, el servicio no llega a leer ni un nombre.
+
+1.9 Solo lectura de verdad (pre-decisión 3)
+  Tres barreras:
+    1. get_db_connection() (la conexión de solo lectura, que termina con
+       rollback), no get_transactional_connection().
+    2. NUEVA respecto a /gate-avisos: la primera orden de la transacción
+       es SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY.
+       READ ONLY hace que el PROPIO POSTGRES rechace cualquier INSERT,
+       UPDATE o DELETE (error 25006, comprobado a través del pooler, B8):
+       aunque alguien añadiera por error una escritura, no podría
+       ejecutarse. REPEATABLE READ: ver 3.4.
+    3. Ningún FOR UPDATE: leer no necesita impedir que otros escriban.
+  No escribe en logs, ni en fecha_ultimo_contacto, ni en updated_at.
+  Validación de la pre-decisión 3: CORRECTA, y reforzada con la barrera 2.
+  Consecuencia: la base de datos no registra si WF3 ya mandó la lista de
+  hoy. Eso es cosa de WF3 (D25.2: un barrido al día), igual que "una sola
+  vez" en WF2.
+
+1.10 El 503 sin log (pre-decisión 7 frente a la 3), con su Regla de Tres
+  Contradicción detectada: la pre-decisión 7 pide "503 con log conservado
+  como en visits", y la 3 "no escribe NADA (ni logs)". Además, el log de
+  /visits va asociado a una oportunidad (C5: logs.entity_id es NOT NULL),
+  y aquí no hay ninguna.
+  a) 503 SIN log: la traza queda en la ejecución fallida de WF3 en n8n
+     (que la ve WF4, el workflow de errores) y en una línea [AVISO] en el
+     stderr del uvicorn, que nombra las claves. [PROPUESTA]
+     A favor: se mantiene la pre-decisión 3 sin excepciones (y la barrera
+     READ ONLY de 1.9 no necesita agujeros); WF3 se ejecuta cada día a una
+     hora fija, así que un 503 no pasa desapercibido: el email no llega y
+     n8n marca la ejecución como fallida. En contra: no queda rastro en la
+     base de datos, a diferencia de /visits.
+  b) 503 CON log, escrito en una segunda conexión transaccional aparte.
+     En contra: rompe la pre-decisión 3; y como no hay oportunidad, habría
+     que inventar una entidad (entity_type 'sistema', entity_id 0), un id
+     que no apunta a nada. Además, cada reintento de n8n escribiría otro
+     log.
+  c) Sin 503: usar 24 y 48 escritos en el código si falta la regla.
+     Contradice D13 y D25.7 ("nunca escritas en el código") y ocultaría
+     el error. Descartada.
+  Recomendación: a). Pregunta abierta P3.
+
+
+================================================================
+2. MIGRACIÓN paso11 (Bloque B)
+================================================================
+
+Archivo: scripts/migraciones_ejecutadas/paso11_regla_seguimiento_presupuesto.py
+(mismo esquema que paso10: ANTES / pasos / commit o rollback / DESPUÉS,
+idempotente, todo en una transacción).
+
+Lo que hace: UNA fila nueva en reglas_negocio, con
+  INSERT ... ON CONFLICT (clave) DO NOTHING
+(si ya existe, no se sobrescribe: un valor cambiado a mano por
+administración no vuelve a 48 al repetir el script).
+
+  clave        horas_seguimiento_presupuesto   (P6)
+  valor        48
+  descripcion  (una sola línea, sin saltos, pasada como parámetro %s):
+    "Horas desde la creación del presupuesto (presupuestos.created_at)
+    que puede estar una oportunidad en presupuesto_enviado, sin visita y
+    sin ningún contacto registrado (fecha_ultimo_contacto NULL), antes de
+    que la lista diaria de llamadas de WF3 la incluya como seguimiento por
+    abrir (D13, D25.7). Se lee en cada llamada; no está escrita en el
+    código."
+
+Nombre de la clave, con su Regla de Tres (P6):
+  a) horas_seguimiento_presupuesto  [PROPUESTA]: mismo patrón que
+     horas_recordatorio_gate (unidad delante) y dice desde qué se cuenta.
+  b) horas_sin_respuesta_visita: sigue el nombre del disparador
+     "sin_respuesta_visita" de la Adenda (sección 2), pero D25.9 va a
+     renombrar ese concepto ("resultado de la llamada"), y la clave
+     quedaría con el nombre viejo.
+  c) horas_seguimiento: demasiado genérica; con la ampliación de
+     D25.9-D25.11 puede haber más de un seguimiento con plazo.
+
+Qué NO hace: no cambia el esquema (ni tablas, ni columnas, ni
+restricciones), así que docs/schema_actual.sql no se regenera (no incluye
+filas de reglas_negocio) y check_schema_actual_ejecutable no cambia. Es
+puramente ADITIVA: no hace falta partirla en expandir y contraer. No toca
+horas_recordatorio_gate.
+
+Nota para el Bloque E (registro de decisiones, no se reescribe): el
+docstring de paso10 dice de horas_recordatorio_gate que "este backend no
+la lee"; desde esta rama, sí la lee. El script de paso10 es un registro de
+lo que se ejecutó y no se toca; la nota fechada va en la Adenda (sección
+3, paso 5).
+
+Verificación (Bloque B): scripts/check_migracion_regla_seguimiento.py
+  - la fila existe, valor 48.00, descripción en una línea (sin "\n") y
+    que nombra presupuestos.created_at;
+  - horas_recordatorio_gate sigue en 24.00 (no se ha tocado);
+  - el número de filas de reglas_negocio pasa de 12 a 13 y ninguna otra
+    clave cambia de valor (foto antes / después de las 12 existentes);
+  - idempotencia: segunda ejecución de la migración -> "ya existía, no se
+    toca" y las mismas filas.
+  Prueba en negativo: el check ejecutado ANTES de la migración tiene que
+  dar FALLO en las comprobaciones de la fila nueva (recuento exacto en el
+  commit del Bloque B).
+
+
+================================================================
+3. PLAZOS Y FECHAS
+================================================================
+
+3.1 Base del plazo (pre-decisión 5): presupuestos.created_at
+  Comprobado: la columna se llama created_at, en presupuestos y en
+  oportunidades (schema_actual.sql). "creado_en", que según el encargo
+  escribió D13, no existe en ninguna tabla ni en ningún archivo del
+  repositorio (C7); el documento de D13 no está en el repositorio, así que
+  aquí no se puede citar su texto.
+  Por qué el presupuesto y no la oportunidad:
+    - lo que se mide es "48 h desde la pre-estimación sin reservar visita"
+      (Adenda, sección 2): la pre-estimación ES el presupuesto;
+    - el estado 'presupuesto_enviado' (o 'pendiente_aprobacion') nace en
+      la misma transacción que el presupuesto (C2);
+    - una oportunidad puede esperar mucho antes de tener presupuesto (un
+      cálculo que salió "requiere_revision" y se repitió días después):
+      con la base en la oportunidad, el seguimiento se abriría antes de
+      que el cliente hubiera tenido 48 h con su cifra. Hoy la diferencia
+      es de 1,7 s a 18 min (B7), así que el error sería invisible en los
+      datos actuales; por eso hay una prueba en negativo (N3) que lo hace
+      visible.
+    - presupuestos.created_at no cambia nunca (el presupuesto es un
+      documento fijo, Adenda 1.2); oportunidades.updated_at sí.
+
+3.2 El límite es ESTRICTO
+  "Más de 24 h" -> created_at < now() - 24 h. Con exactamente 24 h, NO
+  entra; entra en el barrido del día siguiente. Las horas se pasan a
+  Postgres con make_interval(hours => %s), un entero.
+  Como WF3 se ejecuta a las 9:00, un Gate creado a las 9:00:30 del lunes
+  sale el MIÉRCOLES (el martes a las 9:00 lleva 23 h 59 min 30 s). Es la
+  consecuencia natural de un solo barrido al día (D25.2); se documenta en
+  la Adenda, no se compensa.
+
+3.3 "Mañana": siguiente día LABORABLE, no natural (pre-decisión 4e)
+  Regla de Tres:
+    a) Siguiente día de lunes a viernes después de hoy en Madrid
+       [PROPUESTA]. El viernes da el lunes; el sábado y el domingo (si
+       alguien lo llama a mano), también el lunes.
+    b) Día natural siguiente: el viernes daría el sábado, que nunca tiene
+       visitas (validar_fecha solo admite de lunes a viernes), y las del
+       lunes no se recordarían NUNCA la víspera laborable, porque el
+       domingo WF3 no se ejecuta.
+    c) Los dos (mañana natural y siguiente laborable): duplica el
+       apartado sin ninguna visita que lo justifique.
+  Festivos: no se tienen en cuenta (Adenda 5.4): si el próximo laborable
+  es festivo, la lista trae las visitas de ese día igualmente (y no
+  debería haber ninguna, porque administración no las habría
+  confirmado).
+  Cálculo, en Python con zoneinfo (el mismo ZONA_MADRID de
+  reglas_visita.py), a partir del now() de Postgres:
+    hoy        = now().astimezone(ZONA_MADRID).date()
+    dia        = hoy + 1 día; mientras sea sábado o domingo, + 1 día
+    inicio     = datetime.combine(dia, 00:00, tzinfo=ZONA_MADRID)
+    fin        = datetime.combine(dia + 1 día, 00:00, tzinfo=ZONA_MADRID)
+  Se compara con un intervalo [inicio, fin) y no con
+  "(fecha_propuesta AT TIME ZONE 'Europe/Madrid')::date", para que la
+  zona horaria salga de UNA sola fuente (tzdata de Python, la que ya usan
+  las visitas). Con zoneinfo, un día con cambio de hora mide 23 o 25 h y
+  el intervalo sale bien solo (prueba con fechas fijas en 6.2).
+  Funciones PURAS (sin base de datos), en el servicio:
+  siguiente_laborable(hoy) y limites_dia_madrid(dia).
+
+3.4 Una sola foto de los datos: REPEATABLE READ
+  Son varias consultas (3 de oportunidades y 2 de visitas). En READ
+  COMMITTED, cada una vería lo confirmado hasta SU momento: si entre dos
+  de ellas un cliente pide una visita, su oportunidad podría salir en b)
+  y también en d), o en ninguna. En REPEATABLE READ todas ven la MISMA
+  foto (la del momento de la primera consulta), y now() es el mismo en
+  todas. Coste: ninguno apreciable en una transacción de solo lectura de
+  milisegundos.
+  Alternativas descartadas: una única consulta con UNION ALL de los cinco
+  apartados (más difícil de leer y de explicar, y obliga a una forma de
+  fila común); aceptar la ventana de READ COMMITTED (rompería "sin
+  repeticiones" en un caso raro pero posible).
+
+
+================================================================
+4. CONSULTAS SQL (en el servicio)
+================================================================
+
+Todas dentro de UNA conexión get_db_connection(), en este orden:
+
+Orden 1, el modo de la transacción (tiene que ser la PRIMERA):
+    SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;
+  Si se enviara después de otra consulta, Postgres daría error ("must be
+  called before any query"): la prueba lo detectaría como 500.
+
+Consulta 2, el reloj y las reglas:
+    SELECT now();
+    SELECT clave, valor FROM reglas_negocio WHERE clave = ANY(%s);
+  - Se comprueba cada clave: existe, y su valor (NUMERIC(10,2), llega
+    como Decimal) es un ENTERO mayor que 0 (24.50 o 0 -> problema). Misma
+    forma que leer_reglas_visita: devuelve (reglas, problemas), sin
+    adivinar nada. Con problemas -> 503 (sección 1.10).
+  - Validación pura aparte, validar_reglas_listado(leidas), para probarla
+    con diccionarios sin base de datos (6.2), como la prueba 2a de
+    check_visits_service.
+
+Consultas 3, 4 y 5: los apartados a, b y c. Misma forma; cambia el WHERE.
+    SELECT o.id,
+           o.tipo_reforma,
+           l.datos_estructurados ? 'contacto',
+           l.datos_estructurados -> 'contacto' ->> 'nombre',
+           l.datos_estructurados -> 'contacto' ->> 'telefono',
+           p.created_at
+    FROM oportunidades o
+    JOIN presupuestos p ON p.oportunidad_id = o.id
+    JOIN leads l        ON l.id = o.lead_id
+    WHERE o.estado = 'pendiente_aprobacion'                       -- a)
+      AND p.created_at < now() - make_interval(hours => %s)
+    ORDER BY p.created_at, o.id;
+  b) WHERE o.estado = 'presupuesto_enviado'
+       AND o.fecha_ultimo_contacto IS NULL
+       AND p.created_at < now() - make_interval(hours => %s)
+       AND NOT EXISTS (SELECT 1 FROM visitas v
+                       WHERE v.oportunidad_id = o.id
+                         AND v.estado <> 'cancelada')
+  c) WHERE o.estado = 'seguimiento_pendiente'
+  - "?" pregunta si el JSONB TIENE la clave 'contacto' (origen); "->"
+    saca el objeto y "->>" un valor como texto (igual que /gate-avisos).
+    NO se lee el email del contacto: ni siquiera viaja desde Postgres.
+  - JOIN normal con presupuestos: los tres estados solo se alcanzan
+    DESPUÉS de tener presupuesto (C2); una oportunidad en esos estados sin
+    presupuesto (solo posible editando a mano) no saldría. Se anota como
+    limitación (R5) en vez de complicar la consulta.
+  - NOT EXISTS (b): "no hay ninguna visita de esta oportunidad que no
+    esté cancelada" (P5).
+  - Sin JOIN con clientes: la ficha no se lee nunca (P1 de /gate-avisos).
+  - No lee ningún importe: presupuestos solo aporta created_at.
+  - Las horas van como PARÁMETRO (%s), nunca pegadas en el texto del SQL.
+
+Consultas 6 y 7: los apartados d y e.
+    SELECT v.oportunidad_id,
+           o.tipo_reforma,
+           l.datos_estructurados ? 'contacto',
+           l.datos_estructurados -> 'contacto' ->> 'nombre',
+           l.datos_estructurados -> 'contacto' ->> 'telefono',
+           v.estado,
+           v.fecha_propuesta,
+           v.created_at
+    FROM visitas v
+    JOIN oportunidades o ON o.id = v.oportunidad_id
+    JOIN leads l         ON l.id = o.lead_id
+    WHERE v.estado = 'solicitada'                                  -- d)
+      AND NOT (v.fecha_propuesta >= %(inicio)s AND v.fecha_propuesta < %(fin)s)
+    ORDER BY v.created_at, v.id;
+  e) WHERE v.estado IN ('solicitada', 'confirmada')
+       AND v.fecha_propuesta >= %(inicio)s AND v.fecha_propuesta < %(fin)s
+     ORDER BY v.fecha_propuesta, v.id;
+  - inicio y fin son datetime con zona (3.3); psycopg2 los envía con su
+    desfase y Postgres compara instantes.
+  - No lee texto_cliente ni el id de la visita (minimización).
+  - El índice único parcial visitas_una_activa_por_oportunidad garantiza
+    como mucho una visita activa por oportunidad: una oportunidad no puede
+    salir dos veces dentro de d) ni dentro de e).
+
+Volumen y paginación (pre-decisión 8): SIN paginación en N0. Hoy la
+lista entera tendría 9 elementos (1 + 8 + 0 + 0 + 0, B6), y el máximo
+teórico está acotado por el total de oportunidades (27) más las visitas
+activas (1). A unos 250 bytes por elemento, menos de 10 KB. Sin índices
+nuevos: con 27 filas, Postgres recorre la tabla entera en microsegundos.
+Cuándo revisarlo: si una lista superase unos 200 elementos, el problema
+ya no sería técnico sino operativo (nadie hace 200 llamadas en un día);
+ver R2.
+
+
+================================================================
+5. ARCHIVOS
+================================================================
+
+  Bloque B (migración):
+    scripts/migraciones_ejecutadas/paso11_regla_seguimiento_presupuesto.py
+    scripts/check_migracion_regla_seguimiento.py
+
+  Bloque C (esquemas, servicio y ruta). Nuevos:
+    app/schemas/listado_llamadas.py
+        ListadoLlamadasResponse, ReglasListado, LlamadaOportunidad,
+        LlamadaVisita, ContactoLlamada y los Enum MotivoLlamada y
+        EstadoVisitaListado, todos con extra="forbid". Reutiliza
+        OrigenContacto (aviso_gate.py) y TipoReforma (common.py).
+    app/services/listado_llamadas_service.py
+        obtener_listado(): abre la conexión, fija el modo de la
+        transacción y llama a leer_listado(cursor) (que recibe el cursor,
+        como leer_reglas_visita, para que la prueba del límite exacto la
+        ejecute dentro de SU transacción; 6.2). Funciones puras:
+        validar_reglas_listado, siguiente_laborable, limites_dia_madrid,
+        contacto_de. Excepción: ConfiguracionIncompleta (la de
+        reglas_visita.py, reutilizada: mismo motivo, mismo 503, misma
+        forma con "faltan"). NO importa fastapi.
+    app/api/listado_llamadas.py
+        El router: GET /llamadas-del-dia, verificar_gate_secret, 503 con
+        {motivo, mensaje, faltan}, y la línea [AVISO] en stderr.
+  Cambia:
+    app/main.py         sexto include_router.
+  Reutiliza sin copiar: verificar_gate_secret (security.py),
+  get_db_connection (connection.py), ZONA_MADRID y ConfiguracionIncompleta
+  (reglas_visita.py), OrigenContacto (aviso_gate.py), TipoReforma
+  (common.py). Las constantes de estado ('pendiente_aprobacion', etc.) se
+  escriben como texto en el servicio, igual que en los demás servicios
+  (reutilizar EstadoOportunidad en los servicios sigue pendiente, en otra
+  rama).
+
+  Bloque D (pruebas):
+    scripts/check_listado_llamadas_service.py (sin servidor)
+    scripts/check_listado_llamadas_http.py    (HTTP real, puerto 8024)
+
+  Bloque E (documentación): Adenda, CLAUDE.md, notas fechadas y este
+  plan (sección 11).
+
+  Ningún secreto se imprime: los scripts solo usan los valores en las
+  cabeceras.
+
+
+================================================================
+6. PRUEBAS
+================================================================
+
+6.1 Bloque B: scripts/check_migracion_regla_seguimiento.py (sección 2).
+
+6.2 Bloque D: scripts/check_listado_llamadas_service.py (sin servidor)
+  S1. siguiente_laborable con fechas FIJAS (no caducan): lunes -> martes,
+      jueves -> viernes, viernes 23/10/2026 -> lunes 26/10/2026, sábado
+      -> lunes, domingo -> lunes.
+  S2. limites_dia_madrid con fechas FIJAS a los dos lados del cambio de
+      hora: viernes 23/10/2026 -> [22/10 22:00 UTC, 23/10 22:00 UTC)
+      (+02:00); lunes 26/10/2026 -> [25/10 23:00 UTC, 26/10 23:00 UTC)
+      (+01:00); lunes 29/03/2027 -> +02:00; y el domingo 25/10/2026 mide
+      25 h (prueba de que se usa zoneinfo y no "+24 h").
+  S3. validar_reglas_listado con diccionarios: las dos bien -> sin
+      problemas; falta una; vale 0; vale -5; vale 24.50 -> cada caso,
+      problema que nombra la clave. Y la rama else de la excepción: si NO
+      sale ConfiguracionIncompleta cuando debe, FALLO explícito ("la
+      excepción se ha tragado"), regla de CLAUDE.md.
+  S4. contacto_de: con 'contacto' -> sus datos y origen "solicitud"; sin
+      'contacto' -> nombre y telefono None y origen "no_disponible".
+  S5. LÍMITE EXACTO del plazo, contra la base de datos, SIN dejar nada:
+      conexión propia, una transacción que termina en ROLLBACK (como
+      check_schema_actual_ejecutable). Dentro: un cliente con email
+      check-listado-svc-<8>@example.com, sus leads, oportunidades y
+      presupuestos con created_at fijado a:
+        now() - 24 h        (Gate)          -> NO sale en a)
+        now() - 24 h - 1 µs (Gate)          -> SÍ sale en a)
+        now() - 48 h        (sin Gate)      -> NO sale en b)
+        now() - 48 h - 1 µs (sin Gate)      -> SÍ sale en b)
+      y visitas con fecha_propuesta = inicio exacto del día (sale en e) y
+      = fin exacto (no sale). Se llama a leer_listado(cursor) con el MISMO
+      cursor: dentro de una transacción now() no cambia, así que el
+      límite es exacto al microsegundo. Por HTTP esto no se puede probar
+      (el reloj avanza entre la preparación y la petición).
+      Al terminar: ROLLBACK y comprobación de que no queda ninguna fila
+      con esa marca.
+  S6. Modo de la transacción: se sustituye leer_listado EN MEMORIA por
+      una función de prueba que solo ejecuta SHOW transaction_read_only y
+      SHOW transaction_isolation, y se llama a obtener_listado: deben dar
+      "on" y "repeatable read". Demuestra que obtener_listado fija el modo
+      ANTES de leer. (Que una escritura real se rechace se prueba en
+      negativo, N2b, porque exige cambiar el código.)
+
+6.3 Bloque D: scripts/check_listado_llamadas_http.py (HTTP real, 8024)
+  Mismo esquema que check_aviso_gate_http.py: uvicorn.Server en un hilo
+  de este proceso, SIN --reload, puerto 8024 (nunca el 8000; si está
+  ocupado, se para y avisa). Marca propia: emails
+  http-listado-<8>@example.com y tokens uuid4. Los datos se crean por HTTP
+  como lo hará n8n (POST /leads, POST /calculate-estimate, POST /visits,
+  POST /gate-decisions), y por SQL, SOLO sobre filas propias, lo que la
+  API no puede producir: mover presupuestos.created_at hacia atrás, poner
+  una oportunidad en 'seguimiento_pendiente' (nadie lo escribe aún),
+  fecha_ultimo_contacto, visitas en horas límite y el lead "antiguo" sin
+  'contacto'. Foto de lo ajeno al empezar y al terminar (id_base) y
+  limpieza solo de lo propio, en el orden de las claves foráneas.
+
+  OJO: la lista incluye TODO lo que hay en la base de datos (también los
+  datos reales de Gabi). Las comprobaciones miran SOLO los elementos con
+  oportunidad_id propio; nunca se exige nada sobre la lista entera
+  (regla de CLAUDE.md), salvo la forma (claves exactas) y que no salga
+  ningún email ni importe (que vale para cualquier elemento).
+
+  Márgenes por HTTP: "dentro" = 1 minuto MÁS que el plazo; "fuera" = 1
+  minuto MENOS. El reloj avanza unos segundos entre la preparación y la
+  petición, así que el minuto de margen los absorbe. El límite exacto se
+  prueba en S5.
+
+  CASO 1 - Llave: sin cabecera -> 401; X-Gate-Secret incorrecto -> 401;
+    valor de WEBHOOK_SECRET en X-Gate-Secret -> 401; en X-Webhook-Secret
+    -> 401; cuerpo y WWW-Authenticate idénticos a los de /gate-avisos.
+  CASO 2 - Forma y minimización: claves EXACTAS en cada nivel (raíz,
+    reglas, cada LlamadaOportunidad, cada LlamadaVisita, cada contacto),
+    copiadas del PLAN y no del código; ninguna clave prohibida (1.5) en
+    ningún nivel; las cinco listas son listas; y en el TEXTO de la
+    respuesta no aparece ningún email propio ni ningún importe propio
+    (importe_*_con_iva de sus presupuestos, buscados como texto).
+  CASO 3 - Reglas y día: reglas = los valores leídos por SQL de
+    reglas_negocio; generado_en con el desfase de Madrid de ese instante;
+    dia_visitas = el siguiente laborable calculado por la prueba (con su
+    propia función, escrita en el script, no importada del servicio).
+  CASO 4 - a) Gates: Gate a 24 h + 1 min -> dentro, con motivo
+    'gate_sin_decision' y su fecha_presupuesto; Gate a 24 h - 1 min ->
+    fuera; Gate a 30 h ya decidido (POST /gate-decisions descartar) ->
+    fuera.
+  CASO 5 - b) Seguimientos por abrir: sin Gate a 48 h + 1 min -> dentro;
+    a 48 h - 1 min -> fuera; a 48 h + 1 min con fecha_ultimo_contacto
+    puesta -> fuera; a 48 h + 1 min con una visita 'solicitada' insertada
+    por SQL sin cambiar el estado (la defensa de P5) -> fuera; con una
+    visita solo 'cancelada' -> dentro.
+    Base del plazo (pre-decisión 5): oportunidad creada hace 72 h y
+    presupuesto hace 1 h -> fuera; oportunidad creada ahora y presupuesto
+    hace 49 h -> dentro.
+  CASO 6 - c) Seguimientos abiertos: una oportunidad propia puesta en
+    'seguimiento_pendiente' por SQL, con presupuesto de hace 1 h -> dentro
+    (sin plazo), con motivo 'seguimiento_abierto'.
+  CASO 7 - d) Visitas sin confirmar: una visita pedida con POST /visits
+    para un día que NO es dia_visitas -> dentro, con estado_visita
+    'solicitada', fecha_visita y fecha_solicitud_visita; la visita
+    'confirmada' de un Gate (POST /gate-decisions visita_acordada) -> NO
+    sale en d).
+  CASO 8 - e) Visitas del próximo laborable (visitas propias insertadas
+    por SQL, cada una en su propia oportunidad por el índice parcial):
+    inicio exacto de dia_visitas (00:00 de Madrid) -> dentro; 23:59:59 de
+    ese día -> dentro; 23:59:59 del día anterior -> fuera; 00:00 del día
+    siguiente -> fuera; 'confirmada' a las 10:00 -> dentro;
+    'cancelada' a las 10:00 -> fuera; 'solicitada' a las 09:00 -> dentro
+    de e) y NO en d).
+  CASO 9 - Sin repeticiones (D25.2): ningún oportunidad_id propio sale dos
+    veces en toda la respuesta (los cinco apartados juntos).
+  CASO 10 - El contacto es el del LEAD, no el de la ficha: dos leads con
+    el MISMO email y distinto nombre y teléfono, el segundo en b): sale el
+    nombre y el teléfono del SEGUNDO, origen "solicitud", y los de la
+    ficha no aparecen en el texto. Un lead "antiguo" sin 'contacto' en b):
+    nombre y telefono null, origen "no_disponible", y nada de su ficha en
+    el texto.
+  CASO 11 - Fechas con el desfase de Madrid: fecha_presupuesto con el
+    desfase de ese instante (calculado con zoneinfo); y dos visitas
+    'solicitada' en d) en el primer lunes 08:30 tras el PRÓXIMO cambio de
+    hora y tras el SIGUIENTE (fechas CALCULADAS en cada ejecución, como el
+    CASO 8 de /gate-avisos, para que nunca caduquen): desfases opuestos,
+    cada uno el que da zoneinfo para ese día.
+  CASO 12 - Orden: tres propios en b) con presupuestos de hace 50, 60 y 70
+    h salen en el orden 70, 60, 50 (relativo entre ellos); y en e), por
+    hora de la visita.
+  CASO 13 - 503 (pre-decisión 7, con la propuesta de 1.10): el servidor
+    corre en un hilo de este mismo proceso, así que el nombre de UNA clave
+    se cambia EN MEMORIA por uno falso y único
+    (clave_falsa_<uuid>), como la prueba 2b de check_visits_service: la
+    fila real de reglas_negocio no se toca. Para cada una de las dos
+    claves: 503, motivo configuracion_incompleta y "faltan" la nombra.
+    Con la llave mal y la configuración rota: 401 (la llave va primero).
+    Y no se ha escrito ningún log que mencione ese nombre falso (marca
+    propia: logs con id > id_base y detalle que contenga el uuid -> 0).
+    Se restaura el nombre real y se comprueba que vuelve el 200.
+  CASO 14 - Solo lectura (pre-decisión 3): antes y después de una tanda de
+    200, 401 y 503, los recuentos de filas PROPIAS en clientes, leads,
+    oportunidades, presupuestos, visitas, decisiones_gate y logs (los de
+    sus oportunidades, id > id_base), y updated_at y
+    fecha_ultimo_contacto de sus oportunidades, no cambian.
+  CASO 15 - Repetición: dos llamadas seguidas devuelven el mismo cuerpo
+    salvo generado_en (que es el reloj; se compara todo lo demás).
+  CASO 16 - Ningún 500 en todas las respuestas de /llamadas-del-dia.
+  CASO 17 - "No toca nada ajeno": foto de lo ajeno igual al empezar y al
+    terminar.
+
+6.4 Pruebas en negativo (sobre COPIAS en el scratchpad, una por prueba,
+    borradas al terminar; el código real no cambia: git diff vacío al
+    terminar). Criterio del plan de /gate-avisos: cada una da un resultado
+    EXACTO ("54/121"), con la lista de las comprobaciones que fallan, que
+    se escribe en este plan al cerrar el Bloque D y en el mensaje de su
+    commit. Lo de abajo es la previsión, no el criterio de aceptación.
+  N1.  Dependencia cambiada a verificar_webhook_secret (obligatoria):
+       falla "WEBHOOK_SECRET en X-Webhook-Secret -> 401" y, en cascada,
+       todo lo que usa X-Gate-Secret.
+  N2.  Escribe en logs: sin la barrera READ ONLY, con un INSERT en logs y
+       un commit. Falla el CASO 14. (Variante N2b, solo el INSERT con READ
+       ONLY puesto: Postgres lo rechaza y salen 500 -> falla el CASO 16;
+       demuestra que la barrera 2 de 1.9 funciona.)
+  N3.  Base del plazo = oportunidades.created_at: falla la parte "base del
+       plazo" del CASO 5 (las dos).
+  N4.  Límite no estricto (<= en vez de <): falla S5 (los dos "justo en
+       el límite"). Por HTTP no se ve (margen de 1 min): resultado
+       esperado del script HTTP sin cambios.
+  N5.  "Mañana" natural en vez de laborable: falla S1 (viernes, sábado y
+       domingo). Por HTTP solo se vería si la prueba se ejecuta un
+       viernes: el recuento HTTP se da con el día de la semana en que se
+       ejecute.
+  N6.  Desfase fijo +02:00 en vez de ZONA_MADRID: fallan S2 (26/10 y el
+       domingo de 25 h) y, por HTTP, el lado +01:00 del CASO 11.
+  N7.  Contacto leído de la ficha de clientes: falla el CASO 10.
+  N8.  Email del contacto añadido a la consulta y al esquema: falla el
+       CASO 2 (clave prohibida y email propio en el texto).
+  N9.  Sin "fecha_ultimo_contacto IS NULL": falla el CASO 5 (esa
+       comprobación).
+  N10. Sin la exclusión de d): fallan el CASO 8 ("no en d") y el CASO 9.
+  N11. Plazos escritos en el código (24 y 48 fijos, sin leer
+       reglas_negocio): falla el CASO 13 (da 200 con la clave falsa).
+
+6.5 Regresión y suite
+  check_aviso_gate_http (75/75), check_gate_decisions_http (121/121),
+  check_visits_http (55/55) y check_lead_session_http (24/24), y la suite
+  completa con la regla de uso de CLAUDE.md (enchufado, tapa abierta,
+  pantalla y suspensión a 30 min, hora de inicio y fin, Kernel-Power
+  506/507 al terminar: si los hay, la pasada no vale y se repite entera).
+  Serán 37 scripts (34 + check_migracion_regla_seguimiento +
+  check_listado_llamadas_service + check_listado_llamadas_http). La salida
+  de los cinco scripts de P4 (check_foreign_keys, check_mcp_connection,
+  check_pool_connections, check_pool_transaction_state, check_rls_estado)
+  se revisa a mano. Nunca se escribe "N/N" si no sale en una sola pasada.
+
+
+================================================================
+7. HALLAZGOS QUE AFECTAN A LAS PRE-DECISIONES
+================================================================
+
+  H1. D25.8 frente a la pre-decisión 4. D25.8 (decidida) dice que la lista
+      presenta JUNTOS pendiente_aprobacion y seguimiento_pendiente, con la
+      etiqueta del motivo; la pre-decisión 4 pide apartados SEPARADOS.
+      Propuesta (P2): apartados separados en la API, y cada elemento con
+      su "motivo". WF3 necesita b) aparte (llamará a create-followup-task
+      por cada uno), y con la etiqueta en cada elemento n8n puede juntar
+      a) y c) (o los cinco) en una sola lista para el email sin perder el
+      motivo. Así se cumplen las dos.
+  H2. Pre-decisión 7 frente a la 3 (log en el 503), y logs.entity_id NOT
+      NULL sin oportunidad a la que asociarlo. Propuesta en 1.10 (P3).
+  H3. La base del plazo de 48 h se describe de cuatro formas distintas:
+        - Adenda, fila 5, e Informe (fila de D13): "más de 48h desde la
+          creación" (sin decir de qué);
+        - Adenda, sección 2: "48h desde la pre-estimación";
+        - TFM_Decisiones_Modelo_Datos_Leads.txt (estado
+          seguimiento_pendiente): "comparando
+          oportunidades.fecha_ultimo_contacto con la hora actual", que
+          choca con la condición "fecha_ultimo_contacto IS NULL";
+        - D13, según el encargo: "creado_en", que no existe (C7).
+      Se resuelve con la pre-decisión 5 (presupuestos.created_at, 3.1). En
+      el Bloque E, notas fechadas en esos tres documentos, sin reescribir
+      su texto.
+  H4. 4 de los 8 seguimientos por abrir de HOY son de leads sin la clave
+      'contacto' (B6): saldrán sin nombre ni teléfono, todos los días,
+      primero en b) y, cuando exista create-followup-task, en c). Es el
+      mismo caso que los 5 Gates de prueba que Gabi cerró antes de
+      activar WF3. Ver P8.
+  H5. Solapamiento d)/e): una visita 'solicitada' para dia_visitas cumple
+      las dos condiciones de la pre-decisión 4. Propuesta (P4): solo en
+      e), con estado_visita 'solicitada' (es la más urgente: hay que
+      confirmarla para mañana).
+  H6. Elementos que se repetirán cada día sin salida en N0: los
+      seguimientos abiertos (solo salen de 'seguimiento_pendiente' si el
+      cliente pide visita desde el chat o a mano) y las visitas
+      'solicitada' (ningún endpoint las confirma, C4). La lista crecerá
+      hasta que exista la ampliación de D25.9-D25.11 (fuera de alcance).
+      Ver R2.
+  H7. El docstring de paso10 dice que el backend no lee
+      horas_recordatorio_gate; deja de ser cierto. No se reescribe; nota
+      en la Adenda (sección 2, "Nota para el Bloque E").
+
+
+================================================================
+8. FUERA DE ALCANCE (pre-decisión 10)
+================================================================
+
+  - POST /create-followup-task (rama siguiente): el paso de
+    'presupuesto_enviado' a 'seguimiento_pendiente', su log y qué fecha
+    escribe (fecha_ultimo_contacto u otra). Cuando exista, se decidirá si
+    c) muestra además la fecha de apertura del seguimiento.
+  - El renombrado "resultado de la llamada" (D25.9) y la ampliación a
+    seguimientos y visitas (D25.9-D25.11): registrar el resultado de una
+    llamada de seguimiento y confirmar una visita 'solicitada'.
+  - WF3 en n8n (Schedule Trigger de lunes a viernes a las 9:00, su
+    credencial X-Gate-Secret, el formato del email, cómo junta los
+    apartados, y las llamadas a create-followup-task).
+  - El email al cliente (D25.1).
+  - Tool MCP: ninguna (pre-decisión 1).
+  - Festivos (Adenda 5.4).
+  - Registrar que la lista se envió (sería escribir; 1.9).
+  - Corregir los leads antiguos sin 'contacto' (datos_estructurados es
+    inmutable, D3 de leads) y cerrar los 4 casos de prueba de H4 (P8).
+  - El segundo disparador de la Adenda, sin_decision_post_visita
+    (dias_espera_decision_post_visita): no lo pide el encargo.
+  - Reutilizar EstadoOportunidad en los servicios (pendiente de otra
+    rama, CLAUDE.md).
+
+
+================================================================
+9. RIESGOS
+================================================================
+
+  R1. Datos personales fuera del backend: una vez en n8n y en el email de
+      WF3, ya no los protege esta API. Mitigación aquí: minimización (sin
+      email ni importes, 1.5) y la llave propia del Gate (1.3).
+  R2. La lista crece sin salida (H6) hasta D25.9-D25.11. Mitigación: los
+      volúmenes de N0 son pequeños (4.), el orden pone lo más antiguo
+      primero, y la ampliación ya está decidida como trabajo posterior.
+  R3. Un solo barrido al día: un plazo cumplido a las 9:01 espera al día
+      siguiente (3.2). Aceptado por D25.2.
+  R4. Sin festivos (3.3).
+  R5. Una oportunidad en a), b) o c) sin presupuesto (solo posible
+      editando a mano) no sale, por el JOIN normal (4.).
+  R6. La llave X-Gate-Secret abre ahora también la lista de TODOS los
+      clientes pendientes, no un caso cada vez: si se filtrara, expondría
+      más que antes. Es la misma llave y el mismo cliente
+      (administración); se acepta, con la advertencia de siempre: nunca
+      dársela al Agente 2.
+  R7. REPEATABLE READ en el pooler de Supabase: comprobado que se acepta
+      (B8); si el pooler cambiara de modo (Transaction en vez de Session),
+      SET TRANSACTION seguiría valiendo (afecta a una sola transacción),
+      pero se volvería a comprobar.
+
+
+================================================================
+10. DECISIONES Y PREGUNTAS ABIERTAS
+================================================================
+
+  Ya decididas (encargo), recogidas en el contrato:
+    D25.2  Un barrido al día; una sola lista, sin repeticiones dentro del
+           día (1.6, CASO 9).
+    D25.4  Las visitas de mañana (e) y las pedidas desde el chat sin
+           confirmar (d) entran en N0.
+    D25.7  Recordatorio del Gate a las 24 h (horas_recordatorio_gate, ya
+           existe) y seguimiento a las 48 h (regla NUEVA, paso11); las dos
+           se leen de reglas_negocio en cada llamada (D13).
+    D25.8  pendiente_aprobacion y seguimiento_pendiente se mantienen; la
+           lista los presenta juntos con la etiqueta del motivo (H1, P2).
+
+  Validación de las pre-decisiones del tutor:
+    1  CORRECTA (1.1).
+    2  CORRECTA (1.3), con N1 obligatoria.
+    3  CORRECTA, y reforzada con READ ONLY en Postgres (1.9).
+    4  CORRECTA con tres precisiones: "sin visita" (P5), el solapamiento
+       d)/e) (P4) y "mañana" = siguiente laborable (3.3).
+    5  CORRECTA (3.1, H3): la columna es created_at, no "creado_en".
+    6  CORRECTA (1.5): contacto sin email; reutiliza la regla de P1 de
+       /gate-avisos.
+    7  CONTRADICE a la 3 (H2): propuesta de 503 sin log (1.10, P3).
+    8  CORRECTA: volumen real en 4.
+    9  Propuesta en 1.2 (P1).
+    10 Recogida en la sección 8.
+
+  Preguntas abiertas:
+    P1. Ruta: GET /llamadas-del-dia (propuesta), /wf3/listado o
+        /seguimientos/pendientes (1.2).
+    P2. Estructura (H1): apartados separados con "motivo" en cada
+        elemento (propuesta); o una sola lista "llamadas" con a, b y c
+        juntos más los dos de visitas (D25.8 al pie de la letra, pero WF3
+        tendría que filtrar b) por motivo para create-followup-task); o
+        apartados separados sin "motivo" (pre-decisión 4 al pie de la
+        letra, y n8n pondría la etiqueta).
+    P3. El 503 sin log (1.10, opción a, propuesta), con log en una
+        conexión aparte (b) o con valores por defecto (c, descartada).
+    P4. Visita 'solicitada' para el próximo laborable: solo en e)
+        (propuesta), solo en d), o en los dos (rompería D25.2).
+    P5. "Sin visita" en b): ninguna visita salvo canceladas (propuesta);
+        ninguna visita activa ('solicitada' o 'confirmada'), con lo que una
+        'completada' no lo impediría; o ninguna visita en absoluto (una
+        cancelada lo impediría, aunque la cancelación solo ocurre al
+        sustituirla).
+    P6. Nombre de la regla: horas_seguimiento_presupuesto (propuesta),
+        horas_sin_respuesta_visita u horas_seguimiento (sección 2). Y su
+        validación: entero mayor que 0, sin máximo (un valor enorme solo
+        vacía el apartado).
+    P7. ¿Incluir generado_en, dia_visitas y reglas en la respuesta?
+        Propuesta: sí (no son datos personales, y evitan que n8n escriba
+        números y fechas por su cuenta). Alternativa: solo los cinco
+        apartados.
+    P8. Los 4 casos de prueba de H4 (presupuesto_enviado, leads sin
+        'contacto'): ¿los cierra Gabi antes de activar WF3, como los 5
+        Gates de prueba? No hay ningún endpoint que pase
+        'presupuesto_enviado' a 'perdida', así que hoy solo se podría a
+        mano en la base de datos. Alternativa: dejarlos (saldrán cada día
+        con origen "no_disponible"). No cambia el código de esta rama.
+    P9. Visitas 'solicitada' con fecha ya pasada: incluirlas en d) sin
+        marca (propuesta: fecha_visita ya lo dice), con un campo
+        "vencida", o excluirlas (administración no se enteraría nunca).
+
+
+================================================================
+11. BLOQUES
+================================================================
+
+  A. Este plan (sin código). [PARA]
+  B. Migración paso11 y su verificación (sección 2):
+     paso11_regla_seguimiento_presupuesto.py, ejecutada contra la base de
+     datos real; check_migracion_regla_seguimiento.py ANTES (FALLO
+     esperado) y DESPUÉS, y segunda ejecución de la migración
+     (idempotencia). [PARA]
+  C. Esquemas, servicio y ruta (sección 5) y el include_router en
+     main.py, con una prueba mínima por HTTP real en el puerto 8024: 200
+     con las cinco listas, 401 con el valor de WEBHOOK_SECRET y 503 con
+     una clave cambiada en memoria. [PARA]
+  D. Pruebas completas (6.2 y 6.3), pruebas en negativo N1-N11 sobre
+     copias con sus recuentos EXACTOS escritos en 6.4, regresión y suite
+     completa (37 scripts) con la regla de uso. [PARA]
+  E. Documentación [PARA]:
+     - Adenda: fila nueva (8) de la tabla y sección 5.7 (contrato,
+       apartados, códigos, orden, solo lectura con READ ONLY, 503 sin log,
+       plazos estrictos, siguiente laborable, minimización, limitaciones).
+     - Adenda, notas fechadas SIN reescribir: fila 5 y sección 2 (la base
+       del plazo es presupuestos.created_at y el 48 vive en
+       horas_seguimiento_presupuesto); sección 3, paso 5 (WF3 obtiene el
+       recordatorio de este endpoint; el backend ya lee
+       horas_recordatorio_gate, H7).
+     - Notas fechadas en TFM_Decisiones_Modelo_Datos_Leads.txt
+       (seguimiento_pendiente, H3) y en el Informe (fila de D13).
+     - CLAUDE.md: "Dos puertas" (sexto include_router), estado actual, lo
+       hecho y verificado, la suite (37 scripts) y el puerto 8024.
+     - Este plan marcado como IMPLEMENTADO, con los hashes de cada bloque.
+  Cada bloque, un commit con los recuentos reales en el mensaje y git push.
+  Nada de merge a main sin la confirmación explícita de Gabi, y siempre
+  con --ff-only.
