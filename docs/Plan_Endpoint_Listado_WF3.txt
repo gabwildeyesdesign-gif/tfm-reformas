@@ -5,6 +5,9 @@ llamadas para WF3 (GET /llamadas-del-dia, nombre propuesto en 1.2)
 Documento de plan · Nivel N0 · 2026-10-07 · Rama feat/n0-listado-wf3
 (desde main = ead4b3e)
 Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+[Actualizado 2026-10-07: Bloque A APROBADO por el tutor sobre a04d4c4.
+P1-P9 DECIDIDAS (sección 10) y plazos decididos (D25.15, sección 3.2).
+Bloque B en curso.]
 
 Fuentes: el encargo del Bloque A del 2026-10-07 (decisiones D25.2, D25.4,
 D25.7 y D25.8 ya tomadas, y pre-decisiones 1-10 del tutor), la Adenda (fila
@@ -479,6 +482,13 @@ Verificación (Bloque B): scripts/check_migracion_regla_seguimiento.py
   sale el MIÉRCOLES (el martes a las 9:00 lleva 23 h 59 min 30 s). Es la
   consecuencia natural de un solo barrido al día (D25.2); se documenta en
   la Adenda, no se compensa.
+  [DECIDIDO 2026-10-07, D25.15 (Gabi): límite ESTRICTO en horas exactas,
+  como se propone arriba. Con un barrido diario, el retraso real es de
+  24 a 48 h en el recordatorio del Gate y de 48 a 72 h en el seguimiento.
+  Es aceptable porque administración llama a cada Gate EL MISMO DÍA del
+  aviso de WF2 (D25.14): el recordatorio de WF3 cubre al cliente que se lo
+  está pensando, no la primera llamada. Se documenta así también en la
+  Adenda (Bloque E).]
 
 3.3 "Mañana": siguiente día LABORABLE, no natural (pre-decisión 4e)
   Regla de Tres:
@@ -980,7 +990,36 @@ ver R2.
     9  Propuesta en 1.2 (P1).
     10 Recogida en la sección 8.
 
-  Preguntas abiertas:
+  Preguntas P1-P9, DECIDIDAS el 2026-10-07 (revisión del tutor sobre
+  a04d4c4; P8 pendiente de confirmar por Gabi):
+    P1. DECIDIDA: GET /llamadas-del-dia.
+    P2. DECIDIDA: apartados separados y "motivo" en cada elemento. En
+        textos y documentos, la etiqueta del apartado a) es "Gate sin
+        decisión registrada", NUNCA "cliente pensándoselo": el sistema no
+        distingue si el cliente se lo está pensando o si nadie le llamó,
+        porque no hay registro de intentos de llamada (D24.4). El valor
+        del Enum sigue siendo 'gate_sin_decision'.
+    P3. DECIDIDA: 503 SIN log (opción a de 1.10), con la línea [AVISO] en
+        stderr. El tutor aclara que la pre-decisión 7 del encargo ("503
+        con log conservado") era un error suyo.
+    P4. DECIDIDA: una visita 'solicitada' para el próximo laborable sale
+        solo en e).
+    P5. DECIDIDA: "sin visita" = ninguna visita salvo las canceladas.
+    P6. DECIDIDA: horas_seguimiento_presupuesto, entero mayor que 0, sin
+        máximo.
+    P7. DECIDIDA: se incluyen generado_en, dia_visitas y reglas.
+    P8. DECIDIDA (pendiente de confirmar por Gabi; no afecta al código):
+        los casos de prueba antiguos NO se tocan en esta rama ni a mano.
+        Se cerrarán desde el formulario cuando exista la ampliación de
+        seguimientos. Precisión de números: la revisión habla de "los 8
+        casos"; son los 8 seguimientos por abrir de hoy (B6), de los que
+        4 son de leads sin 'contacto' (H4), que eran el objeto de la
+        pregunta. La decisión es la misma para los 8.
+    P9. DECIDIDA: las visitas 'solicitada' con fecha pasada se incluyen en
+        d), sin ningún campo extra.
+  Además, D25.15 (Gabi): límite ESTRICTO en horas exactas (3.2).
+
+  Preguntas abiertas (texto original, tal como se plantearon):
     P1. Ruta: GET /llamadas-del-dia (propuesta), /wf3/listado o
         /seguimientos/pendientes (1.2).
     P2. Estructura (H1): apartados separados con "motivo" en cada
@@ -1048,6 +1087,12 @@ ver R2.
      - CLAUDE.md: "Dos puertas" (sexto include_router), estado actual, lo
        hecho y verificado, la suite (37 scripts) y el puerto 8024.
      - Este plan marcado como IMPLEMENTADO, con los hashes de cada bloque.
+     - [Añadido 2026-10-07, revisión del tutor] El documento de D25 lo
+       añadirá el tutor a docs/ DESPUÉS del merge. En la Adenda y en
+       CLAUDE.md, D25 (y D24.4) se citan por su número, sin inventar su
+       texto. En la Adenda, la justificación de los plazos de 3.2
+       (D25.14 y D25.15) y la etiqueta "Gate sin decisión registrada"
+       (P2).
   Cada bloque, un commit con los recuentos reales en el mensaje y git push.
   Nada de merge a main sin la confirmación explícita de Gabi, y siempre
   con --ff-only.
