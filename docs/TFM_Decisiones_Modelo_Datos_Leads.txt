@@ -125,6 +125,16 @@ Significado de cada uno en la narrativa de negocio:
       actual. NINGÚN endpoint de N0 lo escribe todavía: la columna
       fecha_ultimo_contacto existe desde la migración paso7, pero queda
       NULL en todas las filas hasta que se implemente el barrido.
+      (Nota 2026-10-07, rama feat/n0-listado-wf3: el plazo NO se mide
+      comparando fecha_ultimo_contacto con la hora actual. La condición
+      es fecha_ultimo_contacto IS NULL (nadie ha contactado aún), y la
+      antigüedad se mide desde presupuestos.created_at, con las horas de
+      reglas_negocio.horas_seguimiento_presupuesto (48, migración
+      paso11). La lista de candidatos la da GET /llamadas-del-dia
+      (Adenda 5.7). fecha_ultimo_contacto ya no está a NULL en todas las
+      filas: POST /gate-decisions la escribe desde el 2026-10-01. El
+      estado seguimiento_pendiente lo escribirá POST
+      /create-followup-task, en la rama siguiente.)
 
   visita_agendada
       El cliente ha elegido una franja horaria y existe una fila en

@@ -14,9 +14,10 @@ endpoints y revisión técnica final.
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) |
 | 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST |
-| 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md` |
+| 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`. **[Nota 2026-10-07]** La base del plazo es presupuestos.created_at (la pre-estimación), no la creación de la oportunidad; las 48 h viven en reglas_negocio.horas_seguimiento_presupuesto (migración paso11), no en el código. Las oportunidades que cumplen la condición las da GET /llamadas-del-dia (fila 8, apartado seguimientos_por_abrir); este endpoint sigue sin implementar (rama siguiente) |
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST |
 | 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura |
+| 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
 autenticación del webhook): además del cuerpo, toda petición debe traer la
@@ -162,6 +163,15 @@ atiende una llamada repetida devuelve lo guardado sin recalcular nada.
   verificada, 17/17); el Schedule Trigger en sí no está construido
   todavía. Ver
   `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`.
+  (Nota 2026-10-07, rama feat/n0-listado-wf3: la antigüedad se mide desde
+  presupuestos.created_at, la creación del presupuesto, que es la
+  pre-estimación; no desde la creación de la oportunidad, que puede ser
+  anterior si el cálculo se repitió. La columna se llama created_at: el
+  "creado_en" que escribió D13 no existe en ninguna tabla. Las 48 h no
+  están en el código: viven en reglas_negocio.horas_seguimiento_presupuesto
+  (migración paso11), entero entre 1 y 8760. La consulta del barrido la
+  hace GET /llamadas-del-dia (5.7), que además exige que no haya ninguna
+  visita salvo canceladas. El límite es estricto ("más de 48 h").)
 - sin_decision_post_visita: N días desde visitas.fecha_propuesta sin que
   oportunidades.estado llegue a ganada/perdida. N = 5 días
   laborables, almacenado en reglas_negocio como
@@ -209,6 +219,12 @@ Flujo:
      'pendiente_aprobacion', WF3 se lo recuerda a administración. Al
      registrarse la decisión, el estado cambia y el recordatorio se
      detiene solo, sin que nadie tenga que avisar a WF3 (P8).
+     (Nota 2026-10-07: WF3 obtiene esta lista de GET /llamadas-del-dia,
+     apartado gates_sin_decision, "Gate sin decisión registrada"; ver
+     5.7. El backend YA LEE horas_recordatorio_gate en cada llamada; el
+     docstring de la migración paso10 dice que no la lee, y era cierto
+     cuando se escribió. La antigüedad se mide desde
+     presupuestos.created_at.)
 
 Un Gate sin decisión no recibe ningún seguimiento automático dirigido al
 cliente; solo el recordatorio a administración (P7). No hay nodo Wait: WF2
@@ -788,6 +804,144 @@ app/main.py. Verificación: scripts/check_aviso_gate_http.py (75/75) y
 scripts/check_aviso_gate_service.py (18/18), con ocho pruebas en negativo,
 una de ellas (N6, float) mutante equivalente (detalle en la sección 4.2 del
 plan y en el commit b6e9adf).
+
+5.7 GET /llamadas-del-dia (añadido el 2026-10-07, rama feat/n0-listado-wf3)
+
+Para qué: devuelve la lista diaria de llamadas que WF3 (n8n) envía a
+administración cada día laborable a las 9:00 (D25.2: un barrido al día, una
+sola lista). n8n no lee la base de datos (D21.6). NO cambia ningún estado: el
+paso de 'presupuesto_enviado' a 'seguimiento_pendiente' lo hará POST
+/create-followup-task (rama siguiente), llamado por WF3 para cada elemento de
+seguimientos_por_abrir. Lo llama un workflow, nunca un agente: solo REST, sin
+tool MCP, y de SOLO LECTURA. Plan completo y decisiones P1-P9:
+docs/Plan_Endpoint_Listado_WF3.txt. Las decisiones de Gabi se citan como D25
+(D25.2, D25.4, D25.7, D25.8, D25.14, D25.15 y D25.16) y D24.4; su documento se
+añadirá a docs/ después del merge.
+
+Autenticación: la de /gate-decisions y /gate-avisos, cabecera X-Gate-Secret
+(GATE_SECRET). NO X-Webhook-Secret, que tiene la herramienta del Agente 2: la
+lista lleva nombres y teléfonos de todos los clientes pendientes. El valor de
+WEBHOOK_SECRET da 401 en cualquiera de las dos cabeceras (verificado). El 401
+es idéntico al de los demás endpoints ({"detail": "No autorizado"},
+WWW-Authenticate: APIKey).
+
+Entrada: ninguna (ni cuerpo, ni parámetros). La lista depende solo de los
+datos y del reloj de Postgres (now()). No hay 422 posible.
+
+Respuesta 200 (fechas en hora de Madrid con su desfase):
+  generado_en           now() de Postgres: el "ahora" de todos los plazos.
+  dia_visitas           el próximo día laborable (YYYY-MM-DD), el del
+                        apartado e).
+  reglas                {horas_recordatorio_gate, horas_seguimiento_presupuesto},
+                        los dos plazos leídos de reglas_negocio en ESTA llamada.
+  cinco listas, siempre presentes ([] si están vacías), lo más antiguo primero:
+  a) gates_sin_decision ("Gate sin decisión registrada", motivo
+     'gate_sin_decision'): estado 'pendiente_aprobacion' y presupuesto creado
+     hace más de horas_recordatorio_gate horas. Nunca "cliente pensándoselo":
+     sin registro de intentos de llamada (D24.4), el sistema no distingue si
+     el cliente se lo piensa o si nadie le llamó.
+  b) seguimientos_por_abrir ('seguimiento_por_abrir'): 'presupuesto_enviado',
+     fecha_ultimo_contacto NULL, ninguna visita salvo canceladas, y
+     presupuesto creado hace más de horas_seguimiento_presupuesto horas.
+  c) seguimientos_abiertos ('seguimiento_abierto'): 'seguimiento_pendiente',
+     sin plazo.
+  d) visitas_sin_confirmar ('visita_sin_confirmar'): visitas 'solicitada' que
+     NO son del próximo laborable, también las de fecha ya pasada.
+  e) visitas_proximo_laborable ('visita_proximo_laborable'): visitas
+     'solicitada' o 'confirmada' cuya fecha_propuesta cae en dia_visitas.
+  Elemento de a), b) y c): oportunidad_id, motivo, tipo_reforma, contacto y
+  fecha_presupuesto (presupuestos.created_at). Elemento de d) y e):
+  oportunidad_id, motivo, tipo_reforma, contacto, estado_visita, fecha_visita
+  (visitas.fecha_propuesta) y fecha_solicitud_visita (visitas.created_at).
+  contacto: {nombre, telefono, origen} de leads.datos_estructurados ->
+  'contacto' (origen "solicitud"); sin esa clave, nombre y telefono null y
+  origen "no_disponible". Nunca la ficha de clientes (misma regla que 5.6).
+  Sin repeticiones (D25.2): una oportunidad sale como mucho una vez en toda la
+  lista; una visita 'solicitada' del próximo laborable sale solo en e).
+
+Lo que NO sale (minimización, RGPD): email, cualquier importe, umbral, IVA,
+motivo_gate, lead_token, cliente_id, lead_id, presupuesto_id, visita_id, m2,
+nivel_acabados, fotos, texto_cliente, el informe del Gate y el estado de la
+oportunidad. Defensa doble: las consultas no los leen (tampoco el email del
+contacto, ni hacen JOIN con clientes) y todos los modelos tienen
+extra="forbid".
+
+Plazos (D25.7, D25.15): límite ESTRICTO en horas exactas, "más de 24 h" ->
+presupuestos.created_at < now() - 24 h; con 24 h exactas no entra. La base es
+presupuestos.created_at (la pre-estimación), no la creación de la oportunidad.
+Con un solo barrido al día, el retraso real es de 24 a 48 h en el recordatorio
+del Gate y de 48 a 72 h en el seguimiento. Es aceptable porque administración
+llama a cada Gate EL MISMO DÍA del aviso de WF2 (D25.14): el recordatorio de
+WF3 cubre al cliente que se lo está pensando, no la primera llamada.
+
+Próximo laborable: el siguiente día de lunes a viernes después de HOY en
+Madrid (el viernes da el lunes). Con "mañana" natural, las visitas del lunes
+no se recordarían nunca la víspera, porque WF3 no se ejecuta el domingo. El
+día se toma como el intervalo [00:00, 00:00 del día siguiente) en hora de
+Madrid, calculado con zoneinfo (un día de cambio de hora mide 23 o 25 h).
+
+Reglas: horas_recordatorio_gate (paso10) y horas_seguimiento_presupuesto
+(paso11, 48), leídas en cada llamada, nunca escritas en el código. Cada una
+tiene que ser un ENTERO entre 1 y 8760 (un año). El máximo se añadió tras
+demostrar que, sin él, un valor como 99.999.999 (el mayor entero de
+NUMERIC(10,2)) hacía caer now() - esas horas fuera del rango de fechas de
+Postgres ("timestamp out of range") y respondía 500 en vez del 503.
+
+| Código | motivo | Cuándo | Reintento en n8n |
+|---|---|---|---|
+| 200 | — | Llave correcta y las dos reglas válidas (las listas pueden venir vacías) | — |
+| 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET en cualquiera de las dos cabeceras | NO |
+| 503 | configuracion_incompleta | Falta una de las dos reglas, o no es un entero entre 1 y 8760; "faltan" nombra la clave y el problema | Inútil hasta arreglar la regla, pero inofensivo (no escribe nada) |
+| 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+Orden de las comprobaciones: 401 -> 503 -> 200. Las reglas se leen antes que
+cualquier dato personal.
+
+503 SIN log: el endpoint es de solo lectura y no hay ninguna oportunidad a la
+que asociar el log (logs.entity_id es NOT NULL). La traza queda en una línea
+[AVISO] en el stderr del uvicorn (nombra las claves, nunca un secreto) y en la
+ejecución fallida de WF3 en n8n. Distinto de /visits, que sí deja un log.
+
+SOLO LECTURA, con tres barreras: get_db_connection() (termina con rollback);
+la PRIMERA orden de la transacción es SET TRANSACTION ISOLATION LEVEL
+REPEATABLE READ, READ ONLY (Postgres rechaza cualquier escritura; y las cinco
+consultas ven la misma foto de los datos, para que nada salga dos veces ni se
+pierda si cambia algo entre una y otra); y ningún FOR UPDATE. No escribe
+nada, tampoco en logs. Consecuencia: la base de datos no registra si WF3 ya
+envió la lista de hoy; eso es cosa de WF3.
+
+Volumen: sin paginación en N0. El 2026-10-07 había 27 oportunidades y 1
+visita activa; la lista real tenía 9 elementos (1 Gate y 8 seguimientos por
+abrir).
+
+LIMITACIONES (asumidas en N0):
+  - Un solo barrido al día: un plazo cumplido a las 9:01 espera al día
+    siguiente (retraso real de 24-48 h y 48-72 h, aceptado por D25.15).
+  - Festivos no detectados (como 5.4).
+  - Sin salida en N0 para los seguimientos abiertos (solo salen si el cliente
+    pide visita desde el chat) ni para las visitas 'solicitada' (ningún
+    endpoint las confirma): se repiten cada día hasta la ampliación de
+    seguimientos y visitas (D25.9-D25.11).
+  - Hoy, 4 de los 8 seguimientos por abrir son de leads de prueba sin la clave
+    'contacto' (salen con origen "no_disponible"). No se tocan: se cerrarán
+    desde el formulario cuando exista esa ampliación y servirán como datos de
+    prueba (D25.16).
+  - Una oportunidad en a), b) o c) sin presupuesto (solo posible editando a
+    mano) no sale.
+  - La llave X-Gate-Secret abre ahora la lista de TODOS los clientes
+    pendientes: nunca dársela al Agente 2. Una vez en n8n y en el email de WF3,
+    los datos ya no los protege esta API.
+
+Implementación: app/services/listado_llamadas_service.py (obtener_listado,
+leer_listado, validar_reglas_listado, siguiente_laborable, limites_dia_madrid,
+contacto_de), app/api/listado_llamadas.py, app/schemas/listado_llamadas.py;
+sexto include_router en app/main.py; migración
+scripts/migraciones_ejecutadas/paso11_regla_seguimiento_presupuesto.py.
+Verificación: scripts/check_migracion_regla_seguimiento.py (9/9; 2/9 antes de
+migrar), scripts/check_listado_llamadas_service.py (39/39) y
+scripts/check_listado_llamadas_http.py (88/88, puerto 8024), con doce pruebas
+en negativo, N1-N12 (resultados exactos en la sección 6.4 del plan y en el
+commit 14c17a4).
 
 6. Revisión técnica final — hallazgos y resolución
 

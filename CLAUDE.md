@@ -166,6 +166,11 @@ Gate, que el Agente 2 no debe ver). No forma parte de los 5 endpoints
 originales.)
 (Nota 2026-10-06: GET /gate-avisos ya NO está pendiente de merge: está
 integrado en main, 002cf48, comprobado en GitHub.)
+(Nota 2026-10-07: desde el 2026-10-07, en la rama feat/n0-listado-wf3
+(pendiente de merge), GET /llamadas-del-dia: solo REST, sin tool MCP, de
+SOLO LECTURA, sexto include_router, con la cabecera X-Gate-Secret. Es la
+lista diaria de llamadas de WF3 (D25). No forma parte de los 5 endpoints
+originales.)
 create-followup-task sigue siendo un docstring de una línea.
 Lo que sigue es la especificación completa, no el estado actual.
 
@@ -410,6 +415,18 @@ SOLO REST.
 > 4. **El repositorio es PÚBLICO** (comprobado en GitHub el 2026-10-06). Los
 >    JSON exportados de n8n llevan el chatId de Telegram y el email de
 >    administración: no se suben al repositorio sin sanearlos antes.
+>
+> **(Nota 2026-10-07.) Bloque actual: GET /llamadas-del-dia**, la lista
+> diaria de llamadas para WF3, implementado y verificado en la rama
+> `feat/n0-listado-wf3`, **pendiente de merge** (Bloques A a E cerrados;
+> plan docs/Plan_Endpoint_Listado_WF3.txt). Misma regla de siempre: no hacer
+> merge sin la confirmación explícita de Gabi, y siempre con `--ff-only`.
+> Las decisiones de Gabi de este bloque son D25 (D25.2, D25.4, D25.7,
+> D25.8, D25.14, D25.15 y D25.16) y D24.4: su documento lo añadirá el tutor
+> a docs/ después del merge; hasta entonces se citan solo por su número. El
+> siguiente bloque de backend previsto es POST /create-followup-task (paso
+> de 'presupuesto_enviado' a 'seguimiento_pendiente', llamado por WF3 para
+> cada seguimiento por abrir), en su propia rama.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -567,6 +584,34 @@ check_visits_http 55/55, check_lead_session_http 24/24. Suite completa
 (Nota 2026-10-06: "pendiente de merge" ya no es cierto: integrado en main,
 002cf48.)
 
+GET /llamadas-del-dia (rama feat/n0-listado-wf3, 2026-10-07, pendiente de
+merge; plan a04d4c4 y ed99ae0, migración 39c117b, código 011b668, arreglo
+5a35d24, pruebas 14c17a4): la lista diaria de llamadas de WF3, sin entrada,
+con X-Gate-Secret. Cinco apartados (Gate sin decisión registrada,
+seguimientos por abrir y abiertos, visitas sin confirmar y del próximo día
+laborable), cada elemento con oportunidad_id, motivo, tipo_reforma,
+contacto {nombre, telefono, origen} y sus fechas en hora de Madrid. NUNCA
+email ni importes. Plazos ESTRICTOS desde presupuestos.created_at con
+horas_recordatorio_gate (24) y horas_seguimiento_presupuesto (48, regla
+NUEVA, migración paso11), enteros entre 1 y 8760 (sin máximo, 99.999.999
+daba "timestamp out of range" y un 500: demostrado y corregido). Solo
+lectura con SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY como
+primera orden; 503 configuracion_incompleta SIN log, con [AVISO] en stderr.
+Contrato y limitaciones: fila 8 y sección 5.7 de la Adenda.
+check_migracion_regla_seguimiento 9/9 (2/9 antes de migrar).
+check_listado_llamadas_service 39/39 (límite exacto al microsegundo en una
+transacción con ROLLBACK). check_listado_llamadas_http 88/88 (puerto 8024).
+En negativo, sobre copias (servicio | HTTP): N1 webhook 39/39 | 46/88; N2
+escribe en logs 38/39 | 87/88; N2b INSERT con READ ONLY 39/39 | 54/88; N3
+base en la oportunidad 37/39 | 78/88; N4 <= 37/39 | 88/88; N5 mañana
+natural 37/39 | 88/88; N6 +02:00 fijo 35/39 | 86/88; N7 ficha 39/39 |
+84/88; N8 email 39/39 | 81/88; N9 sin fecha_ultimo_contacto 39/39 | 87/88;
+N10 sin exclusión de d) 38/39 | 86/88; N11 plazos en el código 35/37 |
+80/88; N12 sin máximo 34/38 | 85/88. Suite completa 37/37 en UNA pasada
+válida (ver "Suite de verificación"). Gotcha encontrado al probar: Python
+resta dos datetime con el MISMO objeto de zona "de reloj de pared" (da
+24 h el día de 25); para medir la duración real, restar en UTC.
+
 check_tipo_reforma_constraint arreglado (rama feat/n0-gate-decisions,
 commit 145dcea, 2026-10-03): su comprobación final contaba TODAS las
 oportunidades de la tabla y exigía 0, así que daba "HAY FALLOS" siempre
@@ -672,6 +717,16 @@ UNA pasada válida el 2026-10-03, de 17:45:51 a 17:52:45, con la regla de
 uso (Gabi confirmó enchufado y tapa abierta) y sin ningún Kernel-Power
 506/507 en el intervalo ("ninguna suspension: la pasada vale"). Salida de
 los cinco scripts de P4 revisada a mano: sin fallos.)
+(Nota 2026-10-07, rama feat/n0-listado-wf3: la suite tiene ahora 37
+scripts, con check_migracion_regla_seguimiento,
+check_listado_llamadas_service y check_listado_llamadas_http (puerto 8024,
+nunca el 8000). 37/37 en UNA pasada válida el 2026-10-07, de 16:58:30 a
+17:06:37, con la regla de uso (Gabi confirmó enchufado y tapa abierta) y
+sin ningún Kernel-Power 506/507 en el intervalo ("ninguna suspension: la
+pasada vale"). check_graceful_shutdown y check_mcp_connection desde copias
+en los puertos 8030 y 8031; uvicorn del 8031 detenido por su PID (el del
+log, igual al de netstat). Salida de los cinco scripts de P4 revisada a
+mano: sin fallos.)
 
 Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
@@ -702,6 +757,13 @@ Lo demás de la nota anterior sigue pendiente. Pendiente también:
 create-followup-task, uno de los 5 endpoints originales, sigue siendo un
 docstring de una línea: hay que implementarlo o justificar formalmente que
 sale del alcance de N0.)
+(Nota 2026-10-07: GET /llamadas-del-dia, rama feat/n0-listado-wf3, deja
+lista la consulta que necesita create-followup-task (apartado
+seguimientos_por_abrir); create-followup-task, WF3 en n8n, la ampliación
+de seguimientos y visitas (D25.9-D25.11) y el email al cliente (D25.1)
+siguen pendientes. Los 8 seguimientos por abrir de prueba (4 sin la clave
+'contacto') NO se tocan: se cerrarán desde el formulario cuando exista esa
+ampliación y servirán como datos de prueba (D25.16).)
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
@@ -755,6 +817,10 @@ rápida, no sustituye esa documentación. Contiene:
   texto.)
 - Plan_Endpoint_Aviso_Gate.txt — plan de GET /gate-avisos/{oportunidad_id}
   (P1-P7 decididas, bloques A a D con sus hashes).
+- Plan_Endpoint_Listado_WF3.txt — plan de GET /llamadas-del-dia y de la
+  regla horas_seguimiento_presupuesto (P1-P9 decididas, pruebas en
+  negativo N1-N12 con sus resultados exactos, bloques A a E con sus
+  hashes).
 - Plan_Ejecutor_Suite.txt — lanzador de la suite que impide la suspensión
   de Windows. APLAZADO el 2026-10-03; lo sustituye la regla de uso de este
   archivo.

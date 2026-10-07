@@ -15,6 +15,26 @@ confirmada por Gabi (D25.16). Bloque C en curso.]
 corregido en 5a35d24. Bloque D cerrado: 39/39 y 88/88, N1-N12 exactos
 en 6.4, suite 37/37 en una pasada válida.]
 
+**[Actualizado 2026-10-07] IMPLEMENTADO Y VERIFICADO** en la rama
+feat/n0-listado-wf3, pendiente de merge a main (solo con la confirmación de
+Gabi y --ff-only). Hashes de cada bloque:
+  A (plan):              a04d4c4, y su revisión ed99ae0 (P1-P9 decididas,
+                         plazos D25.15).
+  B (migración paso11):  39c117b (check 2/9 antes y 9/9 después;
+                         idempotente).
+  C (esquema, servicio,
+     ruta):              011b668 (prueba mínima 38/38), y el arreglo
+                         5a35d24 (máximo de 8760 h, defecto de P6
+                         demostrado con salida real; cursor con "with").
+  D (pruebas):           14c17a4 (39/39, 88/88, N1-N12 exactos en 6.4,
+                         suite 37/37 en una pasada válida).
+  E (documentación):     el commit que añade esta nota (un commit no puede
+                         contener su propio hash; ver git log): fila 8 y
+                         sección 5.7 de la Adenda, notas fechadas en la
+                         Adenda (fila 5, secciones 2 y 3), en
+                         TFM_Decisiones_Modelo_Datos_Leads.txt y en el
+                         Informe (fila de D13), y CLAUDE.md al día.
+
 Fuentes: el encargo del Bloque A del 2026-10-07 (decisiones D25.2, D25.4,
 D25.7 y D25.8 ya tomadas, y pre-decisiones 1-10 del tutor), la Adenda (fila
 5 y secciones 2, 3, 5.4 y 5.6), docs/Plan_Endpoint_Aviso_Gate.txt (modelo
