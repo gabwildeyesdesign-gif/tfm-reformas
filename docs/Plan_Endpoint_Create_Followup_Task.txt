@@ -1,0 +1,1015 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: POST /create-followup-task (abrir el seguimiento de 48 h de una
+oportunidad sin Gate que no ha pedido visita)
+
+Documento de plan · Nivel N0 · 2026-10-07 · Rama feat/n0-create-followup-task
+(desde main = 7b66fa1)
+Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+
+Fuentes: el encargo del Bloque A del 2026-10-07 (decisiones D25.7, D25.13,
+D25.14 y D25.15 ya tomadas, Adenda fila 5, y pre-decisiones 1-10 del
+tutor), docs/Decisiones_D25_WF3_Seguimiento_y_Resultado_Llamadas.md, la
+Adenda (fila 5, secciones 2, 5.5 y 5.7), los dos planes modelo
+(docs/Plan_Endpoint_Gate_Decisions.txt para un endpoint que ESCRIBE y
+docs/Plan_Endpoint_Listado_WF3.txt para la condición "seguimiento por
+abrir"), el código y la base de datos real, comprobados el mismo día
+(sección 0).
+
+Nota sobre nombres: D25.x son las decisiones de Gabi (documento ya en
+docs/). P1-P12 son las preguntas abiertas de ESTE plan (sección 9); no
+tienen nada que ver con las P de otros planes. Las "pre-decisiones" son
+las 10 del tutor en el encargo. C1-C5 son contradicciones detectadas
+(sección 1) y R1-R8 riesgos (sección 7).
+
+
+================================================================
+0. COMPROBACIONES HECHAS ANTES DE ESCRIBIR ESTE PLAN (solo lectura)
+================================================================
+
+Leído:
+  - CLAUDE.md, entera ("Cómo trabajamos", regla de uso de la suite con la
+    nota del 2026-10-03, limitación P4, puertos, borrados, gotchas).
+  - docs/Decisiones_D25_WF3_Seguimiento_y_Resultado_Llamadas.md, entero
+    (D25.1-D25.16 y A4).
+  - Adenda: fila 5 y sección 2 (create-followup-task, con su nota del
+    2026-10-07), 5.5 (POST /gate-decisions) y 5.7 (GET /llamadas-del-dia).
+  - docs/Plan_Endpoint_Gate_Decisions.txt y
+    docs/Plan_Endpoint_Listado_WF3.txt, enteros.
+  - Código: app/api/followup_tasks.py y app/services/followup_service.py
+    (un docstring de una línea cada uno), app/services/gate_decisions_service.py
+    y app/api/gate_decisions.py (modelo de estilo),
+    app/services/listado_llamadas_service.py (condición del apartado b),
+    app/api/listado_llamadas.py, app/api/security.py
+    (verificar_gate_secret), app/db/connection.py
+    (get_transactional_connection), app/services/visits_service.py,
+    app/services/reglas_visita.py, app/schemas/gate_decisions.py y los
+    campos "status" de app/schemas/leads.py y estimates.py.
+  - scripts/check_gate_decisions_http.py y
+    scripts/check_listado_llamadas_http.py (modelos de pruebas), y los
+    cambios EN MEMORIA de check_listado_llamadas_service.py.
+  - docs/schema_actual.sql: oportunidades, presupuestos, visitas, logs y
+    reglas_negocio.
+  - git log --oneline -8 y git status -sb: main = origin/main = 7b66fa1,
+    árbol limpio. El "main = 7b66fa1" del encargo es correcto. Rama creada
+    desde ahí.
+
+Comprobado en el CÓDIGO:
+  - K1. followup_tasks.py y followup_service.py: solo el docstring. Ningún
+    include_router para ellos en app/main.py (hay seis; este será el
+    séptimo).
+  - K2. NADIE escribe hoy 'seguimiento_pendiente'. POST /visits lo admite
+    como estado de PARTIDA (ESTADOS_QUE_PERMITEN_VISITA =
+    presupuesto_enviado, seguimiento_pendiente, visita_agendada) y lo pasa
+    a 'visita_agendada'. Es la única salida de ese estado en N0.
+  - K3. La condición "seguimiento por abrir" vive hoy SOLO en
+    listado_llamadas_service.py (WHERE_POR_ABRIR, con los parámetros
+    estado, ahora, horas y cancelada), y la validación de la regla (entero
+    entre 1 y MAX_HORAS_REGLA = 8760) en validar_reglas_listado, junto con
+    la de horas_recordatorio_gate.
+  - K4. Los scripts del listado cambian EN MEMORIA, en el módulo
+    listado_llamadas_service, el nombre CLAVE_SEGUIMIENTO y la función
+    validar_reglas_listado (CASO 13 de check_listado_llamadas_http, y S3/S7
+    de check_listado_llamadas_service). Lo que se mueva al módulo
+    compartido (sección 3) no puede romper esos cambios en memoria: los
+    dos nombres siguen existiendo en listado_llamadas_service y siguen
+    leyéndose allí en el momento de ejecutarse.
+  - K5. POST /visits y POST /gate-decisions bloquean la fila de la
+    oportunidad con FOR UPDATE OF o al empezar. Son los únicos endpoints
+    que escriben las columnas de las que depende la condición
+    (visitas, oportunidades.estado y fecha_ultimo_contacto). Con el mismo
+    bloqueo aquí, las tres operaciones sobre una misma oportunidad se
+    ponen en fila (base de 2.11).
+  - K6. estimate_service NO usa FOR UPDATE: crea el presupuesto y cambia
+    el estado de 'nueva' en una transacción. Solo afecta a oportunidades
+    que todavía no tienen presupuesto (aquí, 409 sin_presupuesto); ver
+    2.11.
+  - K7. En /leads y /calculate-estimate, el campo "status" de la respuesta
+    es el estado REAL de la oportunidad (str). Los endpoints posteriores
+    lo llaman estado_oportunidad (/gate-decisions, /gate-avisos,
+    /leads/session). Ver P6.
+  - K8. El 401 de /gate-decisions y /llamadas-del-dia sale de la misma
+    función _no_autorizado: {"detail": "No autorizado"} con
+    WWW-Authenticate: APIKey. Aquí se reutiliza tal cual.
+  - K9. get_transactional_connection(): commit al salir del "with" sin
+    excepción, rollback si salta una (con la guarda de conn.closed, D16).
+    Nivel de aislamiento: el de por defecto, READ COMMITTED (ver 2.11).
+
+Comprobado en la BASE DE DATOS REAL (2026-10-07, now() = 16:36 UTC =
+18:36 en Madrid; solo SELECT en una sesión readonly, sin imprimir ningún
+dato personal; script en el scratchpad, fuera del repositorio):
+  - B1. Oportunidades por estado: nueva 8, pendiente_aprobacion 1,
+    perdida 5, presupuesto_enviado 12, visita_agendada 1. TOTAL 27.
+    (cualificada, seguimiento_pendiente y ganada: 0.) Igual que el
+    recuento del plan del listado (B1 de ese plan, 13:09 UTC).
+  - B2. Visitas por estado: confirmada 1. TOTAL 1.
+  - B3. Presupuestos: 19, de ellos 7 con Gate.
+  - B4. fecha_ultimo_contacto NO NULL: 6 (perdida 5 y visita_agendada 1),
+    todas escritas por POST /gate-decisions.
+  - B5. Reglas: horas_seguimiento_presupuesto = 48.00,
+    horas_recordatorio_gate = 24.00, dias_espera_decision_post_visita =
+    5.00 (esta última, sin uso en N0 por D25.13).
+  - B6. La condición b) EXACTA del listado, con las 48 h leídas de la
+    tabla: 8 oportunidades (de ellas, 0 con Gate y 4 de leads sin la clave
+    'contacto'). Son los 8 casos de D25.16.
+  - B7. 'presupuesto_enviado' CON Gate: 0. 'presupuesto_enviado' SIN
+    presupuesto: 0. Con los endpoints de N0 ninguno de los dos casos es
+    alcanzable (ver C3).
+  - B8. logs: 25 filas, todas entity_type 'oportunidad'; acciones
+    presupuesto_calculado 19 y gate_decision_registrada 6. Ninguna de
+    seguimiento. logs.accion es VARCHAR(60). logs solo tiene el índice de
+    su clave primaria (ninguno por entity_id).
+  - B9. Puertos 8025, 8026 y 8027: nadie escucha y ningún script los usa
+    (los usados son 8010, 8011, 8012, 8015, 8016, 8018, 8019, 8020, 8023
+    y 8024).
+
+
+================================================================
+1. CONTRADICCIONES Y HALLAZGOS DETECTADOS ANTES DE DISEÑAR
+================================================================
+
+C1. Adenda, sección 2: "Ambos casos registran un log en la tabla logs
+    (polimórfica) y generan una notificación no bloqueante a
+    administración/atención al cliente para seguimiento telefónico." El
+    encargo dice que el endpoint "NO llama ni avisa a nadie: es una
+    etiqueta en el expediente". Manda D25.2 (una sola lista diaria, sin
+    repeticiones): el aviso a administración ES la lista de WF3, y este
+    endpoint no envía nada. Nota fechada en la Adenda en el Bloque D, sin
+    reescribir el texto.
+
+C2. Adenda, fila 5: salida "log_id, status". "status" en /leads y
+    /calculate-estimate es el estado de la oportunidad (K7); los tres
+    endpoints posteriores lo llaman estado_oportunidad. Propuesta en 2.6
+    y P6.
+
+C3. Pre-decisión 3 frente a la 6. La 3 pide que la condición sea "la
+    misma que el apartado b)" de GET /llamadas-del-dia, que NO mira el
+    Gate; la 6 pide un 409 "con Gate". Si el endpoint comprueba el Gate y
+    el listado no, divergen: una oportunidad con Gate puesta a mano en
+    'presupuesto_enviado' saldría en b) y el endpoint la rechazaría (WF3
+    fallaría cada mañana con ella). Hoy no hay ninguna (B7). Propuesta
+    (P1): el Gate pasa a ser un criterio MÁS de la condición compartida,
+    con lo que también el listado deja de mostrar ese caso en b). Es un
+    cambio de comportamiento del listado (en main), pero solo sobre datos
+    editados a mano: el apartado b) real sigue con las mismas 8 filas
+    (B6: 0 con Gate). Motivo de fondo: D25.14 dice que el seguimiento
+    "cubre al cliente sin Gate que no ha pedido visita", y D25.8 que el
+    estado cambia la llamada (el cliente con Gate nunca ha visto una
+    cifra).
+
+C4. Pre-decisión 3 (UNA fuente) frente a la 6 (un 409 distinto por
+    causa). Un WHERE solo responde "sí o no"; para saber CUÁL de las
+    condiciones falla hay que evaluarlas por separado, y eso es justo lo
+    que podría divergir del WHERE. Se resuelve con el diseño de la
+    sección 3 (criterios con nombre, compartidos).
+
+C5. Riesgo fuera del repositorio (R5, P12): tras el 201, GET
+    /leads/session devolverá 'seguimiento_pendiente' para esa sesión de
+    chat. El router de n8n (D18.9) decide con ese estado a qué agente va
+    el mensaje. Si su Switch solo conoce 'presupuesto_enviado' para el
+    Agente 2, el cliente al que se le abre el seguimiento se quedaría sin
+    respuesta en el chat (o iría a una rama equivocada). Desde aquí no se
+    puede comprobar (el JSON del router no está en el repositorio).
+
+
+================================================================
+2. CONTRATO
+================================================================
+
+2.1 Quién lo llama y para qué
+  WF3 (n8n, todavía no construido, bloque 5 de D25.12) pide cada día
+  laborable a las 9:00 la lista a GET /llamadas-del-dia y, por cada
+  elemento de seguimientos_por_abrir, llama a este endpoint. El endpoint
+  pasa la oportunidad de 'presupuesto_enviado' a 'seguimiento_pendiente' y
+  deja constancia en logs. Desde ese momento sale en seguimientos_abiertos
+  (apartado c) del listado) hasta que se registre el resultado de la
+  llamada (ampliación de D25.9-D25.11, fuera de alcance) o hasta que el
+  cliente pida visita desde el chat (POST /visits la acepta desde
+  'seguimiento_pendiente', K2).
+  NO llama ni avisa a nadie (C1): es una etiqueta en el expediente. La
+  llamada la hace administración con la lista del día (D25.1, D25.14).
+  Solo REST, sin tool MCP (Adenda fila 5: la tool queda para N1+). Solo
+  el motivo 'sin_respuesta_visita' (D25.13).
+
+2.2 Ruta (pre-decisión 9): POST /create-followup-task, SE MANTIENE
+  Es la del contrato original (Adenda fila 5). Contra: es un verbo en la
+  URL (estilo RPC) y no se crea ninguna "tarea" (la Adenda, sección 2:
+  "No se crea tabla de tareas nueva"); el registro es el log. Pero la
+  Adenda declara el patrón híbrido REST + RPC (sección 1, título), WF3
+  aún no existe y no hay ningún motivo FUERTE: cambiarla solo movería el
+  problema de nombre al renombrado de D25.9, que revisará los nombres de
+  todo el bloque. Pregunta P9.
+
+2.3 Autenticación (pre-decisión 1): X-Gate-Secret
+  dependencies=[Depends(verificar_gate_secret)], la misma de
+  /gate-decisions, /gate-avisos y /llamadas-del-dia. NO
+  verificar_webhook_secret: WEBHOOK_SECRET lo tiene la herramienta HTTP
+  del Agente 2 (un LLM), y este endpoint cambia el estado de una
+  oportunidad desde una herramienta de administración. Validación:
+  CORRECTA. WF3 usará la misma credencial "Header Auth" PROPIA del Gate
+  que ya tienen WF2 y el formulario.
+  El 401 es idéntico al de los demás (K8) y va ANTES que la validación
+  del cuerpo (con un cuerpo inválido y sin llave: 401, no 422).
+  Pruebas obligatorias (6.2, CASO 1): el valor de WEBHOOK_SECRET da 401 en
+  X-Gate-Secret y en X-Webhook-Secret; y prueba en negativo N1 con la
+  dependencia cambiada a la del webhook.
+
+2.4 Entrada (JSON, extra="forbid")
+  oportunidad_id  entero > 0, obligatorio. Lo envía un workflow (no un
+                  LLM): por eso se acepta un identificador, como en
+                  /gate-decisions.
+  motivo          lista cerrada (Enum MotivoSeguimiento) con UN solo valor
+                  en N0: 'sin_respuesta_visita'. Obligatorio (aunque solo
+                  tenga un valor): así el contrato de N1 no cambia de
+                  forma al añadir el segundo, y n8n lo envía explícito.
+  Un motivo desconocido o 'sin_decision_post_visita' da 422 de Pydantic
+  (P3, opción a): el Enum de N0 no lo tiene, y el mensaje de Pydantic
+  nombra el único valor permitido. Así la base de datos no se toca.
+  Regla de Tres (P3):
+    a) 422 de Pydantic, sin distinguir                         [PROPUESTA]
+       A favor: cero código para algo que no existe en N0; mismo trato
+       que cualquier valor fuera de lista (decision 'continuar' en
+       /gate-decisions). En contra: no dice "existe, pero en N1".
+    b) 422 de negocio con motivo 'motivo_no_disponible_en_n0': el Enum
+       admite los dos valores y el servicio rechaza el segundo. En contra:
+       código y pruebas para una rama que nunca debe llamarse; y el
+       segundo valor quedaría en el esquema de /docs como si funcionara.
+    c) 501 Not Implemented. En contra: 501 significa "el SERVIDOR no
+       sabe hacer este método"; n8n lo trataría como error del servidor
+       (5xx) y lo reintentaría (Adenda 5: los 5xx se reintentan).
+
+2.5 Efectos del 201, en UNA transacción (pre-decisión 4)
+  get_transactional_connection(); todo o nada:
+    1. UPDATE oportunidades SET estado = 'seguimiento_pendiente',
+       updated_at = now(). NO se toca fecha_ultimo_contacto (pre-decisión
+       8: no ha habido contacto; es justo lo que se va a intentar).
+       Segunda barrera (P10): el UPDATE lleva "AND estado =
+       'presupuesto_enviado'" y se comprueba que cambia EXACTAMENTE una
+       fila (ver 2.11).
+    2. INSERT en logs: entity_type 'oportunidad', entity_id =
+       oportunidad_id, accion 'seguimiento_abierto' (19 caracteres, cabe
+       en VARCHAR(60)), detalle (JSONB):
+         {"motivo": "sin_respuesta_visita",
+          "estado_anterior": "presupuesto_enviado",
+          "horas_seguimiento_presupuesto": 48,
+          "fecha_presupuesto": "<presupuestos.created_at, hora de Madrid>"}
+       La regla y la fecha del presupuesto dejan auditado CON QUÉ plazo se
+       abrió (si un día se cambia la regla, los seguimientos viejos
+       conservan el suyo). Ningún dato personal ni importe.
+  presupuestos, visitas, leads y clientes NO se tocan.
+  El log es la ÚNICA constancia (Adenda, sección 2: "No se crea tabla de
+  tareas nueva"; ver 2.12 para la fecha de apertura).
+
+2.6 Respuesta (201 si se abre, 200 si ya estaba abierto)
+  FollowupTaskResponse, extra="forbid":
+    log_id             logs.id del log 'seguimiento_abierto' (el nuevo en
+                       el 201; el ORIGINAL en el 200). null SOLO en el
+                       caso de P5 (estado puesto a mano, sin log).
+    oportunidad_id     el de la petición.
+    motivo             'sin_respuesta_visita' (en el 200, el del log
+                       original; en N0 siempre coincide).
+    estado_oportunidad 'seguimiento_pendiente' (Enum EstadoOportunidad de
+                       app/schemas/common.py; reutilizarlo en un ESQUEMA
+                       ya se hace en /gate-avisos, no es la tarea
+                       pendiente de los servicios). Es el "status" de la
+                       Adenda, con el nombre de los endpoints recientes
+                       (C2, P6).
+    fecha_apertura     logs.created_at de ese log, en hora de Madrid con
+                       su desfase ("2026-10-12T09:00:03+02:00"). null solo
+                       en el caso de P5.
+    creado             true en el 201, false en el 200 (mismo patrón que
+                       /visits y /gate-decisions: 201 <-> creado).
+  NUNCA importes ni datos personales. Defensa doble: las consultas no los
+  leen (de presupuestos solo id, requiere_aprobacion y created_at) y el
+  esquema no tiene dónde ponerlos (claves exactas comprobadas en 6.2).
+
+2.7 Idempotencia (pre-decisión 5)
+  Si la oportunidad ya está en 'seguimiento_pendiente' -> 200,
+  creado=false, SIN escribir nada (ni log, ni updated_at). Es el caso de
+  un reintento de n8n tras un 201 cuya respuesta se perdió. El log
+  original se identifica así: el ÚLTIMO log de esa oportunidad con accion
+  'seguimiento_abierto' (ORDER BY id DESC LIMIT 1). En N0 solo puede
+  haber uno, porque la única salida de 'seguimiento_pendiente' es
+  'visita_agendada' (K2) y no hay camino de vuelta a
+  'presupuesto_enviado'.
+  Con un solo motivo en N0, "la misma petición" es siempre la misma
+  (no hay 409 "seguimiento_ya_abierto con otro motivo"). En N1, con el
+  segundo motivo, se decidirá qué pasa con un motivo distinto (sección 8).
+  Caso límite (P5): 'seguimiento_pendiente' SIN ningún log
+  'seguimiento_abierto' (solo posible si alguien puso el estado a mano;
+  lo hace, por ejemplo, el CASO 6 de check_listado_llamadas_http, sobre
+  sus propias filas).
+    a) 200 con log_id y fecha_apertura null                    [PROPUESTA]
+       A favor: el estado pedido YA es el de la base de datos, que es lo
+       que necesita WF3 para no reintentar; y no inventa un registro. En
+       contra: log_id deja de ser siempre un entero.
+    b) 409 estado_no_permitido. En contra: un caso que ya está donde se
+       quería se trataría como error y WF3 lo marcaría fallido cada día...
+       aunque en realidad nunca lo llamaría (no sale en b), solo en c).
+    c) 201 escribiendo el log que falta. En contra: el endpoint "repara"
+       datos editados a mano y fecha_apertura sería falsa.
+
+2.8 Tabla de códigos (pre-decisión 6)
+  Formato de los errores de negocio: el de /visits y /gate-decisions,
+  {"detail": {"motivo": "<código>", "mensaje": "<texto>"}}, y en el 503
+  también "faltan". Las mismas dos formas de 422 (Pydantic: lista).
+
+  | Código | motivo | Cuándo | Reintento en n8n |
+  |---|---|---|---|
+  | 201 | — | Seguimiento abierto ahora (creado=true) | — |
+  | 200 | — | Ya estaba en 'seguimiento_pendiente' (creado=false); no escribe nada | — |
+  | 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET en cualquiera de las dos cabeceras; antes de validar el cuerpo | NO |
+  | 422 | (Pydantic) | Campo de más o que falta; oportunidad_id no entero o <= 0; motivo fuera de lista (incluido 'sin_decision_post_visita', P3) | NO |
+  | 404 | oportunidad_no_encontrada | No existe la oportunidad (también con ids enormes: 2147483648 y 99999999999999999999 -> 404, nunca 500) | NO |
+  | 503 | configuracion_incompleta | horas_seguimiento_presupuesto falta o no es un entero entre 1 y 8760 (la MISMA validación que el listado, sección 3). Sin log (P4) | Inútil hasta arreglar la regla, pero inofensivo (no escribe nada) |
+  | 409 | sin_presupuesto | La oportunidad no tiene presupuesto | NO |
+  | 409 | con_gate | Su presupuesto tiene requiere_aprobacion = true (P1) | NO |
+  | 409 | estado_no_permitido | Estado distinto de 'presupuesto_enviado' (y de 'seguimiento_pendiente', que es el 200) | NO |
+  | 409 | contacto_registrado | fecha_ultimo_contacto no es NULL | NO |
+  | 409 | visita_existente | Tiene alguna visita que no está 'cancelada' (P5 del listado: una 'completada' cuenta) | NO |
+  | 409 | plazo_no_cumplido | Su presupuesto tiene 48 h o menos (límite ESTRICTO, D25.15) | NO (se arregla solo con el tiempo: WF3 la volverá a ver en b) otro día) |
+  | 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+  Nombres: sin_presupuesto y estado_no_permitido son los de
+  /gate-decisions (misma idea, mismo nombre). visita_existente y no
+  "visita_activa_existente" (el de /gate-decisions): aquí cuenta también
+  una 'completada', no solo las activas. con_gate, contacto_registrado y
+  plazo_no_cumplido son nuevos.
+  Hoy, con los endpoints de N0, con_gate (en 'presupuesto_enviado'),
+  contacto_registrado y visita_existente son INALCANZABLES salvo editando
+  la base de datos a mano (B7, K2): son DEFENSAS, y las pruebas los
+  provocan por SQL sobre filas propias, como hizo el listado.
+
+2.9 Orden de las comprobaciones (pre-decisión 6), con su justificación
+    1. 401  cabecera X-Gate-Secret (dependencia, antes del cuerpo).
+    2. 422  forma (Pydantic).
+    3. 404  oportunidad_no_encontrada (tras el FOR UPDATE).
+    4. 200  ya en 'seguimiento_pendiente' (repetición, no escribe).
+    5. 503  configuracion_incompleta (la regla de 48 h).
+    6. 409  los seis criterios, en el orden de la sección 3:
+              sin_presupuesto -> con_gate -> estado_no_permitido ->
+              contacto_registrado -> visita_existente -> plazo_no_cumplido
+    7. 201  escritura (2.5).
+  Por qué la repetición (4) va ANTES que el estado y los 409: tras el
+    201 el estado ya no es 'presupuesto_enviado'; si se comprobara antes,
+    un reintento legítimo de n8n daría 409 estado_no_permitido (es la
+    misma lección de /gate-decisions, verificada allí en negativo:
+    112/121). Y va antes que el 503 porque contestar "ya estaba abierto"
+    no necesita la regla: un reintento no debe fallar porque alguien haya
+    roto la configuración entre medias.
+  Por qué el 404 va antes que el 503: un id que no existe es un error de
+    quien llama, sea cual sea la configuración (como en /gate-decisions).
+    Además, si el 503 dejara log (P4, opción b), necesitaría una
+    oportunidad existente a la que asociarlo.
+  Por qué el 503 va antes que los 409: los seis criterios se evalúan en
+    UNA consulta (sección 3) y el último necesita las horas. Leer primero
+    la regla es la condición para que la consulta sea la misma que la del
+    listado.
+  Por qué ese orden entre los 409: de lo estructural a lo pasajero.
+    sin_presupuesto primero: sin presupuesto no hay nada que seguir (y
+      los criterios siguientes miran columnas del presupuesto).
+    con_gate después: el Gate es PERMANENTE (Adenda 5.5), así que es la
+      razón de fondo de que este cliente no vaya por seguimiento, aunque
+      su estado sea cualquier otro (pendiente_aprobacion, visita_agendada
+      o perdida tras su decisión). Es el motivo más útil para quien lee.
+    estado_no_permitido: el expediente está en otra fase.
+    contacto_registrado y visita_existente: defensas del mismo estado.
+    plazo_no_cumplido el ÚLTIMO: es el único que se arregla solo con el
+      tiempo. Así un 409 plazo_no_cumplido significa "todo lo demás está
+      bien, solo hay que esperar", y nunca tapa un problema permanente.
+  Las pruebas lo comprueban con casos que incumplen DOS criterios a la vez
+  (6.2, CASO 6).
+
+2.10 El 503: sin log (pre-decisión 7), con su Regla de Tres (P4)
+  La comparación pedida:
+    - /visits deja log visita_configuracion_incompleta asociado a la
+      oportunidad, con rechazo diferido: quien sufre el 503 es un cliente
+      en el chat, y sin el log administración no se enteraría.
+    - /llamadas-del-dia no deja log (no hay oportunidad; P3 de su plan),
+      solo [AVISO] en stderr; la ejecución fallida de WF3 queda en n8n.
+  a) 503 SIN log, con una línea [AVISO] en stderr que nombra la clave
+     (nunca un secreto), igual que el listado.                [PROPUESTA]
+     A favor: UNA regla, UN comportamiento: horas_seguimiento_presupuesto
+     rota da lo mismo en sus dos lectores. En la práctica, WF3 llama
+     PRIMERO al listado; con la regla rota, el listado ya da 503 y WF3 no
+     llega a este endpoint. Solo se vería aquí si la regla se rompe entre
+     la lista de las 9:00 y las llamadas de unos segundos después, o en
+     una llamada a mano. Quien llama es un workflow, cuyo fallo queda
+     registrado en n8n (y en WF4). Servicio más sencillo (sin rechazo
+     diferido).
+     En contra: aquí SÍ habría una oportunidad a la que asociar el log, y
+     no queda rastro en la base de datos.
+  b) 503 CON log asociado a la oportunidad, con rechazo diferido como en
+     /visits (acción propia, p. ej. seguimiento_configuracion_incompleta).
+     En contra: un log POR OPORTUNIDAD de la lista y por cada reintento
+     de n8n (con los 8 de hoy, 8 logs por pasada); y el listado, con la
+     MISMA regla rota, sigue sin dejar ninguno: dos comportamientos para
+     un mismo fallo.
+  c) Valores por defecto (48 escrito en el código). Contradice D13 y
+     D25.7 y oculta el error. Descartada.
+
+2.11 Concurrencia y la carrera lista -> llamada (pre-decisión 4)
+  Bloqueo: la primera consulta bloquea la fila de la oportunidad (FOR
+  UPDATE). Las otras dos operaciones que pueden cambiar la condición de
+  esa oportunidad, POST /visits y POST /gate-decisions, bloquean la MISMA
+  fila al empezar (K5), así que las tres se ponen en fila:
+    - Si el cliente pide visita (POST /visits) entre la lista de las 9:00
+      y la llamada de WF3: /visits ya la ha pasado a 'visita_agendada';
+      este endpoint, al obtener el bloqueo, la ve así -> 409
+      estado_no_permitido, sin escribir nada. Es justo el caso que motiva
+      volver a comprobarlo TODO al escribir.
+    - Si las dos llegan a la vez: gane quien gane, el resultado es
+      coherente. Si gana este endpoint: 'seguimiento_pendiente' con su
+      log, y después /visits (que admite ese estado) la pasa a
+      'visita_agendada'. Si gana /visits: 409 estado_no_permitido aquí.
+  Aislamiento: READ COMMITTED (el de por defecto), NO REPEATABLE READ
+    como el listado. En READ COMMITTED cada consulta ve lo confirmado
+    hasta ese momento, así que la evaluación de los criterios, hecha
+    DESPUÉS de obtener el bloqueo, ve la visita que /visits acaba de
+    confirmar. Con REPEATABLE READ, una espera por el bloqueo seguida de
+    un cambio de esa fila acaba en error de serialización (40001): un
+    500.
+  Repeticiones simultáneas (5 reintentos a la vez): la primera abre el
+    seguimiento; las demás esperan el bloqueo, ven 'seguimiento_pendiente'
+    y dan 200 con el MISMO log_id. Un 201, cuatro 200, un log.
+  Segunda barrera (P10): a diferencia de /gate-decisions (UNIQUE en
+    decisiones_gate), aquí ninguna restricción de la base de datos impide
+    dos logs 'seguimiento_abierto'. Propuesta: el UPDATE lleva "AND
+    estado = 'presupuesto_enviado'" y el servicio exige que cambie
+    exactamente 1 fila; si cambia 0, lanza un error (500) y el "with" lo
+    deshace todo. Con el FOR UPDATE nunca salta; sin él (prueba en
+    negativo N3), los duplicados se convierten en 500 en vez de logs
+    repetidos en silencio.
+  estimate_service no bloquea (K6), pero solo escribe en oportunidades
+    SIN presupuesto: aquí son 409 sin_presupuesto, o, si su presupuesto
+    se confirma justo antes de evaluar, 409 plazo_no_cumplido (es de
+    hace segundos). Inofensivo.
+
+2.12 ¿Hace falta guardar la fecha de apertura? (pre-decisión 8), Regla
+     de Tres (P7)
+  a) Basta el log, y NO se muestra en el apartado c) en N0. [PROPUESTA]
+     La fecha queda en logs.created_at del log 'seguimiento_abierto' y el
+     endpoint la devuelve (fecha_apertura, 2.6). El apartado c) sigue
+     mostrando fecha_presupuesto, que ya dice la antigüedad real (la
+     apertura es siempre entre 48 y 72 h después, D25.15, así que no
+     aporta información nueva para decidir a quién llamar primero). Sin
+     migración ni cambio en el listado. Se revisa en la ampliación de
+     D25.9-D25.11, que creará el registro del resultado de la llamada y
+     podrá guardar allí lo que haga falta.
+  b) Columna nueva oportunidades.fecha_apertura_seguimiento (migración
+     aditiva) y mostrarla en c). En contra: una columna que solo tiene
+     sentido en UN estado (¿se borra al salir?, ¿qué vale en las demás
+     filas?), una migración y un cambio en el listado y su contrato, para
+     un dato que hoy nadie ha pedido ver; y D25.9 puede rehacerlo.
+  c) Leerla del log en el apartado c) (subconsulta sobre logs). En
+     contra: hace del log de auditoría una fuente de datos de negocio;
+     logs no tiene índice por entity_id (B8) y es "polimórfica", y una
+     limpieza futura de logs cambiaría la lista.
+
+
+================================================================
+3. UNA SOLA FUENTE DE LA CONDICIÓN (pre-decisión 3)
+================================================================
+
+3.1 El problema
+  Hoy la condición "seguimiento por abrir" está escrita una vez, en el
+  WHERE del apartado b) del listado (K3). El endpoint necesita la MISMA
+  condición, pero además saber CUÁL de sus partes falla para dar el 409
+  correcto (C4). Si se copia, tarde o temprano las dos copias divergen y
+  WF3 recibe de la lista oportunidades que el endpoint rechaza (o al
+  revés, oportunidades que nunca salen en la lista).
+
+3.2 Regla de Tres (P2)
+  a) Criterios CON NOMBRE en un módulo compartido.            [PROPUESTA]
+     Un módulo nuevo, app/services/condicion_seguimiento.py (como
+     reglas_visita.py, que ya comparten /visits y /gate-decisions), con
+     una tupla ORDENADA de criterios. Cada criterio es un par (motivo del
+     409, expresión SQL que debe ser verdadera):
+       ("sin_presupuesto",     "p.id IS NOT NULL")
+       ("con_gate",            "p.requiere_aprobacion = false")      (P1)
+       ("estado_no_permitido", "o.estado = %(estado_por_abrir)s")
+       ("contacto_registrado", "o.fecha_ultimo_contacto IS NULL")
+       ("visita_existente",    "NOT EXISTS (SELECT 1 FROM visitas v
+                                WHERE v.oportunidad_id = o.id
+                                  AND v.estado <> %(visita_cancelada)s)")
+       ("plazo_no_cumplido",   "p.created_at < %(ahora)s
+                                 - make_interval(hours => %(horas)s)")
+     - El LISTADO construye su WHERE del apartado b) uniendo las
+       expresiones con AND (exactamente la condición de hoy, más el Gate
+       si se aprueba P1; "p.id IS NOT NULL" es redundante con su JOIN e
+       inofensivo).
+     - El ENDPOINT las pide como columnas, una por criterio, en UNA
+       consulta ("(expresión) AS sin_presupuesto, ..."), y devuelve el
+       motivo del PRIMER criterio que no da verdadero. Un criterio que da
+       NULL cuenta como incumplido, igual que en un WHERE.
+     - Los parámetros (%(estado_por_abrir)s, %(visita_cancelada)s,
+       %(ahora)s, %(horas)s) los construye UNA función del mismo módulo,
+       que usan los dos.
+     - También se mueven allí CLAVE_SEGUIMIENTO, MAX_HORAS_REGLA y la
+       validación de UNA regla de horas (entero entre 1 y 8760), que
+       validar_reglas_listado pasa a usar para sus dos reglas: la regla de
+       48 h se valida igual en sus dos lectores (2.8, 503).
+     A favor: divergir es imposible por construcción (la lista y el
+     endpoint ejecutan las mismas expresiones, con los mismos parámetros,
+     en el mismo orden), y cada 409 sale de su criterio sin escribir la
+     condición dos veces. Sin migración.
+     En contra: toca el servicio del listado, ya en main (se hace en su
+     propio paso, B1, sin cambio de comportamiento salvo P1, con la
+     regresión del listado SIN tocar sus scripts, como la mudanza C1 de
+     /gate-decisions); y el WHERE pasa a montarse con texto (siempre
+     textos FIJOS del programa; los valores siguen yendo como parámetros).
+  b) WHERE compartido + diagnóstico aparte. El endpoint ejecuta el WHERE
+     compartido como "¿cumple, sí o no?" y, si no, averigua el motivo con
+     comprobaciones propias en Python. En contra: el diagnóstico es una
+     SEGUNDA copia de la condición; si diverge, el endpoint dice "no
+     cumple" sin poder decir por qué (haría falta un 409 genérico de
+     "otro motivo"), justo el fallo que se quiere evitar.
+  c) Una vista o función SQL en la base de datos (migración). En contra:
+     el plazo depende de una regla que se valida en Python (1..8760, el
+     503): habría que validarla dos veces o mover la validación a SQL;
+     una vista en el esquema public queda expuesta por la Data API de
+     Supabase con los permisos de su dueño (Decision_RLS_N0.txt: RLS no
+     protege las vistas por defecto); y los 409 por motivo seguirían
+     necesitando columnas por criterio.
+
+3.3 Cómo se prueba que no divergen (6.1 S4 y 6.2 CASO 7)
+  - Matriz de coherencia por HTTP: para CADA caso preparado (uno que
+    cumple todo y uno que incumple cada criterio, más los dobles de
+    2.9), primero GET /llamadas-del-dia y después POST
+    /create-followup-task: "sale en b)" tiene que equivaler a "da 201". Si
+    el endpoint y la lista divergieran en cualquier criterio, al menos un
+    caso lo delataría.
+  - Estructura con ast.parse (regla de CLAUDE.md: el arreglo depende de
+    la estructura del código): ni listado_llamadas_service.py ni
+    followup_service.py contienen ningún texto con los fragmentos de la
+    condición ("fecha_ultimo_contacto IS NULL", "make_interval",
+    "requiere_aprobacion", "NOT EXISTS"); los dos importan de
+    condicion_seguimiento. Se enseña la salida.
+  - Pruebas en negativo N2 y N2b (6.3): una COPIA divergente en cada
+    lado tiene que hacer fallar la matriz.
+
+
+================================================================
+4. CONSULTAS SQL (en el servicio, dentro de UNA transacción)
+================================================================
+
+Todas en get_transactional_connection(), con el cursor en "with" (como el
+listado tras 5a35d24). Valores SIEMPRE como parámetros; los textos SQL son
+fijos del programa.
+
+Consulta 1, bloquear y encontrar la oportunidad:
+    SELECT o.id, o.estado
+    FROM oportunidades o
+    WHERE o.id = %(oportunidad_id)s
+    FOR UPDATE;
+  - Sin JOIN: solo se bloquea la fila de la oportunidad (la que bloquean
+    /visits y /gate-decisions). Sin fila -> 404.
+  - Un id enorme (2147483648) se compara sin error con la columna INTEGER
+    (Postgres compara entero con entero grande): 0 filas -> 404. Probado
+    así en /gate-avisos; aquí se vuelve a probar (6.2, CASO 3).
+
+Consulta 2, solo si el estado es 'seguimiento_pendiente' (el 200):
+    SELECT id, detalle ->> 'motivo', created_at
+    FROM logs
+    WHERE entity_type = 'oportunidad'
+      AND entity_id = %(oportunidad_id)s
+      AND accion = 'seguimiento_abierto'
+    ORDER BY id DESC
+    LIMIT 1;
+  - El último log de apertura de ESA oportunidad (2.7). Sin fila: el caso
+    de P5. Sin índice por entity_id (B8): con decenas de filas, Postgres
+    recorre la tabla en microsegundos (R6).
+
+Consulta 3, el reloj y la regla:
+    SELECT now();
+    SELECT valor FROM reglas_negocio WHERE clave = %(clave)s;
+  - now() no cambia dentro de la transacción: es el "ahora" del plazo.
+  - La validación (existe; entero entre 1 y 8760) es la del módulo
+    compartido. Con problema -> 503 sin escribir nada (P4).
+
+Consulta 4, los seis criterios a la vez (sección 3):
+    SELECT p.created_at,
+           (p.id IS NOT NULL)                               AS sin_presupuesto,
+           (p.requiere_aprobacion = false)                  AS con_gate,
+           (o.estado = %(estado_por_abrir)s)                AS estado_no_permitido,
+           (o.fecha_ultimo_contacto IS NULL)                AS contacto_registrado,
+           (NOT EXISTS (SELECT 1 FROM visitas v
+                        WHERE v.oportunidad_id = o.id
+                          AND v.estado <> %(visita_cancelada)s)) AS visita_existente,
+           (p.created_at < %(ahora)s - make_interval(hours => %(horas)s))
+                                                            AS plazo_no_cumplido
+    FROM oportunidades o
+    LEFT JOIN presupuestos p ON p.oportunidad_id = o.id
+    WHERE o.id = %(oportunidad_id)s;
+  - Cada columna es "¿se cumple este criterio?" (true/false/NULL), con el
+    NOMBRE del 409 que se da si no se cumple. La lista de columnas la
+    monta el módulo compartido a partir de la tupla de criterios: lo de
+    arriba es lo que resulta, no un texto escrito a mano.
+  - LEFT JOIN: sin presupuesto, p.* es NULL; el primer criterio da false
+    y el resto ni se mira (los que dan NULL cuentan como incumplidos).
+  - De presupuestos solo se leen id, requiere_aprobacion y created_at
+    (ningún importe).
+
+Consulta 5, el cambio de estado (2.5), con la segunda barrera (P10):
+    UPDATE oportunidades
+    SET estado = 'seguimiento_pendiente', updated_at = now()
+    WHERE id = %(oportunidad_id)s
+      AND estado = 'presupuesto_enviado';
+  - cursor.rowcount tiene que ser 1. fecha_ultimo_contacto NO se toca.
+
+Consulta 6, el log:
+    INSERT INTO logs (entity_type, entity_id, accion, detalle)
+    VALUES ('oportunidad', %(oportunidad_id)s, 'seguimiento_abierto', %(detalle)s)
+    RETURNING id, created_at;
+  - detalle como Json(...) de psycopg2 (2.5). RETURNING da log_id y
+    fecha_apertura para la respuesta.
+
+Y en el LISTADO (paso B1), el apartado b) pasa a ser:
+    SQL_OPORTUNIDADES (sin cambios) + "WHERE " + <los criterios unidos por
+    AND> + " ORDER BY p.created_at, o.id;"
+  con los parámetros de la función compartida. Los apartados a), c), d) y
+  e) no cambian.
+
+
+================================================================
+5. ARCHIVOS
+================================================================
+
+  Paso B1 (mudanza de la condición, sin cambio de comportamiento salvo
+  P1). Nuevo:
+    app/services/condicion_seguimiento.py
+        CLAVE_SEGUIMIENTO, MAX_HORAS_REGLA, ESTADO_POR_ABRIR,
+        VISITA_CANCELADA, CRITERIOS_SEGUIMIENTO (la tupla de 3.2), y
+        funciones: problema_horas(clave, valor) (validación de UNA regla),
+        parametros_condicion(ahora, horas), where_condicion() (para el
+        listado), columnas_criterios() y primer_criterio_incumplido(fila)
+        (para el endpoint). NO importa fastapi.
+  Cambia:
+    app/services/listado_llamadas_service.py
+        WHERE_POR_ABRIR montado desde el módulo compartido;
+        validar_reglas_listado usa problema_horas para cada regla (misma
+        firma, mismos textos de problema). CLAVE_SEGUIMIENTO y
+        MAX_HORAS_REGLA se IMPORTAN del módulo compartido, de modo que
+        siguen existiendo en listado_llamadas_service (K4: los cambios en
+        memoria de sus scripts siguen funcionando).
+
+  Paso B2 (el endpoint). Nuevos o rellenados:
+    app/schemas/followup_tasks.py
+        MotivoSeguimiento (Enum, un valor), FollowupTaskCreate y
+        FollowupTaskResponse, con extra="forbid".
+    app/services/followup_service.py   (hoy solo el docstring)
+        abrir_seguimiento(data) y sus excepciones por familia:
+        OportunidadNoEncontrada (404) y SeguimientoNoPermitido (409, con
+        los seis motivos), heredando de RechazoNegocio (reglas_visita.py);
+        ConfiguracionIncompleta reutilizada (503). Más una función que
+        recibe el cursor (como leer_listado) para la prueba del límite
+        exacto en una transacción con ROLLBACK (6.1 S1).
+    app/api/followup_tasks.py          (hoy solo el docstring)
+        El router: POST /create-followup-task, verificar_gate_secret,
+        status_code 201 y 200 si creado=false, tabla CODIGO_HTTP y la
+        línea [AVISO] en el 503 (P4).
+  Cambia:
+    app/main.py         séptimo include_router.
+  Sin migración: el esquema no cambia (estado 'seguimiento_pendiente' y
+  logs ya existen); docs/schema_actual.sql no se regenera.
+
+  Bloque C (pruebas):
+    scripts/check_followup_service.py       (sin servidor)
+    scripts/check_followup_tasks_http.py    (HTTP real, puerto 8025)
+
+  Bloque D (documentación): Adenda, CLAUDE.md, notas fechadas y este
+  plan.
+
+  Ningún secreto se imprime: los scripts solo usan los valores en las
+  cabeceras.
+
+
+================================================================
+6. PRUEBAS
+================================================================
+
+6.1 Bloque C: scripts/check_followup_service.py (sin servidor)
+  S1. LÍMITE EXACTO del plazo, contra la base de datos, SIN dejar nada:
+      conexión propia y UNA transacción que termina en ROLLBACK (como S5
+      de check_listado_llamadas_service). Dentro, oportunidades propias
+      (cliente check-followup-svc-<8>@example.com) con presupuesto de
+      now() - 48 h (-> 409 plazo_no_cumplido) y de now() - 48 h - 1 µs
+      (-> cumple todo). Con el mismo cursor, now() no cambia: el límite es
+      exacto al microsegundo. Al terminar, comprobación de que no queda
+      ninguna fila con esa marca.
+  S2. problema_horas con valores sueltos: 48 válido, 8760 válido; falta,
+      0, -5, 24.50, 8761 y 99999999 -> problema que nombra la clave.
+  S3. 503 por el camino real: el nombre de la clave cambiado EN MEMORIA
+      (como la prueba 2b de check_visits_service) -> ConfiguracionIncompleta
+      con "faltan"; y la rama else: si NO sale, FALLO explícito ("la
+      excepción se ha tragado"), regla de CLAUDE.md. Sin ninguna fila
+      nueva (ni log).
+  S4. Fuente única, con ast.parse (3.3): ningún texto con fragmentos de la
+      condición fuera de condicion_seguimiento.py, y los dos servicios
+      importan de él. Se enseña la salida.
+  S5. Orden de los criterios: la tupla tiene exactamente los seis motivos,
+      en el orden de 2.9 (copiado del PLAN, no del código).
+
+6.2 Bloque C: scripts/check_followup_tasks_http.py (HTTP real, 8025)
+  Mismo esquema que check_gate_decisions_http y check_listado_llamadas_http:
+  uvicorn.Server en un hilo de este proceso, SIN --reload, puerto 8025
+  (nunca el 8000; si está ocupado, se para y avisa). Marca propia: emails
+  http-followup-<8>@example.com y tokens uuid4. Los datos se crean por
+  HTTP como lo hará n8n (POST /leads, POST /calculate-estimate, POST
+  /visits, POST /gate-decisions) y, SOLO sobre filas propias, por SQL lo
+  que la API no puede producir (atrasar presupuestos.created_at, poner
+  fecha_ultimo_contacto, insertar una visita sin cambiar el estado,
+  forzar un estado). Foto de lo ajeno al empezar y al terminar (id_base)
+  y limpieza solo de lo propio en el orden de las claves foráneas (logs
+  -> decisiones_gate -> visitas -> presupuestos -> oportunidades -> leads
+  -> clientes). Las comprobaciones sobre el listado miran SOLO elementos
+  con oportunidad_id propio (los 8 casos reales de D25.16 están en b) y
+  el script NO llama al endpoint con ellos: solo con ids propios).
+  Márgenes del plazo por HTTP: "dentro" = 48 h + 10 min; "fuera" = 48 h -
+  10 min, aplicados al final de la preparación (lección del Bloque D del
+  listado: un margen de 1 min se cruzó una vez). El límite exacto, en S1.
+
+  CASO 1 - Llave: sin cabecera -> 401 (también con cuerpo inválido: la
+    llave va antes); X-Gate-Secret incorrecto -> 401; valor de
+    WEBHOOK_SECRET en X-Gate-Secret -> 401; en X-Webhook-Secret -> 401;
+    cuerpo y WWW-Authenticate idénticos a los de /gate-decisions. Ninguna
+    escritura.
+  CASO 2 - Forma (422 de Pydantic): campo de más; sin oportunidad_id; sin
+    motivo; oportunidad_id 0, -1, "abc" y 1.5; motivo
+    'sin_decision_post_visita' y 'otro'; cuerpo vacío. Ninguna escritura.
+  CASO 3 - 404: id inexistente (máximo + 1000), 2147483648 y
+    99999999999999999999 -> 404 oportunidad_no_encontrada, nunca 500.
+  CASO 4 - Cada 409, sin escribir nada (foto antes/después de la
+    oportunidad, sus visitas y sus logs):
+      sin_presupuesto      lead sin calcular ('nueva');
+      con_gate             caso con Gate en 'pendiente_aprobacion'; otro
+                           ya decidido ('perdida'); y otro con Gate puesto
+                           por SQL en 'presupuesto_enviado' (P1);
+      estado_no_permitido  sin Gate con visita pedida por POST /visits
+                           ('visita_agendada'); y otro forzado a 'perdida';
+      contacto_registrado  'presupuesto_enviado' con fecha_ultimo_contacto
+                           puesta por SQL y plazo cumplido;
+      visita_existente     visita 'solicitada' insertada por SQL sin
+                           cambiar el estado; y otra con una 'completada';
+      plazo_no_cumplido    presupuesto de hace 48 h - 10 min.
+    Y una con SOLO una visita 'cancelada' y plazo cumplido -> 201 (la
+    cancelada no cuenta, P5 del listado).
+  CASO 5 - 201 con todos sus efectos: estado 'seguimiento_pendiente';
+    updated_at posterior al de antes; fecha_ultimo_contacto SIGUE NULL;
+    presupuesto sin cambios (requiere_aprobacion, created_at, importes,
+    updated_at); ninguna visita nueva; UN log 'seguimiento_abierto' con
+    entity_type 'oportunidad' y detalle con sus claves EXACTAS y valores
+    (motivo, estado_anterior, horas_seguimiento_presupuesto = la regla
+    leída por SQL, fecha_presupuesto); respuesta con sus claves EXACTAS
+    (copiadas del plan), log_id = el del log, fecha_apertura = su
+    created_at con el desfase de Madrid de ese instante (zoneinfo),
+    estado_oportunidad 'seguimiento_pendiente', creado true.
+  CASO 6 - Orden de los 409 (2.9), con DOS criterios incumplidos a la vez:
+    Gate + estado distinto -> con_gate; contacto + plazo no cumplido ->
+    contacto_registrado; visita + plazo no cumplido -> visita_existente;
+    'nueva' sin presupuesto -> sin_presupuesto.
+  CASO 7 - Matriz de coherencia lista <-> endpoint (3.3): para cada caso
+    de los CASOS 4, 5 y 6, ANTES de llamar al endpoint, "sale en b) de GET
+    /llamadas-del-dia" equivale a "da 201".
+  CASO 8 - La lista cambia: tras el 201, la oportunidad NO sale en b) y SÍ
+    sale en c) (seguimientos_abiertos, motivo 'seguimiento_abierto'), una
+    sola vez en toda la respuesta.
+  CASO 9 - 200 (repetición): segunda llamada -> 200, creado false, el
+    MISMO log_id y fecha_apertura, 0 logs nuevos, updated_at SIN CAMBIOS.
+    Y el caso de P5: un propio puesto por SQL en 'seguimiento_pendiente'
+    sin log -> 200 con log_id y fecha_apertura null, sin escribir nada.
+  CASO 10 - 503 (cambios EN MEMORIA, la fila real no se toca, como el
+    CASO 13 del listado): nombre de la clave cambiado -> 503
+    configuracion_incompleta con "faltan" que la nombra, y la línea
+    [AVISO]; valor inyectado 8761 y 99999999 (envolviendo la validación en
+    memoria) -> 503, nunca 500; ningún log nuevo (P4) ni cambio en la
+    oportunidad. Con la configuración rota: llave mala -> 401; id
+    inexistente -> 404 (404 antes que 503); oportunidad ya abierta -> 200
+    (repetición antes que 503). Se restaura y vuelve el 201/200.
+  CASO 11 - Concurrencia: 5 peticiones simultáneas sobre la MISMA
+    oportunidad -> un 201 y cuatro 200 con el mismo log_id, un solo log.
+  CASO 12 - Carrera lista -> llamada (2.11):
+    a) la oportunidad sale en b); el cliente pide visita (POST /visits con
+       su lead_token) -> después, este endpoint -> 409
+       estado_no_permitido, sin log; la visita intacta.
+    b) POST /visits y este endpoint A LA VEZ sobre otra oportunidad propia
+       (varias rondas): nunca un 500, y el estado final es uno de los dos
+       coherentes de 2.11 ('visita_agendada' con su visita, y con o sin el
+       log de apertura, nunca un log sin haber pasado por
+       'seguimiento_pendiente').
+  CASO 13 - Regresión cruzada: tras el 201, POST /visits desde el chat
+    sigue funcionando ('seguimiento_pendiente' es estado de partida, K2)
+    -> 'visita_agendada', y entonces la oportunidad deja de salir en c).
+    GET /leads/session devuelve 'seguimiento_pendiente' tras el 201 (lo
+    que verá el router de n8n, C5).
+  CASO 14 - Ningún importe ni email en ninguna respuesta; 201 <-> creado
+    en todas; ningún 500 en todas las respuestas del endpoint.
+  CASO 15 - NO TOCA NADA AJENO: foto de lo ajeno igual al empezar y al
+    terminar (los 8 casos reales de b) siguen en 'presupuesto_enviado').
+
+6.3 Pruebas en negativo (sobre COPIAS en el scratchpad, una por prueba,
+    con su .env, borradas al terminar; el código real no cambia: git diff
+    vacío al terminar). Cada una da un resultado EXACTO ("54/121"), con
+    la lista de comprobaciones que fallan, que se escribe en este plan al
+    cerrar el Bloque C y en el mensaje de su commit. Lo de abajo es la
+    PREVISIÓN (qué debe fallar), no el criterio de aceptación; el
+    recuento total de cada script se conocerá al escribirlo.
+  N1.  Dependencia cambiada a verificar_webhook_secret (obligatoria): falla
+       "WEBHOOK_SECRET en X-Webhook-Secret -> 401" y, en cascada, todo lo
+       que usa X-Gate-Secret.
+  N2.  Copia DIVERGENTE en el endpoint (su propia condición, sin el
+       criterio de visita): falla el CASO 4 visita_existente (201), la
+       matriz del CASO 7 y S4 (fragmento de condición fuera del módulo).
+  N2b. Copia DIVERGENTE en el listado (su WHERE de b) sin
+       "fecha_ultimo_contacto IS NULL"): falla la matriz del CASO 7
+       (sale en b) pero da 409) y S4.
+  N3.  Sin FOR UPDATE: el CASO 11 debe fallar. Con la segunda barrera
+       (P10), los duplicados salen como 500 (falla "ningún 500"); sin
+       ella, como logs repetidos (falla "un solo log"). Se prueban las
+       dos variantes (N3 y N3b) para demostrar que la barrera funciona.
+       Los logs del manejador global de esos 500 se borran por id exacto,
+       tras comprobar que son los esperados (regla de CLAUDE.md).
+  N4.  Estado comprobado ANTES que la repetición: el 200 del CASO 9 sale
+       409 estado_no_permitido (y falla el CASO 11).
+  N5.  Escribe fecha_ultimo_contacto = now() en el 201: falla "sigue NULL"
+       del CASO 5.
+  N6.  La repetición escribe (updated_at o un log nuevo): fallan las del
+       CASO 9.
+  N7.  Límite no estricto (<= en vez de <) en el módulo compartido: falla
+       S1 (48 h exactas). Por HTTP no se ve (margen).
+  N8.  Sin el criterio con_gate (P1): fallan los con_gate del CASO 4 en
+       'presupuesto_enviado' (201) y la matriz no (las dos fuentes siguen
+       iguales): demuestra que el criterio sirve.
+  N9.  Orden de los 409 cambiado (plazo antes que contacto y visita):
+       fallan los dobles del CASO 6.
+  N10. Plazo escrito en el código (48 fijo, sin leer reglas_negocio):
+       fallan S3 y el CASO 10 (201 con la clave falsa).
+  N11. Sin el máximo de 8760: 99999999 da 500 en el CASO 10 y S2 deja de
+       ver 8761 y 99999999 como problema.
+  N12. 503 CON log (la opción b de P4): falla "ningún log nuevo" del CASO
+       10. Solo si se aprueba la opción a).
+
+6.4 Regresión y suite
+  - Tras B1 (antes de escribir el endpoint): check_listado_llamadas_service
+    39/39 y check_listado_llamadas_http 88/88 SIN tocar los scripts (si se
+    aprueba P1, también: ningún caso suyo tiene Gate en
+    'presupuesto_enviado'), y la regla de oro de B1 con ast.parse (S4,
+    adelantada).
+  - Tras B2: prueba mínima por HTTP real en el 8025 (201, 200, 401 con el
+    valor de WEBHOOK_SECRET, un 409 y el 503 en memoria).
+  - Bloque C: los dos scripts nuevos, N1-N12, check_gate_decisions_http
+    (121/121), check_visits_http (55/55), check_lead_session_http
+    (24/24) y los dos del listado, y la suite completa con la regla de
+    uso de CLAUDE.md (enchufado, tapa abierta, pantalla y suspensión a 30
+    min, hora de inicio y fin, Kernel-Power 506/507 al terminar: si los
+    hay, la pasada no vale y se repite entera). Serán 39 scripts (37 +
+    check_followup_service + check_followup_tasks_http).
+    check_graceful_shutdown y check_mcp_connection desde copias con otro
+    puerto. La salida de los cinco scripts de P4 se revisa a mano. Nunca
+    se escribe "N/N" si no sale en una sola pasada.
+
+
+================================================================
+7. RIESGOS
+================================================================
+
+  R1. B1 toca el servicio del listado, ya en main. Mitigación: paso
+      propio, con sus dos scripts sin tocar (39/39 y 88/88) antes de
+      escribir el endpoint, como la mudanza C1 de /gate-decisions.
+  R2. P1 cambia el apartado b) del listado para un caso que solo existe
+      editando a mano. Hoy no cambia ninguna fila real (B6, B7). Se anota
+      en la Adenda 5.7 (Bloque D).
+  R3. Sin restricción en la base de datos contra dos logs de apertura
+      (2.11). Mitigación: FOR UPDATE + segunda barrera de P10, y N3/N3b.
+  R4. Los 8 casos reales de b) (D25.16): cuando WF3 se active, pasarán a
+      c). Es lo previsto en D25.16 (se cerrarán desde el formulario
+      ampliado). NADIE debe llamar a este endpoint a mano con ellos antes;
+      los scripts solo usan ids propios.
+  R5. Router de n8n con 'seguimiento_pendiente' (C5): fuera del
+      repositorio. Si no lo enruta al Agente 2, el cliente con seguimiento
+      abierto queda sin respuesta en el chat. Ver P12.
+  R6. logs sin índice por entity_id (B8): la consulta 2 recorre la tabla.
+      Irrelevante con decenas de filas; anotado por si logs crece.
+  R7. Un seguimiento abierto no tiene salida en N0 salvo que el cliente
+      pida visita (H6 del listado): la lista c) crece hasta la ampliación
+      de D25.9-D25.11. Ya aceptado en la Adenda 5.7.
+  R8. El "ahora" del plazo es el now() del INICIO de la transacción; si
+      espera por el bloqueo, unos milisegundos antes de evaluar.
+      Irrelevante frente a un plazo de 48 h.
+
+
+================================================================
+8. FUERA DE ALCANCE (pre-decisión 10)
+================================================================
+
+  - WF3 en n8n (bloque 5 de D25.12), con su credencial X-Gate-Secret y la
+    llamada a este endpoint por cada elemento de b).
+  - La tool MCP (Adenda fila 5: N1+).
+  - El segundo motivo, sin_decision_post_visita (D25.13: N1), y qué hacer
+    entonces con una petición de otro motivo sobre un seguimiento ya
+    abierto.
+  - El renombrado (D25.9) y la ampliación de seguimientos y visitas
+    (D25.9-D25.11): registrar el resultado de la llamada de seguimiento.
+  - Mostrar la fecha de apertura en c) (P7, opción a).
+  - Reutilizar EstadoOportunidad en los SERVICIOS (otra rama).
+  - El email al cliente (D25.1).
+  - Cambiar el router de n8n (P12): solo se pregunta.
+
+
+================================================================
+9. DECISIONES Y PREGUNTAS ABIERTAS
+================================================================
+
+  Ya decididas (encargo), recogidas en el contrato:
+    D25.13 Solo 'sin_respuesta_visita' en N0 (2.4, P3).
+    D25.7, D25.15 Plazo de horas_seguimiento_presupuesto (48) desde
+           presupuestos.created_at, límite estricto (3.2, S1).
+    D25.14 Modo de proceder: el seguimiento cubre al cliente sin Gate que
+           no ha pedido visita (base de P1).
+    Adenda fila 5: solo REST; la tool MCP para N1+ (2.1).
+
+  Validación de las pre-decisiones del tutor:
+    1  CORRECTA (2.3), con N1.
+    2  CORRECTA (2.4). Motivo desconocido -> 422 de Pydantic (P3).
+    3  CORRECTA, con el diseño de la sección 3 (P2); y CHOCA con la 6 en el
+       Gate (C3, P1).
+    4  CORRECTA (2.5, 2.11), con READ COMMITTED (no REPEATABLE READ) y la
+       segunda barrera (P10).
+    5  CORRECTA (2.6, 2.7), con el caso límite de P5.
+    6  CORRECTA con nombres y orden en 2.8 y 2.9 (P8); con_gate solo es
+       coherente con la 3 si se aprueba P1.
+    7  Propuesta: 503 SIN log (2.10, P4).
+    8  CORRECTA: no escribe fecha_ultimo_contacto y sí updated_at. Fecha de
+       apertura: solo en el log (2.12, P7).
+    9  CORRECTA: se mantiene la ruta (2.2, P9).
+    10 Recogida en la sección 8.
+
+  Preguntas abiertas (todas con propuesta; se deciden en la revisión):
+    P1.  Gate como criterio de la condición COMPARTIDA (C3): sí
+         (propuesta; el listado deja de mostrar en b) un Gate puesto a
+         mano en 'presupuesto_enviado'); o no, y sin 409 con_gate (el
+         estado ya lo cubre con los endpoints de N0); o solo en el
+         endpoint (rompe la pre-decisión 3, desaconsejada).
+    P2.  Cómo compartir la condición: criterios con nombre en
+         condicion_seguimiento.py (propuesta), WHERE compartido +
+         diagnóstico aparte, o vista SQL (3.2).
+    P3.  Motivo desconocido o 'sin_decision_post_visita': 422 de Pydantic
+         (propuesta), 422 de negocio propio, o 501 (2.4).
+    P4.  503: sin log y con [AVISO] (propuesta), con log por oportunidad,
+         o valores por defecto (descartada) (2.10).
+    P5.  'seguimiento_pendiente' sin log original: 200 con log_id y
+         fecha_apertura null (propuesta), 409, o escribir el log que
+         falta (2.7).
+    P6.  Nombre del campo de estado en la respuesta: estado_oportunidad
+         (propuesta, como los tres endpoints posteriores; nota fechada en
+         la fila 5 de la Adenda) o "status" (literal de la fila 5, como
+         /leads y /calculate-estimate) (C2, 2.6).
+    P7.  Fecha de apertura: solo en el log y en la respuesta (propuesta),
+         columna nueva, o leída del log en c) (2.12).
+    P8.  Orden de las comprobaciones de 2.9 (repetición antes que 503; 503
+         antes que los 409; los 409 de lo estructural a lo pasajero, con
+         plazo_no_cumplido el último).
+    P9.  Ruta: mantener POST /create-followup-task (propuesta) (2.2).
+    P10. Segunda barrera: UPDATE con "AND estado = 'presupuesto_enviado'"
+         y rowcount = 1, o solo el FOR UPDATE (2.11).
+    P11. Bloque B partido en dos pasos con su [PARA] cada uno: B1 mudanza
+         de la condición (regresión del listado) y B2 endpoint (prueba
+         mínima). Propuesta: sí (CLAUDE.md, "bloques pequeños y
+         revisables"); el encargo pedía un solo Bloque B.
+    P12. Para Gabi (fuera del repositorio, no cambia el código): ¿el Switch
+         del router de n8n envía 'seguimiento_pendiente' al Agente 2, como
+         'presupuesto_enviado'? Si no, hay que añadirlo antes de activar
+         WF3 (C5, R5).
+
+
+================================================================
+10. BLOQUES
+================================================================
+
+  A  Este plan (sin código). Commit, git push.                     [PARA]
+  B1 condicion_seguimiento.py y el listado usándolo (P1 si se aprueba),
+     sin tocar sus scripts: check_listado_llamadas_service 39/39 y
+     check_listado_llamadas_http 88/88, y ast.parse de la fuente única.
+                                                                   [PARA]
+  B2 Esquemas, servicio y ruta de POST /create-followup-task, séptimo
+     include_router, prueba mínima por HTTP real en el 8025.        [PARA]
+  C  check_followup_service y check_followup_tasks_http completos,
+     pruebas en negativo N1-N12 con sus recuentos EXACTOS escritos en
+     6.3, regresión y suite completa (39 scripts) con la regla de uso.
+                                                                   [PARA]
+  D  Documentación [PARA]:
+     - Adenda: fila 5 reescrita con nota fechada (entrada, salida con
+       estado_oportunidad si P6, X-Gate-Secret, trigger WF3 por cada
+       elemento de b)); sección 2 con notas fechadas SIN reescribir (C1:
+       no hay notificación; D25.13: el segundo motivo, N1); sección 5.8
+       nueva (contrato, códigos, orden, idempotencia, concurrencia, 503,
+       limitaciones); nota en 5.7 (fuente única y, si P1, el criterio del
+       Gate en b)).
+     - CLAUDE.md: "Dos puertas" (séptimo include_router; create-followup-
+       task deja de ser un docstring), estado actual, lo hecho y
+       verificado, la suite (39 scripts) y el puerto 8025.
+     - D25 (estado de implementación, bloque 2): nota fechada, sin
+       reescribir sus decisiones.
+     - Este plan marcado como IMPLEMENTADO, con los hashes de cada bloque.
+  Cada bloque, un commit con los recuentos reales en el mensaje y git
+  push. Nada de merge a main sin la confirmación explícita de Gabi, y
+  siempre con --ff-only.
