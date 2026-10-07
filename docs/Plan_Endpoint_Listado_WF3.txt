@@ -11,6 +11,9 @@ Bloque B en curso.]
 [Actualizado 2026-10-07: Bloque B APROBADO (39c117b), con la desviación
 del check aceptada (sin valor exacto ni recuento de toda la tabla). P8
 confirmada por Gabi (D25.16). Bloque C en curso.]
+[Actualizado 2026-10-07: Bloque C APROBADO (011b668) con el defecto de P6
+corregido en 5a35d24. Bloque D cerrado: 39/39 y 88/88, N1-N12 exactos
+en 6.4, suite 37/37 en una pasada válida.]
 
 Fuentes: el encargo del Bloque A del 2026-10-07 (decisiones D25.2, D25.4,
 D25.7 y D25.8 ya tomadas, y pre-decisiones 1-10 del tutor), la Adenda (fila
@@ -863,6 +866,74 @@ ver R2.
   N12. [Añadida 2026-10-07, revisión del tutor] Sin el máximo de 8760: el
        caso 99999999 da 500 por HTTP en el CASO 13 (y 8761 da 200), y en
        S3 los casos 8761 y 99999999 dejan de ser problema.
+
+  RESULTADOS EXACTOS (Bloque D, 2026-10-07; copias en el scratchpad, una
+  por prueba, con su .env, borradas al terminar; el código real no cambió;
+  sin mutación: check_listado_llamadas_service 39/39 y
+  check_listado_llamadas_http 88/88). Servicio | HTTP:
+  N1   dependencia del webhook       39/39 | 46/88. Cascada con una causa:
+       la llave del webhook ABRE (falla "WEBHOOK_SECRET en X-Webhook-Secret
+       -> 401") y la del Gate deja de abrir, así que caen las 41
+       comprobaciones que necesitan un 200 o un 503 (forma, reglas, cada
+       apartado, contacto, fechas, orden, los 503 y la repetición). Siguen
+       pasando: los otros 401, lo que se mira en la base de datos o no
+       puede aparecer en un 401, el CASO 14, ningún 500 y el CASO 17. El
+       servicio no ve la llave: 39/39.
+  N2   escribe en logs (sin READ ONLY, INSERT + commit)
+                                     38/39 | 87/88: "transaction_read_only
+       = on" (off) y "recuentos de filas propias iguales" (logs 87 -> 143).
+  N2b  INSERT con READ ONLY puesto   39/39 | 54/88: Postgres lo rechaza, el
+       200 pasa a 500 en todas las peticiones con la llave buena y, en
+       cascada, todo lo que necesita el 200 o el 503, más "ninguna
+       respuesta 500". Demuestra la barrera 2 de 1.9. (Los logs del
+       manejador global los borró el script por id exacto; 0 restos.)
+  N3   base = oportunidades.created_at
+                                     37/39 | 78/88: S5 "24 h + 1 µs" y
+       "48 h + 1 µs"; por HTTP, los dos casos de "base del plazo" y, en
+       cascada, todo lo que se mide sobre oportunidades recién creadas con
+       presupuesto atrasado (Gate y seguimiento dentro, cancelada, B2, lead
+       sin contacto, desfase de fecha_presupuesto, orden 70-60-50).
+  N4   límite no estricto (<=)       37/39 | 88/88: S5 "24 h exactas" y "48
+       h exactas". Por HTTP no se ve (margen), como se preveía.
+  N5   "mañana" natural              37/39 | 88/88: viernes y sábado. El
+       domingo -> lunes acierta igualmente (el día natural siguiente a un
+       domingo ya es lunes); se preveían tres, son dos, explicado. Por HTTP
+       no se ve en miércoles 07/10 (día de la ejecución).
+  N6   desfase fijo +02:00           35/39 | 86/88: S2 lunes 26/10 inicio y
+       fin, y los domingos de 25 y 23 h; por HTTP, "lunes 2026-10-26 08:30
+       +01:00" (sale 09:30+02:00) y "los dos desfases son distintos".
+  N7   contacto de la ficha          39/39 | 84/88: los cuatro del CASO 10.
+  N8   email en consulta y esquema   39/39 | 81/88: claves exactas (los dos
+       apartados), clave prohibida, email propio en el texto, y los
+       contactos de G-dentro, B2 y el lead sin 'contacto'.
+  N9   sin fecha_ultimo_contacto     39/39 | 87/88: "48 h + 1 min con
+       fecha_ultimo_contacto -> fuera".
+  N10  sin la exclusión de d)        38/39 | 86/88: S5 "... y NO en d)"; por
+       HTTP, "las 'solicitada' del próximo laborable NO salen en d)" y
+       "ningún oportunidad_id propio sale dos veces".
+  N11  plazos escritos en el código  35/37 | 80/88: S7 (la excepción se ha
+       tragado, dos veces; el total baja a 37 porque cada caso cuenta una
+       comprobación en vez de dos); por HTTP, los dos 503 con clave falsa
+       (con su "faltan" y su [AVISO]) y los dos valores fuera de rango
+       (200 en vez de 503).
+  N12  sin el máximo de 8760         34/38 | 85/88: S3 8761, 99999999 y 8761
+       en la regla del Gate; S7 "salió DatetimeFieldOverflow: timestamp out
+       of range" (el total baja a 38 por el mismo motivo que N11); por
+       HTTP, 8761 -> 200, 99999999 -> 500 y "ninguna respuesta 500".
+
+  Correcciones de las PRUEBAS durante el Bloque D (no del código):
+  - S2: la resta de dos datetime con el MISMO objeto de zona la hace
+    Python "de reloj de pared" (da 24 h el día de 25): se resta en UTC.
+  - check_listado_llamadas_http, primera versión: con un cuerpo vacío (N1,
+    N2b) el script se rompía (KeyError) en vez de dar un recuento; ahora
+    un no-200 se trata como cuerpo vacío y las comprobaciones fallan.
+  - Condición de carrera: los casos "fuera" (1 minuto de margen) se
+    preparaban al principio y podían cruzar el límite antes de consultar
+    o entre las dos llamadas del CASO 15 (pasó en N2 de la segunda pasada,
+    86/88, y no se repitió al reproducirlo). Ahora se atrasan al FINAL de
+    la preparación con 10 minutos de margen, y el CASO 15 compara solo
+    reglas, día y elementos PROPIOS (un dato real que cruce su plazo no es
+    asunto de la prueba). Los recuentos de arriba son de esta versión.
 
 6.5 Regresión y suite
   check_aviso_gate_http (75/75), check_gate_decisions_http (121/121),
