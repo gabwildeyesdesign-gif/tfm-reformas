@@ -5,6 +5,8 @@ oportunidad sin Gate que no ha pedido visita)
 Documento de plan · Nivel N0 · 2026-10-07 · Rama feat/n0-create-followup-task
 (desde main = 7b66fa1)
 Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+[Actualizado 2026-10-07: Bloque A APROBADO por el tutor sobre 9853491.
+P1-P12 DECIDIDAS (sección 9). Paso B1 en curso.]
 
 Fuentes: el encargo del Bloque A del 2026-10-07 (decisiones D25.7, D25.13,
 D25.14 y D25.15 ya tomadas, Adenda fila 5, y pre-decisiones 1-10 del
@@ -887,6 +889,14 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
   R5. Router de n8n con 'seguimiento_pendiente' (C5): fuera del
       repositorio. Si no lo enruta al Agente 2, el cliente con seguimiento
       abierto queda sin respuesta en el chat. Ver P12.
+      [Actualizado 2026-10-07, P12 respondida por el tutor con el JSON de
+      chat_tipo_reforma exportado ese día: el Switch router_estado_sesion
+      NO mira el estado de la oportunidad; decide solo con existe y
+      presupuesto.existe. Una oportunidad en 'seguimiento_pendiente' tiene
+      presupuesto, así que va a la salida con_presupuesto, igual que hoy:
+      no se rompe nada. Queda pendiente para el bloque del Agente 2, fuera
+      de esta rama: su router tendrá que tratar 'seguimiento_pendiente'
+      como 'presupuesto_enviado'.]
   R6. logs sin índice por entity_id (B8): la consulta 2 recorre la tabla.
       Irrelevante con decenas de filas; anotado por si logs crece.
   R7. Un seguimiento abierto no tiene salida en N0 salvo que el cliente
@@ -913,6 +923,10 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
   - Reutilizar EstadoOportunidad en los SERVICIOS (otra rama).
   - El email al cliente (D25.1).
   - Cambiar el router de n8n (P12): solo se pregunta.
+    [Actualizado 2026-10-07, P12 respondida: hoy no hace falta (el Switch
+    decide con existe y presupuesto.existe, R5). En el bloque del Agente 2,
+    fuera de esta rama, su router tendrá que tratar
+    'seguimiento_pendiente' como 'presupuesto_enviado'.]
 
 
 ================================================================
@@ -943,7 +957,38 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
     9  CORRECTA: se mantiene la ruta (2.2, P9).
     10 Recogida en la sección 8.
 
-  Preguntas abiertas (todas con propuesta; se deciden en la revisión):
+  Preguntas P1-P12, DECIDIDAS el 2026-10-07 (revisión del tutor sobre
+  9853491; el texto original de cada pregunta sigue más abajo):
+    P1.  DECIDIDA: sí, el Gate es un criterio más de la condición
+         COMPARTIDA (requiere_aprobacion = false). Se anota en la Adenda
+         5.7 en el Bloque D: cambia b) solo para datos editados a mano;
+         hoy, 0 filas.
+    P2.  DECIDIDA: opción a, criterios con nombre en
+         app/services/condicion_seguimiento.py.
+    P3.  DECIDIDA: opción a, 422 de Pydantic.
+    P4.  DECIDIDA: opción a, 503 sin log, con [AVISO] en stderr (mismo
+         comportamiento que el listado para la misma regla).
+    P5.  DECIDIDA: opción a, 200 con log_id y fecha_apertura null.
+    P6.  DECIDIDA: estado_oportunidad, con nota fechada en la fila 5 de la
+         Adenda.
+    P7.  DECIDIDA: opción a, la fecha de apertura solo en el log y en la
+         respuesta.
+    P8.  DECIDIDA: se acepta el orden de 2.9.
+    P9.  DECIDIDA: se mantiene POST /create-followup-task.
+    P10. DECIDIDA: sí, segunda barrera (AND estado = 'presupuesto_enviado'
+         y rowcount = 1).
+    P11. DECIDIDA: sí, B1 y B2 por separado, cada uno con su [PARA].
+    P12. RESPONDIDA por el tutor con evidencia (JSON de chat_tipo_reforma
+         exportado el 2026-10-07): el Switch router_estado_sesion NO mira
+         el estado de la oportunidad; decide solo con existe y
+         presupuesto.existe. Una oportunidad en 'seguimiento_pendiente'
+         tiene presupuesto, así que va a la salida con_presupuesto, igual
+         que hoy: no se rompe nada. Pendiente para el bloque del Agente 2
+         (fuera de esta rama): su router tendrá que tratar
+         'seguimiento_pendiente' como 'presupuesto_enviado'. Anotado en R5
+         y en la sección 8.
+
+  Preguntas abiertas (texto original, tal como se plantearon):
     P1.  Gate como criterio de la condición COMPARTIDA (C3): sí
          (propuesta; el listado deja de mostrar en b) un Gate puesto a
          mano en 'presupuesto_enviado'); o no, y sin 409 con_gate (el
