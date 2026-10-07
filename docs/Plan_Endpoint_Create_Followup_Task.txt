@@ -546,6 +546,10 @@ C5. Riesgo fuera del repositorio (R5, P12): tras el 201, GET
     condición ("fecha_ultimo_contacto IS NULL", "make_interval",
     "requiere_aprobacion", "NOT EXISTS"); los dos importan de
     condicion_seguimiento. Se enseña la salida.
+    [Corregido 2026-10-07, paso B1: "make_interval" NO entra en la lista.
+    El apartado a) del listado (Gate sin decisión) lo usa legítimamente
+    con su propia regla, horas_recordatorio_gate, que no forma parte de
+    esta condición. Los fragmentos que se buscan son los otros tres.]
   - Pruebas en negativo N2 y N2b (6.3): una COPIA divergente en cada
     lado tiene que hacer fallar la matriz.
 
@@ -1035,6 +1039,17 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
      sin tocar sus scripts: check_listado_llamadas_service 39/39 y
      check_listado_llamadas_http 88/88, y ast.parse de la fuente única.
                                                                    [PARA]
+     [Hecho 2026-10-07. Línea base ANTES del cambio: 39/39 y 88/88. DESPUÉS,
+     con los scripts sin tocar (git diff de scripts/ vacío): 39/39 y 88/88.
+     Datos reales (sesión readonly): la consulta antigua de b) y la nueva
+     dan las mismas 8 oportunidades en el mismo orden. ast.parse: el
+     listado no contiene ningún fragmento de la condición y la importa de
+     condicion_seguimiento (5/5). En negativo, sobre una copia sin el
+     criterio contacto_registrado en el módulo compartido:
+     check_listado_llamadas_http 87/88 (falla "48 h + 1 min con
+     fecha_ultimo_contacto -> fuera") y check_listado_llamadas_service
+     39/39 (no prueba ese criterio, como N9 del listado): el listado lee
+     la condición del módulo compartido. Copia borrada, 0 restos.]
   B2 Esquemas, servicio y ruta de POST /create-followup-task, séptimo
      include_router, prueba mínima por HTTP real en el 8025.        [PARA]
   C  check_followup_service y check_followup_tasks_http completos,

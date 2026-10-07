@@ -5,10 +5,12 @@ que WF3 envía a administración (plan: docs/Plan_Endpoint_Listado_WF3.txt).
 Cinco apartados (plan, 1.6):
   a) gates_sin_decision         Gate sin decisión registrada, presupuesto
                                 de hace más de horas_recordatorio_gate h.
-  b) seguimientos_por_abrir     presupuesto_enviado, sin visita (salvo
-                                canceladas), sin contacto registrado y
-                                presupuesto de hace más de
-                                horas_seguimiento_presupuesto h.
+  b) seguimientos_por_abrir     presupuesto_enviado, sin Gate, sin visita
+                                (salvo canceladas), sin contacto
+                                registrado y presupuesto de hace más de
+                                horas_seguimiento_presupuesto h. Criterios
+                                COMPARTIDOS con POST /create-followup-task
+                                (condicion_seguimiento.py).
   c) seguimientos_abiertos      seguimiento_pendiente.
   d) visitas_sin_confirmar      visitas 'solicitada' que NO son del
                                 próximo día laborable.
@@ -55,33 +57,42 @@ from app.schemas.listado_llamadas import (
 # mismo que usan /visits y /gate-decisions, con su lista "faltan".
 from app.services.reglas_visita import ZONA_MADRID, ConfiguracionIncompleta
 
+# La condición del apartado b) y la regla de 48 h viven en un módulo
+# COMPARTIDO con POST /create-followup-task (plan de ese endpoint, sección
+# 3): así la lista y el endpoint no pueden contradecirse.
+#   CLAVE_SEGUIMIENTO      clave de la regla de 48 h. Al importarla, el
+#                          nombre existe TAMBIÉN en este módulo, y las
+#                          pruebas lo pueden cambiar aquí en memoria.
+#   parametros_condicion   los valores de los %(...)s de la condición.
+#   problema_horas         la validación de UNA regla de horas (entero
+#                          entre 1 y MAX_HORAS_REGLA, 8760; P6).
+#   where_condicion        los criterios unidos por AND.
+from app.services.condicion_seguimiento import (
+    CLAVE_SEGUIMIENTO,
+    parametros_condicion,
+    problema_horas,
+    where_condicion,
+)
+
 # ======================================================================
 # Constantes
 # ======================================================================
 
-# Claves de reglas_negocio de los dos plazos (paso10 y paso11). Las
-# funciones las leen en el momento de ejecutarse, así que una prueba puede
+# Clave de reglas_negocio del plazo del Gate (paso10); la del seguimiento,
+# CLAVE_SEGUIMIENTO, llega del módulo compartido (arriba). Las funciones
+# leen las dos en el momento de ejecutarse, así que una prueba puede
 # cambiar el nombre EN MEMORIA para provocar el 503 sin tocar la tabla
 # (como check_visits_service).
 CLAVE_RECORDATORIO_GATE = "horas_recordatorio_gate"
-CLAVE_SEGUIMIENTO = "horas_seguimiento_presupuesto"
 
-# Máximo de horas de cada regla: un año (P6 del plan, corregida el
-# 2026-10-07). Sin máximo, un valor enorme (reglas_negocio.valor admite
-# hasta 99.999.999) hacía que "ahora - esas horas" cayera fuera del rango
-# de fechas de Postgres: error "timestamp out of range" y respuesta 500 en
-# vez del 503 controlado (demostrado con una prueba real).
-MAX_HORAS_REGLA = 8760
-
-# Estados de la oportunidad de cada apartado (columna oportunidades.estado).
+# Estados de la oportunidad de los apartados a) y c) (columna
+# oportunidades.estado). El de b) está en la condición compartida.
 ESTADO_GATE = "pendiente_aprobacion"
-ESTADO_POR_ABRIR = "presupuesto_enviado"
 ESTADO_ABIERTO = "seguimiento_pendiente"
 
-# Estados de visita (columna visitas.estado).
+# Estados de visita (columna visitas.estado) de los apartados d) y e).
 VISITA_SOLICITADA = "solicitada"
 VISITA_CONFIRMADA = "confirmada"
-VISITA_CANCELADA = "cancelada"
 
 # El modo de la transacción: la PRIMERA orden de obtener_listado (plan,
 # 1.9 y 3.4). En una constante para que la prueba pueda comprobar el texto.
@@ -122,15 +133,13 @@ def validar_reglas_listado(leidas: dict[str, Decimal]) -> tuple[dict[str, int], 
     for clave in claves:
         # .get(clave) devuelve None si la clave no se leyó.
         valor = leidas.get(clave)
-        # La fila no existe.
-        if valor is None:
-            problemas.append(f"{clave}: no existe")
-        # Existe pero tiene decimales (to_integral_value() redondea al
-        # entero: si cambia, los tenía), o no está entre 1 y el máximo.
-        elif valor != valor.to_integral_value() or not (1 <= valor <= MAX_HORAS_REGLA):
-            problemas.append(
-                f"{clave}: valor no válido ({valor}); debe ser un entero entre 1 y {MAX_HORAS_REGLA}"
-            )
+        # La validación de UNA regla es la del módulo compartido (la misma
+        # que usará POST /create-followup-task): None si es válida, o el
+        # texto del problema ("no existe" o "valor no válido ...").
+        problema = problema_horas(clave, valor)
+        # Con problema, se apunta y no se guarda la regla.
+        if problema is not None:
+            problemas.append(problema)
         # Válida: se guarda como int (llegaba como Decimal('48.00')).
         else:
             reglas[clave] = int(valor)
@@ -234,17 +243,11 @@ WHERE_GATES = """
       AND p.created_at < %(ahora)s - make_interval(hours => %(horas)s)
     ORDER BY p.created_at, o.id;
 """
-# b): además, sin contacto registrado y sin ninguna visita que no esté
-# cancelada (P5). NOT EXISTS: "no hay ninguna fila que cumpla esto".
-WHERE_POR_ABRIR = """
-    WHERE o.estado = %(estado)s
-      AND o.fecha_ultimo_contacto IS NULL
-      AND p.created_at < %(ahora)s - make_interval(hours => %(horas)s)
-      AND NOT EXISTS (SELECT 1 FROM visitas v
-                      WHERE v.oportunidad_id = o.id
-                        AND v.estado <> %(cancelada)s)
-    ORDER BY p.created_at, o.id;
-"""
+# b): NO es una constante de este archivo. Sus criterios (con presupuesto,
+# sin Gate, 'presupuesto_enviado', sin contacto registrado, sin visita
+# salvo canceladas y plazo estricto) viven en condicion_seguimiento.py,
+# compartidos con POST /create-followup-task; ver where_por_abrir(), más
+# abajo.
 # c): sin plazo (ya pasó al abrirse el seguimiento).
 WHERE_ABIERTOS = """
     WHERE o.estado = %(estado)s
@@ -264,6 +267,18 @@ WHERE_PROXIMO_LABORABLE = """
       AND v.fecha_propuesta >= %(inicio)s AND v.fecha_propuesta < %(fin)s
     ORDER BY v.fecha_propuesta, v.id;
 """
+
+
+def where_por_abrir() -> str:
+    """
+    El WHERE y el ORDER BY del apartado b), montados con los criterios
+    COMPARTIDOS (condicion_seguimiento.where_condicion) y el mismo orden
+    que a) y c). Se monta en cada llamada (no al cargar el archivo), para
+    que un cambio en memoria de los criterios se note aquí.
+    """
+    # "WHERE " + los criterios unidos por AND + el orden (lo más antiguo
+    # primero, y el id como desempate). Todo son textos fijos del programa.
+    return "\n    WHERE " + where_condicion() + "\n    ORDER BY p.created_at, o.id;\n"
 
 
 def _llamadas_oportunidad(cursor, where: str, params: dict, motivo: MotivoLlamada) -> list[LlamadaOportunidad]:
@@ -331,12 +346,13 @@ def leer_listado(cursor, reglas: dict[str, int], ahora: datetime) -> ListadoLlam
         {"estado": ESTADO_GATE, "ahora": ahora, "horas": reglas[CLAVE_RECORDATORIO_GATE]},
         MotivoLlamada.GATE_SIN_DECISION,
     )
-    # b) Seguimientos por abrir.
+    # b) Seguimientos por abrir: la condición COMPARTIDA con POST
+    # /create-followup-task, con los parámetros que construye el mismo
+    # módulo (estado, estado de visita cancelada, ahora y horas).
     por_abrir = _llamadas_oportunidad(
         cursor,
-        WHERE_POR_ABRIR,
-        {"estado": ESTADO_POR_ABRIR, "ahora": ahora, "horas": reglas[CLAVE_SEGUIMIENTO],
-         "cancelada": VISITA_CANCELADA},
+        where_por_abrir(),
+        parametros_condicion(ahora, reglas[CLAVE_SEGUIMIENTO]),
         MotivoLlamada.SEGUIMIENTO_POR_ABRIR,
     )
     # c) Seguimientos abiertos.
