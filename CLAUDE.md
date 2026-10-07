@@ -766,6 +766,10 @@ rápida, no sustituye esa documentación. Contiene:
 Fuera de docs/: prompts/agente1_captura.md es el prompt del Agente 1
 (captura de datos en el chat). No está comprobado que coincida con el que
 tiene hoy el nodo del agente en n8n.
+(Nota 2026-10-07: comprobado. El system message del nodo "AI Agent" del
+JSON exportado de chat_tipo_reforma es idéntico a este archivo, 5.791
+caracteres, comparado con un script. Si se cambia en un sitio, hay que
+cambiarlo en el otro.)
 
 ## Esquema de la base de datos: cuál de los dos .sql manda
 
