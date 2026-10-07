@@ -427,6 +427,14 @@ SOLO REST.
 > siguiente bloque de backend previsto es POST /create-followup-task (paso
 > de 'presupuesto_enviado' a 'seguimiento_pendiente', llamado por WF3 para
 > cada seguimiento por abrir), en su propia rama.
+>
+> **(Nota 2026-10-07, tras el merge: el párrafo anterior está superado en dos
+> puntos.)** La rama `feat/n0-listado-wf3` está **integrada en `main` en
+> `f8a1f0f`** (fast-forward, confirmado por Gabi; la rama ya no existe en
+> GitHub). El documento de D25 ya está en el repositorio:
+> docs/Decisiones_D25_WF3_Seguimiento_y_Resultado_Llamadas.md. **No hay
+> ningún bloque de backend abierto**; el siguiente es POST
+> /create-followup-task (bloque 2 de D25.12).
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -818,6 +826,10 @@ rápida, no sustituye esa documentación. Contiene:
   texto.)
 - Plan_Endpoint_Aviso_Gate.txt — plan de GET /gate-avisos/{oportunidad_id}
   (P1-P7 decididas, bloques A a D con sus hashes).
+- Decisiones_D25_WF3_Seguimiento_y_Resultado_Llamadas.md — D25: WF3,
+  seguimiento, resultado de las llamadas, modo de proceder de
+  administración y orden de los bloques (D25.1-D25.16; copiado del
+  Proyecto de claude.ai el 2026-10-07). D19-D24 siguen sin estar aquí.
 - Plan_Endpoint_Listado_WF3.txt — plan de GET /llamadas-del-dia y de la
   regla horas_seguimiento_presupuesto (P1-P9 decididas, pruebas en
   negativo N1-N12 con sus resultados exactos, bloques A a E con sus
