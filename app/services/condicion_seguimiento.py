@@ -128,3 +128,36 @@ def where_condicion() -> str:
     # Cada expresión entre paréntesis, para que el AND no se mezcle con
     # nada de dentro; " AND ".join las une con " AND " entre cada dos.
     return " AND ".join(f"({expresion})" for _, expresion in CRITERIOS_SEGUIMIENTO)
+
+
+def columnas_criterios() -> str:
+    """
+    Los criterios como COLUMNAS de un SELECT, una por criterio y en el
+    mismo orden, cada una con el nombre de su 409:
+        (p.id IS NOT NULL) AS sin_presupuesto, (...) AS con_gate, ...
+    Para POST /create-followup-task, que necesita saber CUÁL falla.
+    Se calcula en el momento de llamarla, como where_condicion.
+    """
+    # Cada criterio: "(expresión) AS motivo"; ", ".join los separa con
+    # comas. Los motivos son nombres fijos de este archivo, válidos como
+    # nombre de columna en SQL.
+    return ", ".join(f"({expresion}) AS {motivo}" for motivo, expresion in CRITERIOS_SEGUIMIENTO)
+
+
+def primer_criterio_incumplido(valores) -> str | None:
+    """
+    Recibe los valores de las columnas de columnas_criterios(), en el mismo
+    orden, y devuelve el motivo del PRIMER criterio que no se cumple, o
+    None si se cumplen todos.
+
+    Un valor None (NULL en SQL) cuenta como NO cumplido, igual que en un
+    WHERE, donde una fila con NULL tampoco entra.
+    """
+    # zip empareja cada criterio con su valor, en orden.
+    for (motivo, _), valor in zip(CRITERIOS_SEGUIMIENTO, valores, strict=True):
+        # "is not True": False y None son incumplidos (no basta con "not
+        # valor", que diría lo mismo, pero así se lee la intención).
+        if valor is not True:
+            return motivo
+    # Todos dieron True: la oportunidad cumple la condición.
+    return None

@@ -27,6 +27,9 @@ from psycopg2.extras import Json
 # lectura (plan docs/Plan_Endpoint_Aviso_Gate.txt).
 from app.api import aviso_gate as aviso_gate_api
 from app.api import estimates as estimates_api
+# Router de POST /create-followup-task: abre el seguimiento de 48 h (desde
+# el 2026-10-08, el séptimo; plan docs/Plan_Endpoint_Create_Followup_Task.txt).
+from app.api import followup_tasks as followup_tasks_api
 from app.api import gate_decisions as gate_decisions_api
 from app.api import leads as leads_api
 # Router de GET /llamadas-del-dia: la lista diaria de llamadas de WF3, solo
@@ -134,6 +137,13 @@ app.include_router(aviso_gate_api.router)
 # llave del Gate (X-Gate-Secret), porque devuelve nombres y teléfonos de
 # todos los clientes pendientes, que el Agente 2 no debe ver.
 app.include_router(listado_llamadas_api.router)
+
+# Séptimo router: POST /create-followup-task (app/api/followup_tasks.py).
+# Solo REST, sin tool MCP: lo llama WF3 (n8n) por cada seguimiento por
+# abrir de la lista diaria, para pasar la oportunidad a
+# 'seguimiento_pendiente'. Usa la llave del Gate (X-Gate-Secret): cambia
+# el estado de una oportunidad y es una herramienta de administración.
+app.include_router(followup_tasks_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna

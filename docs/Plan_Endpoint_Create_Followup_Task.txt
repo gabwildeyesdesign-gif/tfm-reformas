@@ -1052,6 +1052,20 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
      la condición del módulo compartido. Copia borrada, 0 restos.]
   B2 Esquemas, servicio y ruta de POST /create-followup-task, séptimo
      include_router, prueba mínima por HTTP real en el 8025.        [PARA]
+     [Hecho 2026-10-08. Prueba mínima (scratchpad, puerto 8025, servidor
+     en un hilo del propio proceso: PID que escucha = PID del script)
+     43/43: services/ no importa fastapi ni fastmcp (proceso limpio);
+     ast.parse, followup_service.py sin ningún fragmento de la condición
+     e importándola de condicion_seguimiento; conexiones de escritura en
+     READ COMMITTED; 401 sin cabecera (con cuerpo vacío) y con el valor
+     de WEBHOOK_SECRET en las dos cabeceras; 409 plazo_no_cumplido y 409
+     con_gate sin escribir; 503 con la clave cambiada en memoria, sin log
+     y con [AVISO]; 201 con sus efectos (estado, updated_at,
+     fecha_ultimo_contacto NULL, un log con sus claves exactas,
+     fecha_apertura con desfase de Madrid, sale de b) y entra en c)); 200
+     sin escribir; ningún 500; 0 restos y lo ajeno igual. Regresión del
+     listado sin tocar sus scripts: 39/39 y 88/88. Añadidas al módulo
+     compartido columnas_criterios() y primer_criterio_incumplido().]
   C  check_followup_service y check_followup_tasks_http completos,
      pruebas en negativo N1-N12 con sus recuentos EXACTOS escritos en
      6.3, regresión y suite completa (39 scripts) con la regla de uso.
