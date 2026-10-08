@@ -714,6 +714,20 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
       importan de él. Se enseña la salida.
   S5. Orden de los criterios: la tupla tiene exactamente los seis motivos,
       en el orden de 2.9 (copiado del PLAN, no del código).
+  [Añadido 2026-10-08, tras el incidente de la N12 (6.3):]
+  S0. Las conexiones de S1, S3 y S6 se abren con ConexionSinCommit, cuyo
+      commit() lanza CommitProhibido: S0 comprueba que lo lanza (rama else:
+      FALLO "la excepción se ha tragado").
+  [Añadido 2026-10-08, revisión del tutor:]
+  S6. Regla fuera de rango con el VALOR REAL: en una conexión propia y UNA
+      transacción que termina en ROLLBACK, UPDATE de
+      horas_seguimiento_presupuesto a 8761 y a 99999999 (cada vuelta con su
+      oportunidad propia de 49 h) y abrir_seguimiento_con_cursor con ese
+      cursor -> ConfiguracionIncompleta (rama else: FALLO "la excepción se ha
+      tragado"); al terminar, la regla sigue en su valor (48.00) y no queda
+      nada con la marca. Con SET LOCAL lock_timeout = '5s'.
+  S7. primer_criterio_incumplido con listas de valores sueltas (antes
+      numerada S6; renumerada al añadir la S6 de arriba).
 
 6.2 Bloque C: scripts/check_followup_tasks_http.py (HTTP real, 8025)
   Mismo esquema que check_gate_decisions_http y check_listado_llamadas_http:
@@ -851,8 +865,140 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
        fallan S3 y el CASO 10 (201 con la clave falsa).
   N11. Sin el máximo de 8760: 99999999 da 500 en el CASO 10 y S2 deja de
        ver 8761 y 99999999 como problema.
+       [Corregido 2026-10-08: la previsión del 500 en el CASO 10 era
+       ERRÓNEA. El CASO 10 (y la S3) envuelven problema_horas en memoria:
+       cambian solo el valor que se VALIDA, mientras el servicio calcula el
+       plazo con el valor LEÍDO de la tabla (48; followup_service.py,
+       "horas = int(valor)"). Sin el máximo, 8761 pasa la validación y la
+       oportunidad R (49 h) se abre con 48 h: 201 y escritura en R (propia,
+       borrada por el script); 99999999 da 200 (R ya abierta). Nunca 500:
+       Postgres no llega a calcular now() - 99999999 h. La N11 se detecta
+       igualmente (201/200 en vez de 503), pero el camino del VALOR no se
+       ejercía. Para ejercerlo se añadió la S6 (6.1), con el valor REAL en
+       la tabla dentro de una transacción con ROLLBACK. Con la copia N11,
+       salida literal de la S6:
+         [FALLO] regla REAL = 8761 -> 503 configuracion_incompleta (salió
+           SeguimientoNoPermitido: El presupuesto aún no ha superado el
+           plazo de seguimiento; ...)
+         [FALLO] regla REAL = 99999999 -> 503 configuracion_incompleta
+           (salió DatetimeFieldOverflow: timestamp out of range)
+         [OK] tras el ROLLBACK la regla sigue en 48.00
+       check_followup_service con la copia N11: 26/33. Precisión sobre la
+       previsión de la revisión ("8761 abre el seguimiento"): con el valor
+       REAL, el plazo pasa a ser de 8761 h y un presupuesto de 49 h no lo
+       cumple: sale 409 plazo_no_cumplido, no un 201. Detectado igualmente
+       (409 en vez de 503).]
   N12. 503 CON log (la opción b de P4): falla "ningún log nuevo" del CASO
        10. Solo si se aprueba la opción a).
+
+  RESULTADOS EXACTOS (Bloque C, 2026-10-08; copias en el scratchpad, una
+  por prueba y DE UNA EN UNA, con su .env, borradas al terminar; el código
+  real no cambió; la salida completa de cada script se guardó). Sin
+  mutación: check_followup_service 34/34 y check_followup_tasks_http
+  125/125. Servicio | HTTP:
+  N1   dependencia del webhook       34/34 | 67/125. Cascada con una causa:
+       la llave del webhook ABRE (falla "WEBHOOK_SECRET en X-Webhook-Secret
+       -> 401", y esa petición abre A: fallan "los 401 no han tocado nada"
+       y la comparación del 401) y la del Gate deja de abrir: caen las 58
+       comprobaciones que necesitan pasar la llave (422, 404, cada 409,
+       201, 200, 503, concurrencia, carrera, regresión). El servicio no ve
+       la llave.
+  N2   copia divergente en el endpoint (visita -> true)
+                                     33/34 | 118/125: S4 (fragmentos en
+       followup_service.py); por HTTP, los tres casos con visita dan 201
+       (con su "sin escribir nada") y la matriz lo delata en dos ("en b) =
+       False, código 201").
+  N2b  copia divergente en el listado (sin fecha_ultimo_contacto IS NULL)
+                                     33/34 | 124/125: S4 (fragmentos en el
+       listado); por HTTP, la matriz: "con fecha_ultimo_contacto: en b) =
+       True, código 409".
+  N3   sin FOR UPDATE                34/34 | 119/125: CASO 11 [200, 200,
+       200, 201, 500] y log_id {None, id}, pero UN solo log (la segunda
+       barrera convierte el duplicado en 500); CASO 12 b) las tres
+       seguimiento 500 (la visita ganó; estado final coherente, 0 logs);
+       "ninguna respuesta 500" (4 de 50). Los 4 logs del manejador global,
+       exactamente los esperados, borrados por id exacto (4487, 4490, 4492,
+       4494).
+  N3b  sin FOR UPDATE ni segunda barrera
+                                     34/34 | 119/125: CASO 11 [200, 200,
+       200, 201, 201], DOS log_id y DOS logs; CASO 12 b), en las tres, el
+       seguimiento SOBRESCRIBIÓ 'visita_agendada': estado final
+       'seguimiento_pendiente' con una visita activa (actualización
+       perdida). Demuestra lo que impiden el bloqueo y la barrera.
+  N4   estado antes que la repetición
+                                     34/34 | 116/125: los 200 de A, P5, la
+       concurrencia y "A ya abierta con la configuración rota" salen 409; y
+       los dobles sin_presupuesto y con_gate salen estado_no_permitido.
+  N5   escribe fecha_ultimo_contacto 34/34 | 124/125: "fecha_ultimo_contacto
+       sigue NULL".
+  N6   la repetición escribe         34/34 | 123/125: "0 logs nuevos y
+       updated_at sin cambios" y "P5 sin escribir nada".
+  N7   límite no estricto (<=)       33/34 | 125/125: S1 "48 h EXACTAS -> 409"
+       ("la excepción se ha tragado"). Por HTTP no se ve (margen), como se
+       preveía.
+  N8   sin el criterio con_gate      28/34 | 121/125: S4 (el módulo ya no
+       contiene requiere_aprobacion), S5 (cinco criterios) y cuatro de S7
+       (la tupla tiene 5); por HTTP, los tres casos con Gate (y uno de sus
+       "sin escribir nada": el forzado a presupuesto_enviado se abre). La
+       matriz NO falla: las dos fuentes siguen siendo la misma.
+  N9   orden cambiado (plazo antes)  32/34 | 123/125: S5 y S7 "solo el
+       último False"; por HTTP, los dos dobles del CASO 6.
+  N10  plazo escrito en el código    28/34 | 118/125: S3 (los tres 503) y S6
+       (los dos con el valor real); por HTTP, los dos 503 con clave falsa
+       (con "faltan" y [AVISO]), los dos valores inyectados, "nada escrito
+       en R" y "restaurado: R -> 201".
+  N11  sin el máximo de 8760         27/34 | 121/125: S2 (8761 y 99999999 ya
+       no son problema), S3 (los dos inyectados y "nada escrito") y S6
+       (8761 -> 409 plazo_no_cumplido; 99999999 -> DatetimeFieldOverflow:
+       timestamp out of range); por HTTP, CASO 10: 8761 -> 201,
+       99999999 -> 200, "nada escrito en R" y "restaurado -> 200" (ver la
+       corrección de la previsión, arriba).
+  N12  503 CON log (commit)          29/34 | 124/125: S3 y S6, "salió
+       CommitProhibido" (la conexión de prueba rechaza el commit, ver el
+       incidente); por HTTP, "los 503 no han escrito nada en R".
+  Recuentos del servicio sobre 34 (S0 incluida). Los de N1-N11 se
+  midieron de nuevo, solo el servicio, tras añadir S0 y S6 (cada uno sube
+  exactamente lo esperado); los HTTP de N1-N6 son de la pasada del
+  2026-10-08 por la mañana, con el script HTTP ya en su versión final
+  (no ha cambiado desde entonces).
+
+  INCIDENTE DE LA N12 (2026-10-08, documentado por indicación del tutor):
+  - Qué pasó: la primera ejecución de la N12 con la S6 nueva dejó
+    reglas_negocio.horas_seguimiento_presupuesto en 8761 en la base de
+    datos REAL (antes 48). Ninguna otra fila cambió (13 filas; la suma de
+    valores pasó de 14318 a 23031, exactamente 8761 - 48 más). La
+    fecha_actualizacion de la fila no cambió (el UPDATE no la toca), así
+    que la tabla no dejaba rastro. Mientras duró, GET /llamadas-del-dia y
+    POST /create-followup-task respondían 503 (lo vio el script HTTP de
+    esa misma ejecución). Docker/n8n estaba cerrado: ningún workflow lo
+    llamó.
+  - Por qué: la S6 hace el UPDATE de la regla real dentro de una
+    transacción y pasa ESE cursor a abrir_seguimiento_con_cursor. La
+    versión rota N12 llama a cursor.connection.commit() antes de lanzar el
+    503 (para conservar su log), y ese commit confirmó también el UPDATE
+    de la prueba. El ROLLBACK TO SAVEPOINT falló ("savepoint does not
+    exist") y el ROLLBACK del finally ya no tenía nada que deshacer. El
+    error de diseño de la S6 lo asumió el tutor, que la propuso.
+  - Alcance: solo esa fila. 0 restos con las marcas propias (los 2
+    clientes que dejó la N12 los borró el lanzador), 0 logs de la versión
+    rota, 0 logs huérfanos, oportunidades por estado sin cambios.
+  - Restauración (autorizada por el tutor): UPDATE reglas_negocio SET
+    valor = 48 WHERE clave = 'horas_seguimiento_presupuesto' AND valor =
+    8761, en una transacción con commit solo si rowcount = 1 (fue 1).
+    Verificado: consulta de solo lectura 48.00 y 24.00 (suma 14318), y
+    obtener_listado() en un proceso propio (reglas 24/48 y las 8 de b);
+    nunca el puerto 8000.
+  - Defensa añadida: las conexiones de S1, S3 y S6 se abren con
+    connection_factory=ConexionSinCommit, cuyo commit() lanza
+    CommitProhibido; S0 lo comprueba (rama else). Contra la N12: S3 y S6
+    "salió CommitProhibido" como FALLO contado, y reglas_negocio sigue en
+    48.00 / 24.00 al terminar (consulta de solo lectura).
+  - Otros scripts revisados: en esta rama, solo check_followup_service
+    pasa una conexión con cambios sin confirmar al código bajo prueba
+    (check_followup_tasks_http usa HTTP). Fuera de la rama (en main), la S5
+    de check_listado_llamadas_service pasa su cursor con INSERT sin
+    confirmar (solo filas propias nuevas, ninguna real modificada) a
+    leer_listado: mismo patrón, menor alcance; no se cambia aquí.
 
 6.4 Regresión y suite
   - Tras B1 (antes de escribir el endpoint): check_listado_llamadas_service
@@ -1070,6 +1216,24 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
      pruebas en negativo N1-N12 con sus recuentos EXACTOS escritos en
      6.3, regresión y suite completa (39 scripts) con la regla de uso.
                                                                    [PARA]
+     [Hecho 2026-10-08. check_followup_service 34/34 (S0-S7) y
+     check_followup_tasks_http 125/125 (CASOS 1-15, puerto 8025). N1-N12,
+     con N2b y N3b, de una en una: recuentos exactos e incidente de la N12
+     en 6.3. Regresión: check_gate_decisions_http 121/121,
+     check_visits_http 55/55, check_lead_session_http 24/24,
+     check_listado_llamadas_service 39/39, check_listado_llamadas_http
+     88/88. Suite completa 39/39 en UNA pasada válida, de 17:39:05 a
+     17:47:13 (Gabi confirmó enchufado, tapa abierta y memoria liberada:
+     Docker/n8n y navegador cerrados); ningún Kernel-Power 506/507 entre
+     17:38 y 17:48 ("ninguna suspension: la pasada vale").
+     check_graceful_shutdown y check_mcp_connection desde copias en el 8030
+     y el 8031; uvicorn del 8031 detenido por su PID (16288, el del log,
+     igual al de netstat; el de Popen, 18008, es el lanzador del venv).
+     Salida de los cinco scripts de P4 revisada a mano: sin fallos
+     (check_foreign_keys sigue contando 9 por columnas, ya anotado).
+     Interrupción previa: la primera tanda de pruebas en negativo se
+     detuvo por falta de memoria (Claude Code paró el proceso en N7); se
+     reanudó de una en una tras cerrar Docker/n8n y el navegador.]
   D  Documentación [PARA]:
      - Adenda: fila 5 reescrita con nota fechada (entrada, salida con
        estado_oportunidad si P6, X-Gate-Secret, trigger WF3 por cada
