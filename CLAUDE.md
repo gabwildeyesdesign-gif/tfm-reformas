@@ -65,6 +65,21 @@ actual: Nivel N0 (núcleo mínimo aprobable).
   las sentencias de forma equivocada. Es exactamente lo que ocurrió en
   D16, con el raise atrapado dentro del if porque Python ignora los
   comentarios al calcular los niveles de indentación.
+- Conexiones de prueba sin commit (regla desde el 2026-10-08). Una prueba
+  que modifica tablas reales dentro de una transacción (que se deshace al
+  final) y pasa ESA conexión o su cursor al código bajo prueba abre la
+  conexión con connection_factory=ConexionSinCommit: una subclase de
+  psycopg2.extensions.connection cuyo commit() lanza un error
+  (CommitProhibido) en vez de confirmar. Lleva su autoprueba: llamar a
+  commit() y exigir la excepción, con la rama else que marca FALLO "la
+  excepción se ha tragado". Así, si el código (o una versión rota en una
+  prueba en negativo) llama a commit(), sale un FALLO contado y el
+  ROLLBACK lo deshace todo. Motivo: el 2026-10-08, la versión rota N12 de
+  POST /create-followup-task llamó a commit() con el cursor de la prueba
+  S6 de check_followup_service y dejó horas_seguimiento_presupuesto en 8761
+  en la tabla REAL (restaurada a 48 con un UPDATE protegido; detalle en la
+  sección 6.3 de docs/Plan_Endpoint_Create_Followup_Task.txt). Ejemplo:
+  scripts/check_followup_service.py (S0, S1, S3 y S6).
 - Suite completa sin suspensiones (regla desde el 2026-10-03). Motivo: los
   tres cortes de conexión de la rama de /gate-decisions coincidieron con
   un Modern Standby de Windows con la red desconectada (ver "Scripts de
@@ -172,6 +187,11 @@ SOLO LECTURA, sexto include_router, con la cabecera X-Gate-Secret. Es la
 lista diaria de llamadas de WF3 (D25). No forma parte de los 5 endpoints
 originales.)
 create-followup-task sigue siendo un docstring de una línea.
+(Nota 2026-10-08: la frase anterior ya no es cierta. POST
+/create-followup-task está implementado y verificado en la rama
+feat/n0-create-followup-task, pendiente de merge: séptimo include_router,
+cabecera X-Gate-Secret, solo REST, sin tool MCP. Detalle en "Estado
+actual".)
 Lo que sigue es la especificación completa, no el estado actual.
 
 calculate-estimate tiene las dos (MCP en producción, REST para
@@ -435,6 +455,14 @@ SOLO REST.
 > docs/Decisiones_D25_WF3_Seguimiento_y_Resultado_Llamadas.md. **No hay
 > ningún bloque de backend abierto**; el siguiente es POST
 > /create-followup-task (bloque 2 de D25.12).
+>
+> **(Nota 2026-10-08.) Bloque actual: POST /create-followup-task**, el paso
+> de 'presupuesto_enviado' a 'seguimiento_pendiente' que WF3 pedirá por cada
+> seguimiento por abrir, implementado y verificado en la rama
+> `feat/n0-create-followup-task`, **pendiente de merge** (bloques A, B1, B2,
+> C y D cerrados; plan docs/Plan_Endpoint_Create_Followup_Task.txt). Misma
+> regla de siempre: no hacer merge sin la confirmación explícita de Gabi,
+> después de la revisión del tutor, y siempre con `--ff-only`.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -736,6 +764,44 @@ pasada vale"). check_graceful_shutdown y check_mcp_connection desde copias
 en los puertos 8030 y 8031; uvicorn del 8031 detenido por su PID (el del
 log, igual al de netstat). Salida de los cinco scripts de P4 revisada a
 mano: sin fallos.)
+(Nota 2026-10-08, rama feat/n0-create-followup-task: la suite tiene ahora
+39 scripts, con check_followup_service y check_followup_tasks_http (puerto
+8025, nunca el 8000). 39/39 en UNA pasada válida el 2026-10-08, de
+17:39:05 a 17:47:13, con la regla de uso (Gabi confirmó enchufado, tapa
+abierta y memoria liberada: Docker/n8n y navegador cerrados) y sin ningún
+Kernel-Power 506/507 entre 17:38 y 17:48 ("ninguna suspension: la pasada
+vale"). check_graceful_shutdown y check_mcp_connection desde copias en el
+8030 y el 8031; uvicorn del 8031 detenido por su PID (el del log, igual al
+de netstat). Salida de los cinco scripts de P4 revisada a mano: sin
+fallos. Aviso de memoria: con 8 GB, una tanda larga de pruebas en negativo
+en segundo plano se cortó por falta de memoria con Docker/n8n abierto; se
+ejecutaron de una en una tras cerrarlo.)
+
+POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
+2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
+ce6f421, pruebas ad072f5, documentación y comentarios en el commit del
+Bloque D): abre el seguimiento de 48 h de una oportunidad sin Gate que no
+ha pedido visita. Entrada oportunidad_id y motivo (solo
+'sin_respuesta_visita' en N0, D25.13); X-Gate-Secret; 201 (abre: estado
+'seguimiento_pendiente', updated_at y un log 'seguimiento_abierto'; NO
+toca fecha_ultimo_contacto) o 200 (ya abierto, sin escribir; log_id null
+si el estado se puso a mano); 404; 409 con seis motivos en orden
+(sin_presupuesto, con_gate, estado_no_permitido, contacto_registrado,
+visita_existente, plazo_no_cumplido); 422; 503 configuracion_incompleta
+SIN log, con [AVISO]. La condición "seguimiento por abrir" vive en UN solo
+sitio, app/services/condicion_seguimiento.py, que usan también el apartado
+b) de GET /llamadas-del-dia (B1, que le añadió el criterio del Gate, P1) y
+el endpoint (una columna por criterio). FOR UPDATE, READ COMMITTED y
+segunda barrera (UPDATE con AND estado = 'presupuesto_enviado' y rowcount
+= 1). check_followup_service 34/34, check_followup_tasks_http 125/125
+(matriz lista <-> endpoint, 5 simultáneas, carrera con POST /visits). En
+negativo, N1-N12 con N2b y N3b, de una en una (resultados exactos en la
+sección 6.3 del plan). Regresión: check_gate_decisions_http 121/121,
+check_visits_http 55/55, check_lead_session_http 24/24 y los dos del
+listado 39/39 y 88/88. Contrato y limitaciones: fila 5 y secciones 2 y 5.8
+de la Adenda. Incidente de la N12 (2026-10-08): una versión rota dejó
+horas_seguimiento_presupuesto en 8761 en la tabla real; restaurada a 48 y
+regla nueva en "Cómo trabajamos" (conexiones de prueba sin commit).
 
 Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
@@ -773,6 +839,17 @@ de seguimientos y visitas (D25.9-D25.11) y el email al cliente (D25.1)
 siguen pendientes. Los 8 seguimientos por abrir de prueba (4 sin la clave
 'contacto') NO se tocan: se cerrarán desde el formulario cuando exista esa
 ampliación y servirán como datos de prueba (D25.16).)
+(Nota 2026-10-08: create-followup-task ya está implementado, rama
+feat/n0-create-followup-task, pendiente de merge. Pendiente nuevo: aplicar
+la regla de las conexiones de prueba sin commit (ConexionSinCommit, ver
+"Cómo trabajamos") a la S5 de scripts/check_listado_llamadas_service.py,
+que ya está en main: pasa su cursor con INSERT sin confirmar a
+leer_listado. Mismo patrón, menor alcance (solo filas propias nuevas,
+ninguna real modificada); en su propia rama. Pendiente también, para el
+bloque del Agente 2 (P12 del plan de create-followup-task): su router
+tendrá que tratar 'seguimiento_pendiente' como 'presupuesto_enviado'; el
+router de chat actual no se rompe, porque decide con existe y
+presupuesto.existe, no con el estado.)
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
@@ -834,6 +911,10 @@ rápida, no sustituye esa documentación. Contiene:
   regla horas_seguimiento_presupuesto (P1-P9 decididas, pruebas en
   negativo N1-N12 con sus resultados exactos, bloques A a E con sus
   hashes).
+- Plan_Endpoint_Create_Followup_Task.txt — plan de POST
+  /create-followup-task y de la condición compartida (P1-P12 decididas,
+  pruebas en negativo N1-N12 con sus resultados exactos, incidente de la
+  N12, bloques A, B1, B2, C y D con sus hashes).
 - Plan_Ejecutor_Suite.txt — lanzador de la suite que impide la suspensión
   de Windows. APLAZADO el 2026-10-03; lo sustituye la regla de uso de este
   archivo.

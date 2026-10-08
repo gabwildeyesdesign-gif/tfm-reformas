@@ -215,6 +215,7 @@ def foto_ajena():
 EMAILS = []
 
 
+# Ayuda: crea un lead propio por POST /leads, como n8n.
 def lead_http(gate):
     """Crea un lead por POST /leads. Devuelve (oportunidad_id, lead_token)."""
     # Token único (clave de idempotencia de POST /leads) y email propio.
@@ -233,6 +234,7 @@ def lead_http(gate):
     return r.json()["oportunidad_id"], token
 
 
+# Ayuda: lead propio y, si se pide, su cálculo (con o sin Gate).
 def caso(gate=False, calcular=True):
     """Lead propio y, si se pide, su cálculo: con Gate queda en
     'pendiente_aprobacion'; sin Gate, en 'presupuesto_enviado'.
@@ -249,6 +251,7 @@ def caso(gate=False, calcular=True):
     return op, token
 
 
+# Ayuda: garantiza que una oportunidad es propia antes de tocarla por SQL.
 def es_propia(op):
     """Comprueba que una oportunidad es propia (antes de tocarla por SQL)."""
     # SQL: 1 si la oportunidad cuelga de un cliente propio, 0 si no.
@@ -258,6 +261,7 @@ def es_propia(op):
     assert n == 1, f"la oportunidad {op} no es propia"
 
 
+# Ayuda: atrasa el presupuesto de una oportunidad propia.
 def retrasar(op, horas, minutos=0):
     """presupuestos.created_at = now() - (horas, minutos), SOLO si es propia."""
     # SQL: mueve la fecha del presupuesto hacia atrás; el AND con PROPIO
@@ -267,6 +271,7 @@ def retrasar(op, horas, minutos=0):
              {"d": timedelta(hours=horas, minutes=minutos), "op": op, "patron": PATRON_EMAIL})
 
 
+# Ayuda: fuerza el estado de una oportunidad propia.
 def poner_estado(op, estado):
     """Fuerza el estado de una oportunidad PROPIA (lo que la API no hace)."""
     # SQL: UPDATE limitado a filas propias.
@@ -274,6 +279,7 @@ def poner_estado(op, estado):
              {"estado": estado, "op": op, "patron": PATRON_EMAIL})
 
 
+# Ayuda: pone fecha_ultimo_contacto en una oportunidad propia.
 def poner_contacto(op):
     """fecha_ultimo_contacto = now() en una oportunidad PROPIA."""
     # SQL: UPDATE limitado a filas propias.
@@ -281,6 +287,7 @@ def poner_contacto(op):
              f"AND {PROPIO['oportunidades']};", {"op": op, "patron": PATRON_EMAIL})
 
 
+# Ayuda: inserta una visita propia sin cambiar el estado.
 def insertar_visita(op, estado):
     """Inserta una visita en una oportunidad PROPIA SIN cambiar su estado."""
     # Solo sobre oportunidades propias.
@@ -290,6 +297,7 @@ def insertar_visita(op, estado):
              "VALUES (%s, now() + interval '3 days', %s, 'prueba del seguimiento');", (op, estado))
 
 
+# Ayuda: lo que el endpoint podría cambiar de una oportunidad.
 def foto_op(op):
     """Lo que el endpoint podría tocar de una oportunidad: (estado,
     updated_at, fecha_ultimo_contacto, nº de visitas, nº de logs)."""
@@ -300,6 +308,7 @@ def foto_op(op):
                "FROM oportunidades o WHERE o.id = %s;", (op,))
 
 
+# Ayuda: los logs 'seguimiento_abierto' de una oportunidad.
 def logs_apertura(op):
     """Los logs 'seguimiento_abierto' de una oportunidad: (id, detalle, created_at)."""
     # SQL: los logs de apertura de esa oportunidad, por orden de id.
@@ -307,6 +316,7 @@ def logs_apertura(op):
                  "AND entity_id = %s AND accion = 'seguimiento_abierto' ORDER BY id;", (op,))
 
 
+# Ayuda: una petición al endpoint, apuntada para el CASO 14.
 def pedir(op, cabeceras=AUTH_GATE, cuerpo=None):
     """POST /create-followup-task; apunta su código y su texto."""
     # Cuerpo por defecto: el correcto para esa oportunidad.
@@ -322,6 +332,7 @@ def pedir(op, cabeceras=AUTH_GATE, cuerpo=None):
     return r
 
 
+# Ayuda: el motivo de un error de negocio de una respuesta.
 def motivo(r):
     """El motivo de un error de negocio ({"detail": {"motivo": ...}})."""
     # Si no es un objeto con "motivo", devuelve None (no rompe la prueba).
@@ -331,6 +342,7 @@ def motivo(r):
         return None
 
 
+# Ayuda: el cuerpo JSON de una respuesta, o {} si no lo tiene.
 def json_o_vacio(r):
     """El cuerpo JSON de una respuesta, o {} si no es JSON (un 500, por
     ejemplo): así una prueba en negativo da un recuento, no un KeyError."""
@@ -342,6 +354,7 @@ def json_o_vacio(r):
         return {}
 
 
+# Ayuda: los apartados b) y c) de la lista diaria.
 def listado():
     """GET /llamadas-del-dia: (ids de b), ids de c), cuerpo entero)."""
     # Petición real a la lista diaria, con la llave del Gate.
@@ -354,6 +367,7 @@ def listado():
     return b, c, cuerpo
 
 
+# Ayuda: un día laborable válido para pedir una visita.
 def dia_visita():
     """Un día laborable al menos 2 días después de hoy (en Madrid)."""
     # Se empieza dos días después de hoy.
@@ -364,6 +378,7 @@ def dia_visita():
     return dia
 
 
+# Ayuda: pedir una visita como el Agente 2.
 def pedir_visita(token):
     """POST /visits como el Agente 2: a las 10:00 (franja de mañana)."""
     # Petición real a POST /visits con la cabecera de n8n.
@@ -458,6 +473,7 @@ try:
     # Con Gate ya decidido (descartar -> 'perdida') por POST /gate-decisions.
     op, _ = caso(gate=True)
     retrasar(op, 49)
+    # La decisión del Gate por la API real: descartar.
     r = requests.post(f"{BASE}/gate-decisions", headers=AUTH_GATE, timeout=30, json={
         "oportunidad_id": op, "decision": "descartar", "motivo": "precio", "informe": "Prueba del seguimiento."})
     assert r.status_code == 201, r.text
@@ -498,6 +514,7 @@ try:
     op, _ = caso()
     poner_contacto(op)
     MATRIZ["contacto + plazo (doble)"] = (op, 409, "contacto_registrado")
+    # Visita solicitada + plazo no cumplido: tiene que ganar visita_existente.
     op, _ = caso()
     insertar_visita(op, "solicitada")
     MATRIZ["visita + plazo (doble)"] = (op, 409, "visita_existente")
@@ -611,6 +628,7 @@ try:
         antes_op = foto_op(op)
         r = pedir(op)
         RESULTADO[etiqueta] = r.status_code
+        # 409 con su motivo, y ningún cambio en la oportunidad.
         comprobar(f"{etiqueta} -> 409 {motivo_esperado}",
                   r.status_code == 409 and motivo(r) == motivo_esperado, f"({r.status_code} {motivo(r)})")
         comprobar("    ... sin escribir nada", foto_op(op) == antes_op)
@@ -623,9 +641,11 @@ try:
     # SQL: el presupuesto de A (Gate, fecha, importes y updated_at).
     presupuesto_antes = uno("SELECT requiere_aprobacion, created_at, importe_min_con_iva, importe_max_con_iva, "
                             "updated_at FROM presupuestos WHERE oportunidad_id = %s;", (A,))
+    # La petición, su código (para la matriz) y su cuerpo.
     r = pedir(A)
     RESULTADO["A cumple todo (49 h)"] = r.status_code
     cuerpo = json_o_vacio(r)
+    # 201, claves exactas de la respuesta y su contenido.
     comprobar("201 y creado=true", r.status_code == 201 and cuerpo.get("creado") is True, f"({r.status_code})")
     comprobar("claves EXACTAS de la respuesta", set(cuerpo) == CLAVES_RESPUESTA, f"({sorted(cuerpo)})")
     comprobar("oportunidad_id, motivo y estado_oportunidad",
@@ -633,6 +653,7 @@ try:
               and cuerpo.get("estado_oportunidad") == "seguimiento_pendiente")
     # La oportunidad después.
     despues_A = foto_op(A)
+    # Estado nuevo, updated_at avanzado, sin contacto ni visitas nuevas.
     comprobar("estado 'seguimiento_pendiente'", despues_A[0] == "seguimiento_pendiente")
     comprobar("updated_at ha avanzado", despues_A[1] > antes_A[1])
     comprobar("fecha_ultimo_contacto sigue NULL (pre-decisión 8)", despues_A[2] is None)
@@ -699,9 +720,11 @@ try:
     # ------------------------------------------------------------------
     print("\nCASO 9 - 200 (repetición), sin escribir nada")
     # ------------------------------------------------------------------
+    # Foto de A, segunda petición y su cuerpo.
     antes_rep = foto_op(A)
     r = pedir(A)
     repetido = json_o_vacio(r)
+    # 200 con el mismo log_id y fecha_apertura, y sin escribir nada.
     comprobar("A otra vez -> 200 y creado=false", r.status_code == 200 and repetido.get("creado") is False,
               f"({r.status_code} {motivo(r)})")
     comprobar("mismo log_id y fecha_apertura que el 201",
@@ -711,6 +734,7 @@ try:
     antes_p5 = foto_op(P5)
     r = pedir(P5)
     p5 = json_o_vacio(r)
+    # 200 con log_id y fecha_apertura null, y sin escribir nada.
     comprobar("P5 (estado a mano, sin log) -> 200 con log_id y fecha_apertura null",
               r.status_code == 200 and p5.get("creado") is False and p5.get("log_id") is None
               and p5.get("fecha_apertura") is None and "log_id" in p5, f"({r.status_code})")
@@ -740,12 +764,14 @@ try:
         r_200 = pedir(A)
     finally:
         servicio.CLAVE_SEGUIMIENTO = real
+    # El detalle del 503 (o {} si no es un 503) y sus comprobaciones.
     detalle_503 = json_o_vacio(r).get("detail", {}) if r.status_code == 503 else {}
     comprobar("clave falsa -> 503 configuracion_incompleta",
               r.status_code == 503 and detalle_503.get("motivo") == "configuracion_incompleta", f"({r.status_code})")
     comprobar("'faltan' nombra la clave falsa", any(falsa in p for p in detalle_503.get("faltan", [])),
               f"({detalle_503.get('faltan')})")
     comprobar("línea [AVISO] en stderr con la clave falsa", "[AVISO]" in stderr.getvalue() and falsa in stderr.getvalue())
+    # Con la configuración rota, el orden de 2.9: 401, 404 y 200 antes que el 503.
     comprobar("con la configuración rota: llave mala -> 401", r_llave.status_code == 401, f"({r_llave.status_code})")
     comprobar("con la configuración rota: id inexistente -> 404 (404 antes que 503)", r_404.status_code == 404,
               f"({r_404.status_code})")
@@ -796,8 +822,10 @@ try:
     # ------------------------------------------------------------------
     # a) K sale en la lista; el cliente pide visita; después llega WF3.
     b_k, _, _ = listado()
+    # K sale en la lista, y el cliente pide visita desde el chat.
     comprobar("a) K sale en b) antes de la visita", K in b_k)
     comprobar("a) el cliente pide visita -> 201", pedir_visita(K_TOKEN).status_code == 201)
+    # Después llega WF3: el endpoint tiene que ver la visita y rechazar.
     r = pedir(K)
     comprobar("a) después, el endpoint -> 409 estado_no_permitido",
               r.status_code == 409 and motivo(r) == "estado_no_permitido", f"({r.status_code} {motivo(r)})")
@@ -860,8 +888,10 @@ try:
     print("\nCASO 14 - Ningún importe ni email; 201 <-> creado; ningún 500")
     # ------------------------------------------------------------------
     texto_total = "\n".join(textos)
+    # Ni importes ni emails propios en el texto de ninguna respuesta.
     comprobar("ninguna respuesta contiene 'importe'", "importe" not in texto_total)
     comprobar("ninguna respuesta contiene un email propio", not any(e in texto_total for e in EMAILS))
+    # Cada 2xx: 201 si y solo si creado=true; y ningún 500 en todo el script.
     comprobar("201 <-> creado=true y 200 <-> creado=false en todas",
               all((c == 201) == (creado is True) for c, creado in pares_creado), f"({len(pares_creado)} respuestas 2xx)")
     comprobar("ninguna respuesta 500 del endpoint", 500 not in codigos, f"({codigos.count(500)} de {len(codigos)})")

@@ -14,7 +14,7 @@ endpoints y revisión técnica final.
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) |
 | 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST |
-| 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`. **[Nota 2026-10-07]** La base del plazo es presupuestos.created_at (la pre-estimación), no la creación de la oportunidad; las 48 h viven en reglas_negocio.horas_seguimiento_presupuesto (migración paso11), no en el código. Las oportunidades que cumplen la condición las da GET /llamadas-del-dia (fila 8, apartado seguimientos_por_abrir); este endpoint sigue sin implementar (rama siguiente) |
+| 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`. **[Nota 2026-10-07]** La base del plazo es presupuestos.created_at (la pre-estimación), no la creación de la oportunidad; las 48 h viven en reglas_negocio.horas_seguimiento_presupuesto (migración paso11), no en el código. Las oportunidades que cumplen la condición las da GET /llamadas-del-dia (fila 8, apartado seguimientos_por_abrir); este endpoint sigue sin implementar (rama siguiente). **[Nota 2026-10-08, rama feat/n0-create-followup-task]** Implementado. Contrato real: entrada oportunidad_id (entero > 0) y motivo (solo 'sin_respuesta_visita' en N0, D25.13), cabecera X-Gate-Secret; salida log_id, oportunidad_id, motivo, estado_oportunidad (el "status" de esta fila, con el nombre de los endpoints recientes; P6 de su plan), fecha_apertura y creado; 201 (abre el seguimiento) o 200 (ya abierto, no escribe); 404, 409 con seis motivos, 422, 503 sin log. Trigger: WF3, por cada elemento de seguimientos_por_abrir de GET /llamadas-del-dia. Solo REST. Ver 5.8 |
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST |
 | 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura |
 | 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura |
@@ -176,10 +176,21 @@ atiende una llamada repetida devuelve lo guardado sin recalcular nada.
   oportunidades.estado llegue a ganada/perdida. N = 5 días
   laborables, almacenado en reglas_negocio como
   dias_espera_decision_post_visita (confirmado e insertado en Supabase).
+  (Nota 2026-10-08, rama feat/n0-create-followup-task: este segundo
+  disparador queda FUERA de N0 por D25.13 y se propone para N1; el
+  endpoint de N0 solo acepta 'sin_respuesta_visita' (cualquier otro motivo,
+  también este, da 422) y la regla dias_espera_decision_post_visita se
+  queda sin uso. Ver 5.8.)
 
 Ambos casos registran un log en la tabla logs (polimórfica) y generan una
 notificación no bloqueante a administración/atención al cliente para
 seguimiento telefónico. No se crea tabla de tareas nueva.
+(Nota 2026-10-08, rama feat/n0-create-followup-task: el endpoint NO
+genera ninguna notificación ni avisa a nadie; es una etiqueta en el
+expediente. El aviso a administración es la lista diaria de WF3 (D25.2: un
+barrido al día, una sola lista), donde la oportunidad pasa del apartado
+seguimientos_por_abrir al de seguimientos_abiertos. El log sí se escribe
+('seguimiento_abierto'), y no hay tabla de tareas. Contrato completo: 5.8.)
 
 3. Gate HITL — aviso, llamada y registro del resultado (D19)
 
@@ -942,6 +953,122 @@ migrar), scripts/check_listado_llamadas_service.py (39/39) y
 scripts/check_listado_llamadas_http.py (88/88, puerto 8024), con doce pruebas
 en negativo, N1-N12 (resultados exactos en la sección 6.4 del plan y en el
 commit 14c17a4).
+
+(Nota 2026-10-08, rama feat/n0-create-followup-task.) La condición del
+apartado b) ya no está escrita en listado_llamadas_service.py: vive en
+app/services/condicion_seguimiento.py, compartida con POST
+/create-followup-task (5.8), para que la lista y el endpoint no puedan
+contradecirse. Al moverla se añadió un criterio, "sin Gate"
+(presupuestos.requiere_aprobacion = false; P1 del plan de
+create-followup-task): cambia b) solo para datos editados a mano (una
+oportunidad con Gate puesta a mano en 'presupuesto_enviado'), y el
+2026-10-08 no cambió ninguna fila real (las mismas 8, en el mismo orden).
+La validación de la regla de 48 h (entero entre 1 y 8760) también es la
+compartida. Regresión sin tocar los scripts: 39/39 y 88/88.
+
+5.8 POST /create-followup-task (añadido el 2026-10-08, rama
+feat/n0-create-followup-task)
+
+Para qué: abre el seguimiento de 48 h (Adenda, sección 2, motivo
+sin_respuesta_visita) de una oportunidad sin Gate cuyo cliente no ha
+pedido visita. La pasa de 'presupuesto_enviado' a 'seguimiento_pendiente' y
+deja un log; desde ese momento sale en seguimientos_abiertos de GET
+/llamadas-del-dia. Lo llama WF3 (n8n) por cada elemento de
+seguimientos_por_abrir, nunca un agente: solo REST, sin tool MCP (la tool
+queda para N1+, fila 5). Plan completo y decisiones P1-P12:
+docs/Plan_Endpoint_Create_Followup_Task.txt.
+
+Autenticación: X-Gate-Secret (GATE_SECRET), como /gate-decisions y
+/llamadas-del-dia: cambia el estado de una oportunidad y es una
+herramienta de administración; WEBHOOK_SECRET lo tiene la herramienta del
+Agente 2. El valor de WEBHOOK_SECRET da 401 en las dos cabeceras
+(verificado); el 401 va antes que la validación del cuerpo y es idéntico
+al de los demás endpoints.
+
+Entrada (JSON, extra="forbid"):
+  oportunidad_id  entero > 0.
+  motivo          lista cerrada con UN valor en N0: 'sin_respuesta_visita'.
+                  Obligatorio (el contrato no cambiará de forma en N1).
+
+Efectos del 201, en UNA transacción (READ COMMITTED, con la fila de la
+oportunidad bloqueada con FOR UPDATE):
+  oportunidades: estado = 'seguimiento_pendiente' y updated_at = now(). NO
+    se toca fecha_ultimo_contacto (no ha habido contacto). Segunda
+    barrera: el UPDATE lleva "AND estado = 'presupuesto_enviado'" y exige
+    que cambie exactamente 1 fila.
+  logs: un log 'seguimiento_abierto' (entity_type 'oportunidad') con
+    detalle {motivo, estado_anterior, horas_seguimiento_presupuesto,
+    fecha_presupuesto}: deja auditado con qué plazo se abrió.
+  Nada más: presupuestos, visitas, leads y clientes no se tocan.
+
+Respuesta (201 o 200): log_id, oportunidad_id, motivo,
+estado_oportunidad, fecha_apertura (logs.created_at, en hora de Madrid con
+su desfase) y creado. Sin importes ni datos personales (las consultas no
+los leen y el esquema no tiene dónde ponerlos).
+
+La condición "seguimiento por abrir" es UNA sola, la del apartado b) de
+GET /llamadas-del-dia, en app/services/condicion_seguimiento.py: seis
+criterios con nombre, en orden. El listado los une con AND; el endpoint
+los pide como columnas y da el 409 del primero que no se cumple (un NULL
+cuenta como no cumplido, igual que en un WHERE). Verificado con una
+matriz: en 14 casos, "sale en b)" equivale a "da 201".
+
+| Código | motivo | Cuándo | Reintento en n8n |
+|---|---|---|---|
+| 201 | — | Seguimiento abierto ahora (creado=true) | — |
+| 200 | — | Ya estaba en 'seguimiento_pendiente' (creado=false); no escribe nada. log_id y fecha_apertura son los del log original, o null si el estado se puso a mano sin log | — |
+| 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET en cualquiera de las dos cabeceras; antes de validar el cuerpo | NO |
+| 422 | (Pydantic) | Campo de más o que falta; oportunidad_id no entero o <= 0; motivo fuera de lista (también 'sin_decision_post_visita') | NO |
+| 404 | oportunidad_no_encontrada | No existe la oportunidad (también 2147483648 y 99999999999999999999: nunca 500) | NO |
+| 503 | configuracion_incompleta | horas_seguimiento_presupuesto falta o no es un entero entre 1 y 8760. SIN log; línea [AVISO] en stderr (mismo comportamiento que el listado para la misma regla) | Inútil hasta arreglar la regla, pero inofensivo |
+| 409 | sin_presupuesto | La oportunidad no tiene presupuesto | NO |
+| 409 | con_gate | Su presupuesto tiene requiere_aprobacion = true (el Gate es permanente) | NO |
+| 409 | estado_no_permitido | Estado distinto de 'presupuesto_enviado' (y de 'seguimiento_pendiente', que es el 200) | NO |
+| 409 | contacto_registrado | fecha_ultimo_contacto no es NULL | NO |
+| 409 | visita_existente | Tiene alguna visita que no está 'cancelada' (una 'completada' cuenta) | NO |
+| 409 | plazo_no_cumplido | Su presupuesto tiene horas_seguimiento_presupuesto (48) horas o menos (límite ESTRICTO, D25.15) | NO; WF3 la volverá a ver en la lista otro día |
+| 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+Orden de las comprobaciones: 401 -> 422 -> 404 (tras el FOR UPDATE) ->
+200 (ya abierto) -> 503 -> 409 en el orden de la tabla -> 201.
+  - La repetición va antes que el 503 y los 409: tras el 201 el estado ya
+    no es 'presupuesto_enviado', y un reintento de n8n daría 409.
+  - Los 409 van de lo estructural a lo pasajero: plazo_no_cumplido es el
+    último porque es el único que se arregla solo con el tiempo.
+Concurrencia: POST /visits y POST /gate-decisions bloquean la misma fila,
+así que se ponen en fila con este endpoint. Si el cliente pide visita entre
+la lista de las 9:00 y la llamada de WF3, el endpoint da 409
+estado_no_permitido sin escribir. Verificado: 5 peticiones simultáneas ->
+un 201 y cuatro 200 con el mismo log_id y un solo log; POST /visits y este
+endpoint a la vez -> nunca un 500 y estado final coherente.
+
+LIMITACIONES (asumidas en N0):
+  - Solo el motivo sin_respuesta_visita. sin_decision_post_visita (Adenda,
+    sección 2) queda para N1 (D25.13); la regla
+    dias_espera_decision_post_visita no se usa.
+  - No avisa a nadie: es una etiqueta en el expediente. El aviso es la
+    lista diaria de WF3 (D25.2).
+  - La fecha de apertura solo está en el log (logs.created_at) y en la
+    respuesta; no hay columna, y el apartado c) del listado sigue mostrando
+    fecha_presupuesto (P7 de su plan). Se revisará en la ampliación de
+    D25.9-D25.11.
+  - Un seguimiento abierto no tiene salida en N0 salvo que el cliente pida
+    visita desde el chat (POST /visits la acepta desde
+    'seguimiento_pendiente'); el registro del resultado de la llamada es la
+    ampliación de D25.9-D25.11.
+  - El router del Agente 2 tendrá que tratar 'seguimiento_pendiente' como
+    'presupuesto_enviado' (P12 de su plan). El router de chat actual no se
+    rompe: decide con existe y presupuesto.existe, no con el estado.
+
+Implementación: app/services/condicion_seguimiento.py (los criterios y la
+validación de la regla, compartidos), app/services/followup_service.py
+(abrir_seguimiento y abrir_seguimiento_con_cursor),
+app/api/followup_tasks.py, app/schemas/followup_tasks.py; séptimo
+include_router en app/main.py. Sin migración. Verificación:
+scripts/check_followup_service.py (34/34) y
+scripts/check_followup_tasks_http.py (125/125, puerto 8025), con catorce
+pruebas en negativo (N1-N12, N2b y N3b; resultados exactos en la sección
+6.3 del plan y en el commit ad072f5).
 
 6. Revisión técnica final — hallazgos y resolución
 

@@ -162,6 +162,7 @@ try:
                                 "incluye_cambios_estructurales": False})))
     lead = cur.fetchone()[0]
 
+    # Ayuda: crea una oportunidad propia lista para seguimiento (salvo el plazo).
     def oportunidad(presupuesto_creado):
         """Oportunidad propia en 'presupuesto_enviado' con su presupuesto
         SIN Gate y created_at FIJO. Devuelve su id."""
@@ -174,6 +175,7 @@ try:
                     "VALUES (%s, false, %s);", (op, presupuesto_creado))
         return op
 
+    # Ayuda: una llamada al servicio dentro de su propio SAVEPOINT.
     def intentar(op):
         """Llama al servicio con el cursor de ESTA transacción, dentro de su
         propio SAVEPOINT: si lanza una excepción, se deshace solo lo de esta
@@ -187,9 +189,10 @@ try:
                 cur, FollowupTaskCreate(oportunidad_id=op, motivo="sin_respuesta_visita"))
         # Cualquier excepción: se vuelve al punto marcado y se devuelve.
         except Exception as error:
-            # SQL: deshace solo lo de esta llamada. Si el punto ya no existe
-            # (una versión rota que hizo commit, N12), se deshace todo.
+            # try/except: si el punto ya no existe (una versión rota que
+            # hizo commit, N12), se deshace todo con cn.rollback().
             try:
+                # SQL: deshace solo lo de esta llamada (vuelve al punto marcado).
                 cur.execute("ROLLBACK TO SAVEPOINT intento;")
             except psycopg2.Error:
                 cn.rollback()
@@ -198,6 +201,7 @@ try:
         cur.execute("RELEASE SAVEPOINT intento;")
         return respuesta, None
 
+    # Ayuda: exige una excepción concreta (con la rama de "se ha tragado").
     def esperar_rechazo(titulo, op, clase, comprobacion, detalle):
         """Llama al servicio y exige la excepción de esa clase. Sin
         excepción: FALLO explícito (regla de CLAUDE.md, caso D16). Con otra
@@ -294,8 +298,10 @@ finally:
 # SQL: tras el ROLLBACK no queda ningún cliente con la marca.
 cur.execute("SELECT count(*) FROM clientes WHERE email LIKE %s;", ("check-followup-svc-%@example.com",))
 restos = cur.fetchone()[0]
+# Se cierra la transacción de la consulta y la conexión de S1 y S3.
 cn.rollback()
 cn.close()
+# Tiene que ser 0: el ROLLBACK lo ha deshecho todo.
 comprobar("tras el ROLLBACK no queda ninguna fila propia", restos == 0, f"(clientes = {restos})")
 
 # ======================================================================
@@ -413,6 +419,7 @@ try:
                                                                            motivo="sin_respuesta_visita"))
         # La esperada: 503 por la regla fuera de rango.
         except ConfiguracionIncompleta as error:
+            # SQL: vuelve al punto marcado (deshace lo de la llamada).
             cur6.execute("ROLLBACK TO SAVEPOINT s6;")
             comprobar(f"regla REAL = {valor} -> 503 configuracion_incompleta", "8760" in error.faltan[0],
                       f"({error.faltan})")
@@ -439,8 +446,10 @@ valor_despues = cur6.fetchone()[0]
 # SQL: clientes con la marca de S6 que queden.
 cur6.execute("SELECT count(*) FROM clientes WHERE email = %s;", (f"check-followup-svc-{marca6}@example.com",))
 restos6 = cur6.fetchone()[0]
+# Se cierra la transacción de las consultas y la conexión de S6.
 cn6.rollback()
 cn6.close()
+# La regla tiene que seguir en su valor y no puede quedar nada de S6.
 comprobar(f"tras el ROLLBACK la regla sigue en {valor_real}", valor_despues == valor_real, f"({valor_despues})")
 comprobar("tras el ROLLBACK no queda ninguna fila con la marca de S6", restos6 == 0, f"(clientes = {restos6})")
 

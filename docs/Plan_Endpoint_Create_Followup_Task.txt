@@ -961,6 +961,18 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
   exactamente lo esperado); los HTTP de N1-N6 son de la pasada del
   2026-10-08 por la mañana, con el script HTTP ya en su versión final
   (no ha cambiado desde entonces).
+  [Corregido 2026-10-08, Bloque D: la frase anterior no se podía
+  DEMOSTRAR (las copias de esa pasada se borraron sin guardar su hash ni
+  su fecha). Se repitieron N1-N6 completas (servicio y HTTP), de una en
+  una, con los scripts del Bloque D (ast.dump igual al de ad072f5; solo
+  cambian comentarios), imprimiendo el SHA-256 de cada script en la
+  copia: check_followup_service 882da6335eaeb41c y
+  check_followup_tasks_http e63594982fe7e473, los mismos que en el
+  repositorio. Resultados: N1 34/34 | 67/125, N2 33/34 | 118/125, N2b
+  33/34 | 124/125, N3 34/34 | 119/125 (4 x 500, logs 5318, 5321, 5323 y
+  5325 borrados por id exacto), N3b 34/34 | 119/125, N4 34/34 | 116/125,
+  N5 34/34 | 124/125, N6 34/34 | 123/125: IGUALES a las cifras de
+  arriba, que no cambian.]
 
   INCIDENTE DE LA N12 (2026-10-08, documentado por indicación del tutor):
   - Qué pasó: la primera ejecución de la N12 con la S6 nueva dejó
@@ -1248,6 +1260,29 @@ Y en el LISTADO (paso B1), el apartado b) pasa a ser:
      - D25 (estado de implementación, bloque 2): nota fechada, sin
        reescribir sus decisiones.
      - Este plan marcado como IMPLEMENTADO, con los hashes de cada bloque.
+     [Hecho 2026-10-08, revisión del tutor sobre ad072f5:
+     - Comentarios de los dos scripts nuevos, SIN cambiar la lógica:
+       check_followup_service +13/-2 líneas (el "# SQL" de los dos ROLLBACK
+       TO SAVEPOINT y 3 tramos), check_followup_tasks_http +30 (11
+       tramos). Medido por sentencias (ast), con el criterio de f8a1f0f:
+       0 de 197 y 0 de 454 en tramos de más de 4 sin comentario; 0 y 0
+       execute sin "# SQL". ast.dump de los dos IGUAL al de ad072f5; git
+       diff -U0 con 0 líneas que no sean comentario o vacías. Ejecutados:
+       34/34 y 125/125.
+     - Procedencia de N1-N6 por HTTP: no demostrable; repetidas, con el
+       SHA-256 de los scripts en cada copia: mismas cifras (6.3).
+     - Adenda: nota en la fila 5 y en la sección 2 (sin notificación;
+       sin_decision_post_visita en N1), nota en 5.7 (condición compartida y
+       criterio del Gate) y sección 5.8 nueva. CLAUDE.md: regla nueva de
+       las conexiones de prueba sin commit (incidente de la N12), "Dos
+       puertas", estado actual, lo hecho y verificado, la suite de 39
+       scripts y el pendiente de la S5 del listado. D25, sección 4: bloque
+       2 implementado y verificado, pendiente de merge.]
+  Estado final: IMPLEMENTADO Y VERIFICADO en la rama
+  feat/n0-create-followup-task, pendiente de merge (lo confirma Gabi tras la
+  revisión del tutor, con --ff-only). Hashes: A 9853491 y e975a24; B1
+  0354a01; B2 ce6f421; C ad072f5; D el commit que añade esta nota (un
+  commit no puede contener su propio hash; ver git log).
   Cada bloque, un commit con los recuentos reales en el mensaje y git
   push. Nada de merge a main sin la confirmación explícita de Gabi, y
   siempre con --ff-only.

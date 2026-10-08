@@ -104,3 +104,9 @@
   (migración paso11); las dos reglas solo admiten enteros entre 1 y 8760 h (sin máximo, 99.999.999 h daba un 500,
   demostrado y corregido). Suite completa 37/37 en una pasada válida.
 - Siguiente: bloque 2, `POST /create-followup-task`.
+- **[Nota 2026-10-08] Bloque 2 de D25.12 (`POST /create-followup-task`): IMPLEMENTADO y verificado** en la rama
+  `feat/n0-create-followup-task`, **pendiente de merge** (plan `docs/Plan_Endpoint_Create_Followup_Task.txt`). Solo
+  el motivo `sin_respuesta_visita` (D25.13), plazo de `horas_seguimiento_presupuesto` desde `presupuestos.created_at`
+  con límite estricto (D25.7, D25.15), y la condición compartida con el apartado b) de `GET /llamadas-del-dia`.
+  `check_followup_service` 34/34, `check_followup_tasks_http` 125/125 y suite completa 39/39 en una pasada válida.
+  Siguiente: bloque 3 (renombrado sin cambios de comportamiento, D25.9).
