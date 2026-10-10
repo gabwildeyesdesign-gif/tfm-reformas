@@ -1126,6 +1126,20 @@ Número de órdenes por petición:
   N14. Otras oportunidades incluyendo la propia (sin "o2.id <> ..."): falla
        el CASO 9. Solo si se aprueba P-b a).
 
+  (Nota 2026-10-10, revisión del tutor sobre 680982f, ajuste 1: se QUITAN
+  N9 y N6b de esta lista; no se ejecutan en el Bloque C.
+  - N9 (INSERT dentro de la transacción READ ONLY) ya está demostrada en
+    el listado: es la N2b de docs/Plan_Endpoint_Listado_WF3.txt, con el
+    MISMO texto SQL_MODO_TRANSACCION, que aquí se importa de
+    listado_llamadas_service (P9) y no se copia. Repetirla probaría otra
+    vez la misma línea.
+  - N6b (sin ninguna orden SET) no aporta nada que no cubran N6 (sin
+    REPEATABLE READ, que falla la S4) y la propia S4, que comprueba además
+    que la primera orden es SQL_MODO_TRANSACCION y que read_only = on.
+  Se mantiene N9b (log por otra conexión con commit): demuestra un modo de
+  fallo distinto, el que solo ve el CASO 10. La lista del Bloque C queda
+  en N1-N8, N9b y N10-N14.)
+
 
 ================================================================
 9. RIESGOS
@@ -1157,6 +1171,19 @@ Número de órdenes por petición:
       (C5): si la página de n8n lo pinta como una alarma, administración
       aprenderá a ignorarlo. El texto lo decide la página (fuera de
       alcance); aquí solo se documenta.
+
+  (Nota 2026-10-10, revisión del tutor sobre 680982f, ajuste 2.)
+  R10. El log de la solicitud de visita guarda una COPIA de texto_cliente
+      en logs.detalle (app/services/visits_service.py, línea 289, en el
+      diccionario detalle; comprobado en el código el 2026-10-10: ese mismo
+      detalle se escribe con la acción 'visita_solicitada' y con
+      'visita_sustituida'). Cuando D26.7 limite la longitud y filtre
+      texto_cliente, esa copia NO se limpia sola: las filas ya escritas en
+      logs conservan el texto antiguo, y un borrado por RGPD tiene que
+      incluir también esas filas de logs, no solo visitas.texto_cliente.
+      La ficha no lee esa copia (solo lee detalle->>'estado' y
+      ->>'decision', C2). FUERA DE ALCANCE de este bloque; anotado para el
+      plan de D26.7.
 
 
 ================================================================
@@ -1215,6 +1242,19 @@ Número de órdenes por petición:
        COLUMNAS_CASO como tupla de pares (nombre, expresión).
   P12. fecha_ultimo_contacto NO se devuelve (D26.2 no la pide; la fecha de
        la última llamada ya está en llamadas). ¿Se quiere?
+
+  (Nota 2026-10-10: decisiones de Gabi, revisión del tutor sobre 680982f.
+  Plan APROBADO con dos ajustes, anotados en 8.4 y en la sección 9.)
+  - P1: ruta GET /oportunidades/{oportunidad_id}/ficha.
+  - P2: solo umbral_gate_vigente. El "umbral aplicado" de D26.2 queda como
+    deuda técnica (columna presupuestos.umbral_gate_aplicado) y se
+    documenta como limitación en la Adenda (Bloque D).
+  - P3, P4, P9, P10 y P11: como se proponen.
+  - P5 (P-a, fotos): opción a). P6 (P-b): opción a),
+    otras_oportunidades_mismo_email. P7 (P-c): opción c), nada en N0, con
+    D26.5.
+  - P8: la llave va en el ROUTER (APIRouter(dependencies=[...])).
+  - P12: NO se devuelve fecha_ultimo_contacto.
 
 
 ================================================================
