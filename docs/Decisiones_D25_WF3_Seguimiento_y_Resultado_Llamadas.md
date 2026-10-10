@@ -110,3 +110,7 @@
   con límite estricto (D25.7, D25.15), y la condición compartida con el apartado b) de `GET /llamadas-del-dia`.
   `check_followup_service` 34/34, `check_followup_tasks_http` 125/125 y suite completa 39/39 en una pasada válida.
   Siguiente: bloque 3 (renombrado sin cambios de comportamiento, D25.9).
+- **[Nota 2026-10-10]** El bloque 2 ya NO está pendiente de merge: integrado en `main` en `1af758a`. **D26** cambia el
+  orden de D25.12 desde el bloque 3: (3) renombrado; (4a) ficha para cualquier oportunidad y resumen de la solicitud
+  en la lista diaria (dos ramas); (4b) registro del resultado de todas las llamadas + formulario; (5) WF3. Ver
+  `docs/Decisiones_D26_Ficha_del_Cliente_en_la_Lista_Diaria.md`.

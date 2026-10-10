@@ -192,6 +192,8 @@ create-followup-task sigue siendo un docstring de una línea.
 feat/n0-create-followup-task, pendiente de merge: séptimo include_router,
 cabecera X-Gate-Secret, solo REST, sin tool MCP. Detalle en "Estado
 actual".)
+(Nota 2026-10-10: "pendiente de merge" ya no es cierto: integrado en
+main en 1af758a, comprobado en GitHub.)
 Lo que sigue es la especificación completa, no el estado actual.
 
 calculate-estimate tiene las dos (MCP en producción, REST para
@@ -463,6 +465,28 @@ SOLO REST.
 > C y D cerrados; plan docs/Plan_Endpoint_Create_Followup_Task.txt). Misma
 > regla de siempre: no hacer merge sin la confirmación explícita de Gabi,
 > después de la revisión del tutor, y siempre con `--ff-only`.
+>
+> **(Nota 2026-10-10: el párrafo anterior está superado.)** POST
+> /create-followup-task está **integrado en `main` en `1af758a`**
+> (fast-forward de `feat/n0-create-followup-task`, confirmado por Gabi;
+> comprobado en GitHub el 2026-10-08). Esa rama sigue en GitHub apuntando al
+> mismo commit: queda pendiente borrarla. **No hay ningún bloque de backend
+> abierto.**
+> **D26 (2026-10-10, docs/Decisiones_D26_Ficha_del_Cliente_en_la_Lista_Diaria.md)
+> cambia el orden de D25.12 desde el bloque 3.** Hallazgo: GET
+> /llamadas-del-dia no dice qué pidió cada cliente y la única ficha que
+> existe (GET /gate-avisos) responde 409 sin_gate a los casos sin Gate, así
+> que administración llamaría a ciegas a seguimientos y visitas del chat.
+> Nuevo orden: (3) renombrado a "resultado de la llamada" sin cambios de
+> comportamiento; (4a) ficha para CUALQUIER oportunidad (D26.2) y, en otra
+> rama, resumen en cada elemento de la lista diaria: m2, nivel_acabados,
+> incluye_cambios_estructurales y, en visitas, texto_cliente; SIGUE sin
+> email ni importes (D26.1); (4b) registro del resultado de todas las
+> llamadas + formulario ampliado (D25.9-D25.11); (5) WF3 en n8n, que NO se
+> construye antes de 4a. El cambio de 4a toca dos cosas ya integradas: el
+> contrato de GET /llamadas-del-dia (sus scripts comprueban claves EXACTAS)
+> y GET /gate-avisos, que usan WF2 y el formulario del Gate, PUBLICADOS en
+> n8n. Búsqueda de clientes por identificador: mejora posterior (D26.5).
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -915,6 +939,10 @@ rápida, no sustituye esa documentación. Contiene:
   /create-followup-task y de la condición compartida (P1-P12 decididas,
   pruebas en negativo N1-N12 con sus resultados exactos, incidente de la
   N12, bloques A, B1, B2, C y D con sus hashes).
+- Decisiones_D26_Ficha_del_Cliente_en_la_Lista_Diaria.md — D26: resumen
+  de la solicitud en la lista diaria, ficha para cualquier oportunidad,
+  visitas en un solo bloque del email de WF3, nuevo orden de bloques
+  (revisa D25.12) y búsqueda de clientes como mejora posterior.
 - Plan_Ejecutor_Suite.txt — lanzador de la suite que impide la suspensión
   de Windows. APLAZADO el 2026-10-03; lo sustituye la regla de uso de este
   archivo.
