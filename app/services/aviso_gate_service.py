@@ -15,40 +15,43 @@ Como todo services/, este archivo NO importa fastapi ni fastmcp. Cuando no
 puede devolver el aviso, lanza una excepción con un "motivo" (código
 estable) y un "mensaje"; el adaptador app/api/aviso_gate.py decide el
 código HTTP de cada una.
+
+Desde el Bloque B1 de la ficha (docs/Plan_Endpoint_Ficha_Oportunidad.txt,
+sección 4), las columnas del caso y la construcción del contacto, la
+reforma, las fotos y el presupuesto viven en datos_oportunidad.py, que
+comparte con la ficha. Aquí se quedan la puerta, la decisión y la
+respuesta. Sin cambios de comportamiento.
 """
-
-# datetime: para anotar el tipo de las fechas que se convierten a Madrid.
-from datetime import datetime
-
-# Decimal: los importes y el IVA llegan de Postgres como Decimal exacto, y
-# las cuentas se hacen con Decimal, nunca con float.
-from decimal import Decimal
 
 # La conexión de SOLO LECTURA del pool: al salir del "with" hace rollback y
 # devuelve la conexión, así que es imposible que este servicio confirme
 # una escritura.
 from app.db.connection import get_db_connection
 
-# El esquema de la respuesta y sus piezas (app/schemas/aviso_gate.py).
-from app.schemas.aviso_gate import (
-    AvisoGateResponse,
-    ContactoAviso,
-    DecisionAviso,
-    OrigenContacto,
-    PresupuestoAviso,
-    ReformaAviso,
+# El esquema de la respuesta y las dos piezas que se construyen aquí
+# (app/schemas/aviso_gate.py).
+from app.schemas.aviso_gate import AvisoGateResponse, DecisionAviso, PresupuestoAviso
+
+# Lo compartido con la ficha (app/services/datos_oportunidad.py): las
+# columnas del caso y las funciones que construyen sus piezas.
+# deducir_sin_iva no se usa en este archivo: se importa para que siga
+# existiendo aquí con el mismo nombre (los scripts de verificación la
+# importan de este módulo; plan de la ficha, 4.2).
+from app.services.datos_oportunidad import (
+    COLUMNAS_CASO,
+    a_madrid,
+    campos_presupuesto,
+    caso_desde_fila,
+    columnas_caso_sql,
+    contacto_desde,
+    deducir_sin_iva,
+    fotos_desde,
+    reforma_desde,
 )
 
-# El MISMO redondeo que usa el cálculo del presupuesto (céntimos,
-# ROUND_HALF_UP) y la constante Decimal("100"). Importarlos, y no copiarlos,
-# garantiza que la deducción del sin IVA redondea exactamente igual que el
-# cálculo (plan, 2.1).
-from app.services.estimate_service import CIEN, redondear
-
-# ZONA_MADRID: la zona horaria Europe/Madrid. RechazoNegocio: la base común
-# de los rechazos de negocio de todos los endpoints (guarda motivo y
-# mensaje).
-from app.services.reglas_visita import ZONA_MADRID, RechazoNegocio
+# RechazoNegocio: la base común de los rechazos de negocio de todos los
+# endpoints (guarda motivo y mensaje).
+from app.services.reglas_visita import RechazoNegocio
 
 
 # ======================================================================
@@ -66,43 +69,6 @@ class OportunidadNoEncontrada(AvisoGateRechazado):
 
 class EstadoNoPermiteAviso(AvisoGateRechazado):
     """La oportunidad no tiene un caso de Gate que avisar (-> 409). Motivos: sin_presupuesto y sin_gate."""
-
-
-# ======================================================================
-# Funciones puras (sin base de datos): se prueban directamente
-# ======================================================================
-
-
-def deducir_sin_iva(con_iva: Decimal | None, iva_pct: Decimal) -> Decimal | None:
-    """
-    Importe SIN IVA a partir del importe CON IVA guardado y del IVA
-    aplicado en ese cálculo (plan, 2.1, opción a):
-
-        sin_iva = redondear(con_iva / (1 + iva_pct / 100))
-
-    Es exacto: con_iva salió de redondear(sin_iva × k) con k = 1 + iva/100,
-    así que su error de redondeo es como mucho 0,005; al dividir por k
-    (>= 1) queda en menos de 0,005, y volver a redondear a céntimos
-    devuelve el sin_iva original. Comprobado además con los 12
-    presupuestos reales el 2026-10-03 (12/12).
-
-    Si con_iva es None, devuelve None: nunca se inventa una cifra (D4).
-    """
-    # Sin importe con IVA no hay nada de lo que deducir.
-    if con_iva is None:
-        return None
-    # Toda la cuenta entre Decimal: CIEN es Decimal("100"), así que no se
-    # cuela ningún float.
-    return redondear(con_iva / (1 + iva_pct / CIEN))
-
-
-def a_madrid(instante: datetime | None) -> datetime | None:
-    """
-    Pasa un instante (Postgres lo entrega en UTC) a hora de Madrid, con su
-    desfase: +02:00 en verano y +01:00 en invierno. astimezone no cambia el
-    instante, solo cómo se escribe. None si no hay fecha.
-    """
-    return instante.astimezone(ZONA_MADRID) if instante is not None else None
 
 
 # ======================================================================
@@ -173,14 +139,10 @@ def obtener_aviso(oportunidad_id: int) -> AvisoGateResponse:
         # 2. El caso: solo se llega aquí si hay Gate
         # --------------------------------------------------------------
         # SQL, por partes:
-        #   - "->" saca un objeto de dentro del JSONB (el de 'contacto') y
-        #     "->>" saca un valor como TEXTO.
-        #   - "datos_estructurados ? 'contacto'": el operador ? de JSONB
-        #     pregunta si el objeto TIENE esa clave (true/false). Así se
-        #     distingue "sin clave" (origen no_disponible, P1) de una clave
-        #     presente.
-        #   - "::numeric" y "::boolean" convierten ese texto DENTRO de
-        #     Postgres: m2 llega como Decimal exacto, sin pasar por float.
+        #   - Las 17 columnas del caso (contacto de la solicitud, reforma,
+        #     fotos, presupuesto y umbral vigente) salen de
+        #     columnas_caso_sql(), en datos_oportunidad.py, donde se explica
+        #     cada una. Detrás, las 4 de la decisión, que son solo de aquí.
         #   - JOIN normal con leads y presupuestos: siempre existen (claves
         #     foráneas NOT NULL, y la puerta ya comprobó el presupuesto).
         #   - Sin JOIN con clientes: la ficha no se lee nunca (P1).
@@ -190,25 +152,12 @@ def obtener_aviso(oportunidad_id: int) -> AvisoGateResponse:
         #   - Como mucho UNA fila: presupuestos y decisiones_gate tienen
         #     UNIQUE (oportunidad_id).
         #   - NO lee el informe de la decisión ni lead_token (D2, D3).
+        #   - El texto se monta con "+": las dos partes son textos fijos
+        #     del programa; el id va como parámetro %s, nunca pegado.
         cursor.execute(
-            """
-            SELECT o.estado,
-                   o.tipo_reforma,
-                   l.created_at,
-                   l.datos_estructurados ? 'contacto',
-                   l.datos_estructurados -> 'contacto' ->> 'nombre',
-                   l.datos_estructurados -> 'contacto' ->> 'email',
-                   l.datos_estructurados -> 'contacto' ->> 'telefono',
-                   (l.datos_estructurados ->> 'm2')::numeric,
-                   l.datos_estructurados ->> 'nivel_acabados',
-                   (l.datos_estructurados ->> 'incluye_cambios_estructurales')::boolean,
-                   l.fotos_urls,
-                   p.created_at,
-                   p.motivo_gate,
-                   p.iva_pct_aplicado,
-                   p.importe_min_con_iva,
-                   p.importe_max_con_iva,
-                   u.umbral,
+            "SELECT "
+            + columnas_caso_sql()
+            + """,
                    d.decision,
                    d.created_at,
                    d.motivo,
@@ -223,50 +172,20 @@ def obtener_aviso(oportunidad_id: int) -> AvisoGateResponse:
             """,
             (oportunidad_id,),
         )
-        # Desempaquetado: una variable por columna del SELECT, en el mismo
-        # orden. El paréntesis permite repartirlo en varias líneas.
-        (
-            estado,
-            tipo_reforma,
-            fecha_solicitud,
-            tiene_contacto,
-            contacto_nombre,
-            contacto_email,
-            contacto_telefono,
-            m2,
-            nivel_acabados,
-            cambios_estructurales,
-            fotos_urls,
-            fecha_presupuesto,
-            motivo_gate,
-            iva_pct,
-            importe_min_con_iva,
-            importe_max_con_iva,
-            umbral_vigente,
-            decision,
-            fecha_decision,
-            motivo_descarte,
-            fecha_visita,
-        ) = cursor.fetchone()
+        # La única fila (la puerta ya comprobó que existe).
+        fila = cursor.fetchone()
         # Se cierra el cursor; la conexión la devuelve el "with" al pool.
         cursor.close()
 
     # A partir de aquí ya no se usa la base de datos: solo se construye la
     # respuesta con lo leído.
 
-    # Contacto (P1): el de la solicitud si el lead tiene la clave; si no,
-    # los tres a None con origen no_disponible. Nunca la ficha de clientes.
-    if tiene_contacto:
-        contacto = ContactoAviso(
-            nombre=contacto_nombre,
-            email=contacto_email,
-            telefono=contacto_telefono,
-            origen=OrigenContacto.SOLICITUD,
-        )
-    else:
-        contacto = ContactoAviso(
-            nombre=None, email=None, telefono=None, origen=OrigenContacto.NO_DISPONIBLE
-        )
+    # Las primeras columnas son las del caso: se emparejan con sus nombres
+    # (un número distinto de valores es un error, no un desplazamiento).
+    n_caso = len(COLUMNAS_CASO)
+    caso = caso_desde_fila(fila[:n_caso])
+    # Las 4 últimas, las de la decisión, una variable por columna.
+    decision, fecha_decision, motivo_descarte, fecha_visita = fila[n_caso:]
 
     # Decisión (D3): None si no hay fila en decisiones_gate; si la hay, sus
     # datos sin el informe, con las fechas en hora de Madrid.
@@ -284,28 +203,16 @@ def obtener_aviso(oportunidad_id: int) -> AvisoGateResponse:
     # (y extra="forbid" impide añadir ninguno que no esté declarado).
     return AvisoGateResponse(
         oportunidad_id=oportunidad_id,
-        estado_oportunidad=estado,
-        fecha_solicitud=a_madrid(fecha_solicitud),
-        contacto=contacto,
-        reforma=ReformaAviso(
-            tipo_reforma=tipo_reforma,
-            m2=m2,
-            nivel_acabados=nivel_acabados,
-            incluye_cambios_estructurales=cambios_estructurales,
-        ),
-        # psycopg2 convierte el JSONB en una lista de Python; si la columna
-        # fuera NULL, lista vacía (plan, 1.5).
-        fotos=fotos_urls if fotos_urls is not None else [],
-        presupuesto=PresupuestoAviso(
-            fecha_presupuesto=a_madrid(fecha_presupuesto),
-            motivo_gate=motivo_gate,
-            iva_pct_aplicado=iva_pct,
-            importe_min_con_iva=importe_min_con_iva,
-            importe_max_con_iva=importe_max_con_iva,
-            # Deducidos, con el IVA de ESTE presupuesto (plan, 2.1).
-            importe_min_sin_iva=deducir_sin_iva(importe_min_con_iva, iva_pct),
-            importe_max_sin_iva=deducir_sin_iva(importe_max_con_iva, iva_pct),
-            umbral_gate_vigente=umbral_vigente,
-        ),
+        estado_oportunidad=caso["estado"],
+        fecha_solicitud=a_madrid(caso["fecha_solicitud"]),
+        # Contacto (P1): el de la solicitud o no_disponible, nunca la ficha
+        # de clientes.
+        contacto=contacto_desde(caso),
+        reforma=reforma_desde(caso),
+        # Lista vacía si la columna es NULL (plan, 1.5).
+        fotos=fotos_desde(caso),
+        # Los 8 campos, con el sin IVA deducido con el IVA de ESTE
+        # presupuesto (plan, 2.1); "**" los pasa como argumentos con nombre.
+        presupuesto=PresupuestoAviso(**campos_presupuesto(caso)),
         decision=decision_aviso,
     )
