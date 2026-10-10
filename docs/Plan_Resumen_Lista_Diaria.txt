@@ -834,6 +834,55 @@ intervalo (lección del 2026-10-10).
     añade. Las 4 preguntas: (1) no escribe (READ ONLY + rollback); (2)
     las dos versiones sin commit (git grep), con ConexionSinCommit; (3)
     nada que deshacer; (4) ni el 8000 ni escrituras.
+  (Nota 2026-10-10, Bloque B2: RESULTADOS, con Docker/n8n y el navegador
+  cerrados, sin ningún Kernel-Power 506/507 entre 20:20 y 20:26.)
+  - Código: SolicitudLlamada en app/schemas/listado_llamadas.py;
+    NOMBRES_SOLICITUD y COLUMNAS_SOLICITUD_SQL a nivel de módulo,
+    solicitud_desde y las columnas nuevas al final de SQL_OPORTUNIDADES y
+    SQL_VISITAS en listado_llamadas_service.py. datos_oportunidad.py sin
+    cambios en toda la rama (git diff ea96f39 vacío en él) y ningún script
+    del repositorio cambia en B2 (git diff 584c075 -- scripts/ vacío; el
+    único script cambiado en la rama es el de B0). Las mismas cinco consultas: solo columnas más (texto montado
+    impreso al importar el módulo).
+  - Prueba mínima por HTTP real en el 8024 (prueba_minima_resumen.py,
+    SHA-256 1aa1fc247e1ecc47f83fe4f6a2e98a77f8907bc5f4fa3052274e3efd6127c0d9):
+    29/29, código 0, de 20:24:48. 401 (sin cabecera y con WEBHOOK_SECRET),
+    claves exactas en TODOS los elementos (propios y reales: 2 + 14 + 0 +
+    1 + 1), m2 texto o null, valores exactos de GA (a), SB (b), D (d) y E
+    (e), SN (b) con tres null, texto_cliente exacto con tildes, eñe y
+    comillas, el texto de la visita cancelada no aparece, ningún email ni
+    importe propio, 503 con clave falsa en memoria y vuelta al 200, ningún
+    500, 0 restos y lo ajeno sin cambios.
+    Primera ejecución (18:37) parada en la PREPARACIÓN, sin ninguna
+    comprobación: el caso E con 20 m2 en "alto" supera el umbral del Gate
+    de baño (13.000 €) y quedó en 'pendiente_aprobacion'. Error del dato de
+    la prueba, no del código; se bajó a 5 m2. La limpieza de esa ejecución
+    funcionó (0 restos, lo ajeno igual).
+  - HALLAZGO para el CASO 18 del Bloque C: E se envió con m2 = 5 y sale
+    "5.0" (Decimal("5.0") == Decimal("5"), exacto, pero no el texto "5"):
+    POST /leads guarda el entero como 5.0 en el JSONB. El CASO 18 compara
+    m2 como Decimal (y exige que sea texto), no con str(Decimal(enviado)).
+  - Compatibilidad sobre los datos reales (compat_resumen.py, SHA-256
+    2fc45fd321c0b7d665eb20cc273fb28611a3c3c60b94ccc8636a2bae6d909bac, y
+    volcar_listado.py, SHA-256
+    c08c579839c98299ae6a81fdc61fdac74f5489dfb37747061ab4029f19d8058e), de
+    20:25:21: el leer_listado de main (git archive de ea96f39) y el de la
+    rama, con el mismo "ahora" y la misma huella de datos: 1 + 12 + 0 + 0 +
+    0 elementos en los dos; quitando solicitud y texto_cliente, el MISMO
+    JSON en el mismo orden (SHA-256 3cb1464a...27c6 en los dos); todos con
+    solicitud; texto_cliente solo en d) y e); 0 con algún null. La huella
+    de las respuestas cambia en cada ejecución (generado_en es el reloj).
+  - Regresión sin tocar el script: check_listado_llamadas_service 41/41
+    (20:21:36). check_listado_llamadas_http NO se ejecuta hasta el Bloque
+    C: su CASO 2 comprueba las claves EXACTAS del contrato anterior y tiene
+    "m2" y "texto_cliente" como prohibidos, así que fallará por diseño
+    hasta que C lo actualice (C6).
+  - Comentarios: 0/58 (esquema; main tenía 10/49, dos tramos anteriores
+    comentados aquí), 0/78 (servicio), y en el scratchpad 0/204, 0/57 y
+    0/31. Los comentarios de los tres scripts del scratchpad se completaron
+    DESPUÉS de una primera ejecución con los mismos resultados; ast.dump
+    igual al de la versión ejecutada, y se volvieron a ejecutar: los hashes
+    de arriba son los de la versión final, la ejecutada.)
   - Bloque C: los dos scripts actualizados; check_ficha_oportunidad_service
     (40/40), check_ficha_oportunidad_http (69/69), check_aviso_gate_service
     (18/18) y check_aviso_gate_http (75/75), porque comparten

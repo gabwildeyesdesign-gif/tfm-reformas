@@ -12,11 +12,21 @@ ningún id salvo oportunidad_id. Todos los modelos llevan extra="forbid":
 si el servicio intentara añadir un campo no declarado, Pydantic lanzaría
 un error en vez de dejarlo pasar. Es la segunda barrera; la primera es
 que las consultas ni siquiera leen esos datos.
+
+(Nota 2026-10-10, D26.1, bloque 4a-2; plan docs/Plan_Resumen_Lista_Diaria.txt.)
+Cada elemento lleva ahora un resumen de lo que pidió el cliente: el
+objeto "solicitud" (m2, nivel_acabados, incluye_cambios_estructurales) y,
+en los elementos de visita, texto_cliente. Siguen fuera el email y los
+importes: la lista ACUMULA a muchos clientes en un solo mensaje (D26,
+sección 1.3).
 """
 
 # date: un día sin hora (dia_visitas). datetime: día y hora con su desfase
 # (las demás fechas, en hora de Madrid: "2026-10-08T09:00:00+02:00").
 from datetime import date, datetime
+
+# Decimal: m2 exacto (en el JSON viaja como TEXTO, "12.35"), nunca float.
+from decimal import Decimal
 
 # Enum: para las listas cerradas de valores (motivo y estado de la visita).
 from enum import Enum
@@ -32,7 +42,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.aviso_gate import OrigenContacto
 
 # Tipo de reforma: la lista cerrada de los cuatro valores del CHECK.
-from app.schemas.common import TipoReforma
+# Nivel de acabados: 'basico', 'medio' o 'alto' (el mismo Enum que /leads).
+from app.schemas.common import NivelAcabados, TipoReforma
 
 
 class MotivoLlamada(str, Enum):
@@ -63,7 +74,9 @@ class MotivoLlamada(str, Enum):
 class EstadoVisitaListado(str, Enum):
     """Los dos únicos estados de visita que pueden salir en la lista (las activas)."""
 
+    # Pedida por el cliente desde el chat (POST /visits): apartados d) y e).
     SOLICITADA = "solicitada"
+    # Acordada por teléfono tras el Gate (POST /gate-decisions): solo e).
     CONFIRMADA = "confirmada"
 
 
@@ -86,6 +99,28 @@ class ContactoLlamada(BaseModel):
     origen: OrigenContacto
 
 
+class SolicitudLlamada(BaseModel):
+    """
+    Lo que pidió el cliente, en resumen (D26.1): de leads.datos_estructurados.
+    El MISMO objeto en los cinco apartados. Cada campo es null si su clave
+    falta en la solicitud: nunca se inventa un valor (D4).
+
+    No es ReformaAviso (la "reforma" de la ficha y de gate-avisos): esa trae
+    también tipo_reforma, que el elemento ya tiene (P2 y P3 del plan).
+    """
+
+    # extra="forbid": un campo no declarado (un email, un importe) es un
+    # error, no se ignora.
+    model_config = ConfigDict(extra="forbid")
+
+    # Metros cuadrados, Decimal exacto ("12.35" en el JSON).
+    m2: Decimal | None
+    # 'basico', 'medio' o 'alto'.
+    nivel_acabados: NivelAcabados | None
+    # Si la reforma incluye cambios estructurales (true/false).
+    incluye_cambios_estructurales: bool | None
+
+
 class LlamadaOportunidad(BaseModel):
     """Un elemento de los apartados a), b) y c): una oportunidad que llamar."""
 
@@ -98,6 +133,8 @@ class LlamadaOportunidad(BaseModel):
     motivo: MotivoLlamada
     # oportunidades.tipo_reforma (la columna admite NULL).
     tipo_reforma: TipoReforma | None
+    # Qué pidió (D26.1). Siempre presente; sus campos pueden ser null.
+    solicitud: SolicitudLlamada
     # Nombre y teléfono de la solicitud.
     contacto: ContactoLlamada
     # presupuestos.created_at, en hora de Madrid: la fecha desde la que se
@@ -115,6 +152,8 @@ class LlamadaVisita(BaseModel):
     # visita_sin_confirmar o visita_proximo_laborable.
     motivo: MotivoLlamada
     tipo_reforma: TipoReforma | None
+    # Qué pidió (D26.1), el mismo objeto que en a), b) y c).
+    solicitud: SolicitudLlamada
     contacto: ContactoLlamada
     # 'solicitada' o 'confirmada'.
     estado_visita: EstadoVisitaListado
@@ -122,6 +161,11 @@ class LlamadaVisita(BaseModel):
     fecha_visita: datetime
     # visitas.created_at, en hora de Madrid: cuándo se pidió (o se acordó).
     fecha_solicitud_visita: datetime
+    # visitas.texto_cliente de ESTA visita, tal cual está en la columna (NOT
+    # NULL, 1..1000 caracteres): en una del chat, el que envió el Agente 2;
+    # en una acordada tras el Gate, el texto fijo del sistema. Sin recorte
+    # ni filtro aquí (D26.7, otro bloque). Solo en los elementos de visita.
+    texto_cliente: str
 
 
 class ReglasListado(BaseModel):
@@ -157,6 +201,7 @@ class ListadoLlamadasResponse(BaseModel):
     seguimientos_por_abrir: list[LlamadaOportunidad] = Field(
         description="b) presupuesto_enviado sin visita ni contacto, de hace más de horas_seguimiento_presupuesto horas"
     )
+    # c) sin plazo; d) y e) con elementos de visita (LlamadaVisita).
     seguimientos_abiertos: list[LlamadaOportunidad] = Field(
         description="c) oportunidades en seguimiento_pendiente"
     )

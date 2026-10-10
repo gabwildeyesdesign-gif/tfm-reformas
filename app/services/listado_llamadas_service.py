@@ -17,6 +17,12 @@ Cinco apartados (plan, 1.6):
   e) visitas_proximo_laborable  visitas 'solicitada' o 'confirmada' del
                                 próximo día laborable.
 
+Cada elemento lleva el resumen de la solicitud (D26.1, desde el
+2026-10-10): m2, nivel_acabados e incluye_cambios_estructurales, con las
+expresiones de COLUMNAS_CASO (datos_oportunidad.py, sin copiarlas) y, en
+d) y e), texto_cliente. Salen de las MISMAS cinco consultas (columnas
+más, sin JOIN ni consulta nueva). Plan: docs/Plan_Resumen_Lista_Diaria.txt.
+
 SOLO LECTURA (plan, 1.9), con tres barreras:
   1. get_db_connection(), que termina con rollback;
   2. la PRIMERA orden de la transacción es SET TRANSACTION ISOLATION LEVEL
@@ -50,7 +56,13 @@ from app.schemas.listado_llamadas import (
     LlamadaVisita,
     MotivoLlamada,
     ReglasListado,
+    SolicitudLlamada,
 )
+
+# Las columnas del caso que comparten GET /gate-avisos y la ficha: de ahí
+# salen, sin copiarlas, las tres expresiones del resumen de la solicitud
+# (P1 del plan docs/Plan_Resumen_Lista_Diaria.txt, opción b).
+from app.services.datos_oportunidad import COLUMNAS_CASO
 
 # ZONA_MADRID: la zona Europe/Madrid, con el cambio de hora.
 # ConfiguracionIncompleta: el rechazo de "falta una regla" (-> 503), el
@@ -97,6 +109,18 @@ VISITA_CONFIRMADA = "confirmada"
 # El modo de la transacción: la PRIMERA orden de obtener_listado (plan,
 # 1.9 y 3.4). En una constante para que la prueba pueda comprobar el texto.
 SQL_MODO_TRANSACCION = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;"
+
+# El resumen de la solicitud (D26.1): los NOMBRES de sus tres columnas
+# dentro de COLUMNAS_CASO (datos_oportunidad.py), en este orden. Las
+# expresiones SQL no se escriben aquí: se toman de allí (una sola fuente).
+NOMBRES_SOLICITUD = ("m2", "nivel_acabados", "cambios_estructurales")
+
+# Las tres expresiones, resueltas UNA vez, al IMPORTAR este archivo (no en
+# cada petición): dict(COLUMNAS_CASO) convierte los pares (nombre,
+# expresión) en un diccionario, y [n] busca cada nombre. Un nombre que no
+# exista lanza KeyError aquí mismo, al arrancar uvicorn, y no a las 9:00 en
+# WF3 (ajuste del tutor a P1). ", ".join las separa con comas para el SELECT.
+COLUMNAS_SOLICITUD_SQL = ", ".join(dict(COLUMNAS_CASO)[nombre] for nombre in NOMBRES_SOLICITUD)
 
 # Mensaje del 503 (para administración, a través de n8n).
 MENSAJE_CONFIGURACION = (
@@ -193,6 +217,17 @@ def contacto_de(tiene_contacto: bool, nombre: str | None, telefono: str | None) 
     return ContactoLlamada(nombre=None, telefono=None, origen=OrigenContacto.NO_DISPONIBLE)
 
 
+def solicitud_desde(m2: Decimal | None, nivel_acabados: str | None, cambios: bool | None) -> SolicitudLlamada:
+    """
+    El resumen de la solicitud a partir de los tres valores leídos con
+    COLUMNAS_SOLICITUD_SQL, en ese orden. Un None (la clave falta en el
+    JSONB) se queda en None: nunca se inventa un valor.
+    """
+    # Los tres tal cual; Pydantic comprueba sus tipos (Decimal, el Enum de
+    # niveles y bool).
+    return SolicitudLlamada(m2=m2, nivel_acabados=nivel_acabados, incluye_cambios_estructurales=cambios)
+
+
 # ======================================================================
 # Las consultas de los apartados (con el cursor de quien llama)
 # ======================================================================
@@ -205,20 +240,27 @@ def contacto_de(tiene_contacto: bool, nombre: str | None, telefono: str | None) 
 #     lee el email del contacto: ni siquiera viaja desde Postgres.
 #   - Sin JOIN con clientes: la ficha no se lee nunca.
 #   - De presupuestos solo se lee created_at: ningún importe.
+#   - Al FINAL, las tres columnas del resumen (COLUMNAS_SOLICITUD_SQL, de
+#     COLUMNAS_CASO): salen del mismo lead "l" que ya se une aquí, así que
+#     no hay ni JOIN ni consulta nueva (pre-decisión 6 del plan). Ir al
+#     final deja las seis columnas de antes en su sitio.
 SQL_OPORTUNIDADES = """
     SELECT o.id,
            o.tipo_reforma,
            l.datos_estructurados ? 'contacto',
            l.datos_estructurados -> 'contacto' ->> 'nombre',
            l.datos_estructurados -> 'contacto' ->> 'telefono',
-           p.created_at
+           p.created_at,
+           """ + COLUMNAS_SOLICITUD_SQL + """
     FROM oportunidades o
     JOIN presupuestos p ON p.oportunidad_id = o.id
     JOIN leads l        ON l.id = o.lead_id
 """
 
-# Lo mismo para d) y e), partiendo de visitas. No se lee texto_cliente ni
-# el id de la visita (minimización).
+# Lo mismo para d) y e), partiendo de visitas, con las tres columnas del
+# resumen y v.texto_cliente: el de ESTA fila de visitas, la que filtra el
+# WHERE de cada apartado (nunca el de otra visita, cancelada o no). El id
+# de la visita sigue sin leerse (minimización).
 SQL_VISITAS = """
     SELECT v.oportunidad_id,
            o.tipo_reforma,
@@ -227,7 +269,9 @@ SQL_VISITAS = """
            l.datos_estructurados -> 'contacto' ->> 'telefono',
            v.estado,
            v.fecha_propuesta,
-           v.created_at
+           v.created_at,
+           """ + COLUMNAS_SOLICITUD_SQL + """,
+           v.texto_cliente
     FROM visitas v
     JOIN oportunidades o ON o.id = v.oportunidad_id
     JOIN leads l         ON l.id = o.lead_id
@@ -288,16 +332,20 @@ def _llamadas_oportunidad(cursor, where: str, params: dict, motivo: MotivoLlamad
     cursor.execute(SQL_OPORTUNIDADES + where, params)
     # Una LlamadaOportunidad por fila. El for desempaqueta cada fila en
     # una variable por columna, en el orden del SELECT.
+    # Las tres últimas variables (m2, nivel, cambios) son las columnas del
+    # resumen, en el orden de NOMBRES_SOLICITUD.
     return [
         LlamadaOportunidad(
             oportunidad_id=oportunidad_id,
             motivo=motivo,
             tipo_reforma=tipo_reforma,
+            solicitud=solicitud_desde(m2, nivel, cambios),
             contacto=contacto_de(tiene_contacto, nombre, telefono),
             # Postgres la entrega en UTC; se escribe en hora de Madrid.
             fecha_presupuesto=fecha_presupuesto.astimezone(ZONA_MADRID),
         )
-        for oportunidad_id, tipo_reforma, tiene_contacto, nombre, telefono, fecha_presupuesto in cursor.fetchall()
+        for (oportunidad_id, tipo_reforma, tiene_contacto, nombre, telefono, fecha_presupuesto,
+             m2, nivel, cambios) in cursor.fetchall()
     ]
 
 
@@ -305,19 +353,22 @@ def _llamadas_visita(cursor, where: str, params: dict, motivo: MotivoLlamada) ->
     """Ejecuta un apartado de visitas (d o e) y construye sus elementos."""
     # SQL: las columnas comunes de visitas + el WHERE/ORDER BY del apartado.
     cursor.execute(SQL_VISITAS + where, params)
-    # Una LlamadaVisita por fila, con las dos fechas en hora de Madrid.
+    # Una LlamadaVisita por fila, con las dos fechas en hora de Madrid, el
+    # resumen (m2, nivel, cambios) y el texto de esa visita.
     return [
         LlamadaVisita(
             oportunidad_id=oportunidad_id,
             motivo=motivo,
             tipo_reforma=tipo_reforma,
+            solicitud=solicitud_desde(m2, nivel, cambios),
             contacto=contacto_de(tiene_contacto, nombre, telefono),
             estado_visita=estado_visita,
             fecha_visita=fecha_visita.astimezone(ZONA_MADRID),
             fecha_solicitud_visita=fecha_solicitud.astimezone(ZONA_MADRID),
+            texto_cliente=texto_cliente,
         )
         for (oportunidad_id, tipo_reforma, tiene_contacto, nombre, telefono,
-             estado_visita, fecha_visita, fecha_solicitud) in cursor.fetchall()
+             estado_visita, fecha_visita, fecha_solicitud, m2, nivel, cambios, texto_cliente) in cursor.fetchall()
     ]
 
 
