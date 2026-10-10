@@ -186,6 +186,7 @@ integrado en main, 002cf48, comprobado en GitHub.)
 SOLO LECTURA, sexto include_router, con la cabecera X-Gate-Secret. Es la
 lista diaria de llamadas de WF3 (D25). No forma parte de los 5 endpoints
 originales.)
+(Nota 2026-10-10: GET /llamadas-del-dia ya NO está pendiente de merge: integrado en main en f8a1f0f, comprobado en GitHub.)
 create-followup-task sigue siendo un docstring de una línea.
 (Nota 2026-10-08: la frase anterior ya no es cierta. POST
 /create-followup-task está implementado y verificado en la rama
@@ -672,6 +673,7 @@ N10 sin exclusión de d) 38/39 | 86/88; N11 plazos en el código 35/37 |
 válida (ver "Suite de verificación"). Gotcha encontrado al probar: Python
 resta dos datetime con el MISMO objeto de zona "de reloj de pared" (da
 24 h el día de 25); para medir la duración real, restar en UTC.
+(Nota 2026-10-10: "pendiente de merge" ya no es cierto: integrado en main en f8a1f0f, comprobado en GitHub.)
 
 check_tipo_reforma_constraint arreglado (rama feat/n0-gate-decisions,
 commit 145dcea, 2026-10-03): su comprobación final contaba TODAS las
