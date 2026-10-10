@@ -1,7 +1,10 @@
 """
 Verificación SIN servidor de app/services/listado_llamadas_service.py (plan:
-docs/Plan_Endpoint_Listado_WF3.txt, sección 6.2, S1-S7).
+docs/Plan_Endpoint_Listado_WF3.txt, sección 6.2, S1-S7; S0 y la conexión de
+S5 añadidas el 2026-10-10, docs/Plan_Resumen_Lista_Diaria.txt, sección 8.0).
 
+  S0. Autoprueba de ConexionSinCommit: commit() tiene que lanzar
+      CommitProhibido (regla de CLAUDE.md, conexiones de prueba sin commit).
   S1. siguiente_laborable con fechas FIJAS (no caducan).
   S2. limites_dia_madrid a los dos lados del cambio de hora (fechas FIJAS),
       y los domingos de 25 y 23 horas.
@@ -11,6 +14,9 @@ docs/Plan_Endpoint_Listado_WF3.txt, sección 6.2, S1-S7).
   S5. LÍMITE EXACTO del plazo y de los extremos del día, contra la base de
       datos, dentro de UNA transacción que termina en ROLLBACK: no queda
       ninguna fila. Marca propia: emails check-listado-svc-<8>@example.com.
+      La conexión es una ConexionSinCommit: si leer_listado (o una versión
+      rota) llama a commit(), sale CommitProhibido, se cuenta como FALLO y
+      el ROLLBACK lo deshace todo.
   S6. Modo de la transacción de obtener_listado: repeatable read y read
       only (con leer_listado sustituida EN MEMORIA por un espía).
   S7. obtener_listado lanza ConfiguracionIncompleta (503) con una clave
@@ -80,7 +86,44 @@ def comprobar(titulo, condicion, detalle=""):
 
 
 # ======================================================================
-print("S1. siguiente_laborable (fechas fijas)")
+# Conexión de prueba sin commit (regla de CLAUDE.md desde el 2026-10-08)
+# ======================================================================
+class CommitProhibido(Exception):
+    """Alguien ha llamado a commit() en una conexión de prueba."""
+
+
+class ConexionSinCommit(psycopg2.extensions.connection):
+    """Una conexión de psycopg2 normal, salvo commit(), que lanza un error.
+    rollback() funciona como siempre (es lo que usa la prueba)."""
+
+    def commit(self):
+        # No se confirma NADA: se lanza el error y la transacción sigue
+        # abierta, para que el ROLLBACK de la prueba la deshaga.
+        raise CommitProhibido("commit() en una conexión de prueba: la prueba termina siempre en ROLLBACK")
+
+
+# ======================================================================
+print("S0. Autoprueba de ConexionSinCommit")
+# ======================================================================
+# connection_factory: psycopg2 crea la conexión con esta clase.
+conexion_prueba = psycopg2.connect(DATABASE_URL, connection_factory=ConexionSinCommit)
+# try/except/else: sin la excepción, FALLO explícito (regla de CLAUDE.md).
+try:
+    conexion_prueba.commit()
+# La esperada: la defensa funciona.
+except CommitProhibido:
+    comprobar("la conexión de prueba rechaza commit() (CommitProhibido)", True)
+# else: commit() no lanzó nada -> la defensa no existe.
+else:
+    comprobar("la conexión de prueba rechaza commit() (CommitProhibido)", False,
+              "(sin error: la excepción se ha tragado)")
+# Siempre: se cierra (no había nada que deshacer).
+finally:
+    conexion_prueba.rollback()
+    conexion_prueba.close()
+
+# ======================================================================
+print("\nS1. siguiente_laborable (fechas fijas)")
 # ======================================================================
 # (hoy, esperado, texto). 2026-10-05 es lunes; 2026-10-23, viernes.
 # Se recorre una tupla de casos; cada caso es otra tupla de tres valores.
@@ -176,9 +219,15 @@ print("\nS5. Límite EXACTO, en una transacción que termina en ROLLBACK")
 # ======================================================================
 # Conexión directa propia (no la del pool) y su cursor. Todo lo que se
 # haga con ella queda en UNA transacción, que el finally deshace.
-cn = psycopg2.connect(DATABASE_URL)
+# ConexionSinCommit: ni leer_listado ni una versión rota de él pueden
+# confirmar nada de lo que se inserta aquí (ver S0).
+cn = psycopg2.connect(DATABASE_URL, connection_factory=ConexionSinCommit)
 cur = cn.cursor()
-# try/finally: pase lo que pase dentro, el finally hace el ROLLBACK.
+# La defensa tiene que estar en ESTA conexión, la que recibe el código, no
+# solo en la de S0.
+comprobar("la conexión de la S5 es ConexionSinCommit", isinstance(cn, ConexionSinCommit),
+          f"({type(cn).__name__})")
+# try/except/finally: pase lo que pase dentro, el finally hace el ROLLBACK.
 try:
     # SQL: el reloj de ESTA transacción. Dentro de ella now() no cambia,
     # así que el límite es exacto al microsegundo.
@@ -261,6 +310,11 @@ try:
     comprobar("visita en el fin exacto (00:00 del día siguiente) -> NO sale en e)",
               v_fin not in ids["visitas_proximo_laborable"])
     comprobar("  ... y sí en d) (es 'solicitada')", v_fin in ids["visitas_sin_confirmar"])
+# El código bajo prueba intentó confirmar: FALLO contado (no una traza), y
+# el finally lo deshace todo. Las comprobaciones de arriba no llegan a
+# ejecutarse, así que el total baja (es lo esperado).
+except CommitProhibido:
+    comprobar("leer_listado no llama a commit()", False, "(llamó a commit(); el ROLLBACK lo deshace)")
 finally:
     # ROLLBACK: nada de lo de arriba queda en la base de datos.
     cn.rollback()

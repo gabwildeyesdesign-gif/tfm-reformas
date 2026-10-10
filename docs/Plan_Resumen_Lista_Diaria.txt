@@ -677,6 +677,23 @@ intervalo (lección del 2026-10-10).
        "la conexión de la S5 es ConexionSinCommit". Se ejecuta con el
        servicio BUENO (que no llama a commit): no escribe nada fuera de la
        transacción.
+  (Nota 2026-10-10, Bloque B0: RESULTADOS EXACTOS, de 18:24:15 a 18:25:07,
+  con Docker/n8n y el navegador cerrados (confirmado por Gabi), sin ningún
+  Kernel-Power 506/507 entre 18:23 y 18:26.)
+  - Script de B0 con el servicio de main SIN tocar (git diff ea96f39 --
+    app/ vacío): 41/41, código de salida 0.
+  - N-B0a: 33/34, falla solo "leer_listado no llama a commit()"; "tras el
+    ROLLBACK no queda ningún dato propio" (0); clientes con la marca de la
+    S5 en la tabla real después: 0. Archivo roto SHA-256
+    41b6b0bbc56e19e202e02e7aff47095178e209bdecd35104b2c239a72aa5dac6.
+  - N-B0b: 40/41, falla solo "la conexión de la S5 es ConexionSinCommit"
+    (connection). Archivo roto SHA-256
+    6fe01ac943d38b8a3e909e603025682b132467726b3c50356d6351d78ad70732.
+  - Lanzador negativos_b0.py (scratchpad, copias borradas al terminar)
+    SHA-256 f92bcfdfc40ff8216a57a72a1f4c9f6ea6d6afedb44cc29e6c9a3340a2f4e959.
+  - Comentarios (medir_comentarios.py, SHA-256
+    3c5985e12955fac19d164ecf97f66313c2fb537a749296734977fd8d7333dee1): 0/167
+    sentencias en tramos de más de 4 sin comentario (main: 0/153).)
 
 8.1 Bloque C: scripts/check_listado_llamadas_service.py (sin servidor)
   Se mantienen S0-S7 (con B0). Cambian o se añaden:
