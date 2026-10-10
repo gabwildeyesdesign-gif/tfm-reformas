@@ -1,0 +1,380 @@
+{
+  "name": "WF_ficha_oportunidad",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "ficha",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "f33b804a-7317-4e9c-8992-bb0073c20b70",
+      "name": "Webhook",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Fa1bxlK0a6JT0rdh",
+          "name": "Formulario Gate (administracion)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------------------------------------------------------------------------\n// Ficha · Comprobar el número de oportunidad que llega en el enlace.\n// Entrada ($json): lo que recibe el Webhook. La dirección es\n//   .../webhook/ficha?oportunidad_id=248\n// y n8n guarda lo que va detrás del \"?\" en $json.query.\n// Salida: { valido, oportunidad_id }.\n// Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// El valor tal como vino en la dirección. \"?.\" evita un error si no hay\n// \"query\"; \"?? ''\" lo convierte en texto vacío si no hay número.\nconst crudo = $json.query?.oportunidad_id ?? '';\n\n// Siempre como texto y sin espacios al principio y al final.\nconst texto = String(crudo).trim();\n\n// Regla: solo cifras, sin un 0 delante y como mucho 10 cifras.\n//   ^ y $         -> el texto ENTERO tiene que cumplir la regla\n//   [1-9]         -> la primera cifra no puede ser 0 (así no pasa \"0\" ni \"007\")\n//   [0-9]{0,9}    -> después, de 0 a 9 cifras más (10 en total como máximo)\n// Un número de más de 10 cifras no cabe en la columna de la base de datos;\n// uno de 10 que no cabe lo rechaza el backend con un 404 (comprobado en sus pruebas).\nconst valido = /^[1-9][0-9]{0,9}$/.test(texto);\n\n// Si es válido, se pasa como número; si no, null (no se usa para nada).\nreturn { json: { valido, oportunidad_id: valido ? Number(texto) : null } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "a117835c-3262-4869-9518-23e2812c74e6",
+      "name": "validar_enlace"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6baa8809-e01d-4c2a-b7bd-1c7d9323369d",
+              "leftValue": "={{ $json.valido }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        416,
+        0
+      ],
+      "id": "14f7f9d3-269b-4d90-bef1-b161ef713e1d",
+      "name": "enlace_valido"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:40px auto;color:#1F2933;\"><div style=\"background:#0B3C5D;color:#FFFFFF;padding:16px 24px;border-radius:8px 8px 0 0;font-weight:bold;\">Reformas Integrales Amedida · Ficha del cliente</div><div style=\"border:1px solid #E5E9ED;border-top:none;padding:20px 24px;border-radius:0 0 8px 8px;\"><p style=\"font-size:18px;font-weight:bold;color:#8A4B00;margin:0 0 8px;\">Enlace no válido</p><p style=\"margin:0;\">El enlace no contiene un número de oportunidad correcto. Vuelve a abrirlo desde el email o el Telegram del aviso.</p></div></div>",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        624,
+        96
+      ],
+      "id": "74a7cbc1-7505-4684-b185-564dfe3631b8",
+      "name": "responder_enlace_no_valido"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/oportunidades/{{ $json.oportunidad_id }}/ficha",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        624,
+        -48
+      ],
+      "id": "07de9eea-a7df-4cc4-8470-55fdb996a3ec",
+      "name": "leer_ficha",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------------------------------------------------------------------------\n// Ficha · Construir la página HTML de la ficha completa (o su página de error).\n// Entrada ($json): la respuesta COMPLETA de GET /oportunidades/{id}/ficha,\n//   { statusCode, headers, body }, o, si no hubo conexión, un dato con \"error\"\n//   y SIN statusCode (llega por la salida de error de leer_ficha).\n// Salida: { html, codigo, aviso_tecnico, mensaje_tecnico }\n//   html            -> la página que verá administración\n//   codigo          -> el código HTTP con el que se responde al navegador\n//   aviso_tecnico   -> true si el fallo es técnico (se avisará a WF4)\n//   mensaje_tecnico -> texto para el aviso técnico (sin datos del cliente)\n// Determinista: ningún LLM interviene. Todo dato variable pasa por esc().\n// CAMBIO (2026-10-10, noche): en las páginas de error la cabecera dice\n// \"Aviso\"; el título concreto sale una sola vez, en el cuerpo.\n// ---------------------------------------------------------------------------\n\n// ---- 1. Datos de partida ----------------------------------------------------\n// Código HTTP (undefined si no hubo conexión) y cuerpo (\"?? {}\": objeto vacío).\nconst estado = $json.statusCode;\nconst f = $json.body ?? {};\n// Número de oportunidad: el que ya validó validar_enlace (nunca el de la URL en bruto).\nconst op = $('validar_enlace').item.json.oportunidad_id;\n// Dirección pública de esta misma página, para los enlaces a OTRAS fichas.\n// Absoluta: dentro del marco aislado de n8n las direcciones relativas no funcionan.\nconst FICHA_BASE = 'https://TU-DOMINIO.ngrok-free.dev/webhook/ficha';\n\n// ---- 2. Colores de la empresa (los mismos que el email de WF2) -------------\nconst AZUL = '#0B3C5D';            // cabecera y títulos\nconst TURQUESA = '#1F8A8A';        // acentos y franjas\nconst TURQUESA_CLARO = '#E3F2F1';  // fondo de la caja de importes\nconst TEXTO = '#1F2933';           // texto principal\nconst SUAVE = '#5B6B79';           // etiquetas y texto secundario\n\n// ---- 3. Escapar texto antes de meterlo en HTML -------------------------------\n// Nombres, informes y textos de visitas los escribieron personas: esc() cambia\n// los caracteres especiales de HTML por su forma inofensiva.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\n// ---- 4. Formatos españoles (solo para MOSTRAR) ------------------------------\nconst eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });\nconst num = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 });\n// Importe en texto exacto (\"87120.00\") -> \"87.120,00 €\"; si falta, un guion.\nfunction dinero(t) { return (t === null || t === undefined) ? '—' : eur.format(Number(t)); }\n// Número en texto (\"90.0\") -> \"90\"; si falta, un guion.\nfunction numero(t) { return (t === null || t === undefined) ? '—' : num.format(Number(t)); }\n// Fecha con desfase -> \"03/10/2026, 12:15\" en hora de Madrid; si falta, un guion.\nfunction fecha(t) {\n  if (!t) return '—';\n  return new Date(t).toLocaleString('es-ES', {\n    timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', year: 'numeric',\n    hour: '2-digit', minute: '2-digit',\n  });\n}\n// true -> \"Sí\", false -> \"No\", otra cosa -> guion.\nfunction siNo(v) { return v === true ? 'Sí' : v === false ? 'No' : '—'; }\n\n// ---- 5. Diccionarios: códigos del backend -> texto legible ------------------\nconst TIPOS = { bano: 'Baño', cocina: 'Cocina', integral_vivienda: 'Reforma integral de vivienda',\n  parcial_acabados: 'Acabados parciales' };\nconst ACABADOS = { basico: 'Básico', medio: 'Medio', alto: 'Alto' };\nconst MOTIVOS_GATE = { cambios_estructurales: 'Cambios estructurales',\n  importe_superior_umbral: 'Importe superior al umbral', ambos: 'Cambios estructurales e importe superior al umbral' };\nconst ESTADOS = { nueva: 'Nueva', cualificada: 'Cualificada', pendiente_aprobacion: 'Pendiente de llamada (Gate)',\n  visita_agendada: 'Visita agendada', presupuesto_enviado: 'Presupuesto enviado',\n  seguimiento_pendiente: 'Seguimiento pendiente', ganada: 'Ganada', perdida: 'Perdida' };\nconst ESTADOS_VISITA = { solicitada: 'Pedida por el cliente (sin confirmar)', confirmada: 'Confirmada',\n  completada: 'Realizada', cancelada: 'Cancelada' };\nconst RESULTADOS = { visita_acordada: 'Visita acordada', descartar: 'Descartado' };\nconst MOTIVOS_DESCARTE = { precio: 'Precio', plazo: 'Plazo', no_contesta: 'No contesta',\n  proyecto_no_viable: 'Proyecto no viable', otro: 'Otro' };\nconst EVENTOS = { alta: 'Solicitud recibida', presupuesto_calculado: 'Presupuesto calculado',\n  visita_solicitada: 'Visita pedida', gate_decision_registrada: 'Resultado de la llamada registrado',\n  seguimiento_abierto: 'Seguimiento abierto' };\n// Traduce con un diccionario; si el código no está, lo enseña tal cual; si no hay, guion.\nfunction txt(dic, codigo) { return dic[codigo] ?? codigo ?? '—'; }\n\n// ---- 6. Piezas de HTML reutilizables ----------------------------------------\n// Una fila \"etiqueta | valor\". El VALOR siempre pasa por esc().\nfunction fila(etiqueta, valor) {\n  return `<tr><td style=\"padding:5px 12px 5px 0;width:40%;color:${SUAVE};font-size:13px;vertical-align:top;\">${etiqueta}</td>` +\n         `<td style=\"padding:5px 0;color:${TEXTO};font-size:14px;font-weight:bold;\">${esc(valor)}</td></tr>`;\n}\n// Una sección: título turquesa y su contenido (ya construido).\nfunction seccion(titulo, contenido) {\n  return `<div style=\"padding:16px 24px 4px;\"><div style=\"font-size:12px;letter-spacing:1px;text-transform:uppercase;` +\n         `color:${TURQUESA};font-weight:bold;border-bottom:2px solid ${TURQUESA_CLARO};padding-bottom:6px;margin-bottom:6px;\">` +\n         `${titulo}</div>${contenido}</div>`;\n}\n// Una tabla con filas.\nfunction tabla(filas) { return `<table style=\"width:100%;border-collapse:collapse;\">${filas}</table>`; }\n// Un texto en gris cuando una lista está vacía.\nfunction vacio(texto) { return `<p style=\"color:${SUAVE};font-size:14px;margin:4px 0;\">${texto}</p>`; }\n// La página completa: tarjeta blanca con cabecera azul. \"subtitulo\" es la\n// línea pequeña bajo el nombre de la empresa.\nfunction pagina(subtitulo, cuerpo) {\n  return `<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:680px;margin:24px auto;color:${TEXTO};` +\n         `border:1px solid #E5E9ED;border-radius:8px;\">` +\n         `<div style=\"background:${AZUL};color:#FFFFFF;padding:16px 24px;border-radius:8px 8px 0 0;\">` +\n         `<div style=\"font-size:18px;font-weight:bold;\">Reformas Integrales Amedida · Ficha del cliente</div>` +\n         `<div style=\"font-size:13px;color:#A7D8D6;margin-top:4px;\">${subtitulo}</div></div>` +\n         `<div style=\"height:4px;background:${TURQUESA};\"></div>` + cuerpo +\n         `<div style=\"padding:16px 24px;font-size:12px;color:${SUAVE};border-top:1px solid #E5E9ED;margin-top:12px;\">` +\n         `Uso interno de administración: contiene datos personales. No reenviar.</div></div>`;\n}\n// Atajo para las páginas de error. CAMBIO: la cabecera dice siempre \"Aviso\";\n// el título concreto va solo en el cuerpo, una vez.\nfunction error(titulo, mensaje, codigo, tecnico, mensajeTecnico) {\n  const cuerpo = `<div style=\"padding:20px 24px;\"><p style=\"font-size:18px;font-weight:bold;color:#8A4B00;margin:0 0 8px;\">` +\n                 `${esc(titulo)}</p><p style=\"margin:0;\">${esc(mensaje)}</p></div>`;\n  return { json: { html: pagina('Aviso', cuerpo), codigo, aviso_tecnico: tecnico, mensaje_tecnico: mensajeTecnico } };\n}\n\n// ---- 7. Respuestas que NO son 200 -------------------------------------------\n// Sin código: no hubo conexión con el backend (uvicorn apagado o caído).\nif (estado === undefined) {\n  return error('Sistema no disponible', 'No se ha podido conectar con el sistema. Inténtalo de nuevo en unos minutos.',\n    503, true, 'Sin conexión con el backend al leer la ficha');\n}\n// 404: la oportunidad no existe. Es un error del enlace, no técnico.\nif (estado === 404) {\n  return error('Oportunidad no encontrada', `No existe ninguna oportunidad con el número ${op}.`, 404, false, '');\n}\n// 401: la llave de administración no vale. Técnico.\nif (estado === 401) {\n  return error('Error de configuración', 'La página no tiene una llave válida. Se ha avisado al responsable técnico.',\n    500, true, 'GET /ficha respondió 401 (llave X-Gate-Secret)');\n}\n// Cualquier otro código distinto de 200: técnico.\nif (estado !== 200) {\n  return error('Error inesperado', `El sistema respondió con el código ${estado}. Se ha avisado al responsable técnico.`,\n    500, true, `GET /ficha respondió ${estado}`);\n}\n\n// ---- 8. Respuesta 200: las secciones de la ficha ----------------------------\nconst c = f.contacto;   // nombre, email, telefono, origen\nconst r = f.reforma;    // tipo, m2, acabados, cambios estructurales\nconst p = f.presupuesto; // null si no hay presupuesto\n\n// Contacto: el de ESTA solicitud, o un aviso si es un lead antiguo.\nconst htmlContacto = c.origen === 'solicitud'\n  ? tabla(fila('Nombre', c.nombre ?? '—') + fila('Teléfono', c.telefono ?? '—') + fila('Email', c.email ?? '—'))\n  : vacio('Contacto no disponible en esta solicitud (lead anterior al 25/09/2026).');\n\n// Solicitud: qué pidió el cliente y cuándo.\nconst htmlSolicitud = tabla(\n  fila('Estado actual', txt(ESTADOS, f.estado_oportunidad)) +\n  fila('Recibida', fecha(f.fecha_solicitud)) +\n  fila('Tipo de reforma', txt(TIPOS, r.tipo_reforma)) +\n  fila('Superficie', `${numero(r.m2)} m²`) +\n  fila('Acabados', txt(ACABADOS, r.nivel_acabados)) +\n  fila('Cambios estructurales', siNo(r.incluye_cambios_estructurales)));\n\n// Fotos: una fila por ruta, o \"Sin fotos\".\nconst htmlFotos = (f.fotos && f.fotos.length)\n  ? tabla(f.fotos.map((ruta, i) => fila(`Foto ${i + 1}`, ruta)).join(''))\n  : vacio('Sin fotos.');\n\n// Presupuesto: caja destacada con IVA y detalle; o un aviso si no hay.\nconst htmlPresupuesto = p === null || p === undefined\n  ? vacio('Todavía no hay presupuesto calculado.')\n  : `<div style=\"background:${TURQUESA_CLARO};border-left:4px solid ${TURQUESA};border-radius:6px;padding:12px 16px;margin:6px 0;\">` +\n    `<div style=\"font-size:12px;color:${SUAVE};\">Horquilla (IVA ${esc(numero(p.iva_pct_aplicado))} % incluido)</div>` +\n    `<div style=\"font-size:20px;font-weight:bold;color:${AZUL};margin-top:4px;\">` +\n    `${esc(dinero(p.importe_min_con_iva))} – ${esc(dinero(p.importe_max_con_iva))}</div></div>` +\n    tabla(\n      fila('Fecha del presupuesto', fecha(p.fecha_presupuesto)) +\n      fila('Horquilla sin IVA', `${dinero(p.importe_min_sin_iva)} – ${dinero(p.importe_max_sin_iva)}`) +\n      fila('¿Requirió revisión (Gate)?', siNo(p.requiere_aprobacion)) +\n      fila('Motivo del Gate', p.motivo_gate ? txt(MOTIVOS_GATE, p.motivo_gate) : '—') +\n      fila('Umbral vigente (sin IVA)', dinero(p.umbral_gate_vigente)));\n\n// Visitas: todas, también canceladas, cada una con su texto.\nconst htmlVisitas = (f.visitas && f.visitas.length)\n  ? f.visitas.map((v) => tabla(\n      fila('Estado', txt(ESTADOS_VISITA, v.estado_visita)) +\n      fila('Fecha de la visita', fecha(v.fecha_visita)) +\n      fila('Pedida el', fecha(v.fecha_solicitud_visita)) +\n      fila('Texto', v.texto_cliente ?? '—'))).join('<hr style=\"border:none;border-top:1px dashed #E5E9ED;\">')\n  : vacio('Sin visitas.');\n\n// Llamadas registradas: con su informe (los saltos de línea se conservan).\nconst htmlLlamadas = (f.llamadas && f.llamadas.length)\n  ? f.llamadas.map((l) =>\n      tabla(\n        fila('Resultado', txt(RESULTADOS, l.resultado)) +\n        fila('Motivo', l.motivo ? txt(MOTIVOS_DESCARTE, l.motivo) : '—') +\n        fila('Registrada el', fecha(l.fecha_registro)) +\n        fila('Visita', l.fecha_visita ? fecha(l.fecha_visita) : '—')) +\n      `<div style=\"font-size:13px;color:${SUAVE};margin-top:4px;\">Informe</div>` +\n      `<div style=\"background:#F6F8FA;border-radius:4px;padding:8px 12px;font-size:14px;\">` +\n      `${esc(l.informe).replace(/\\r?\\n/g, '<br>')}</div>`).join('<hr style=\"border:none;border-top:1px dashed #E5E9ED;\">')\n  : vacio('Sin llamadas registradas.');\n\n// Historial: los cambios de estado registrados, del más antiguo al más reciente.\nconst htmlHistorial = tabla((f.historial ?? []).map((e) =>\n    fila(fecha(e.fecha), `${txt(EVENTOS, e.evento)} → ${txt(ESTADOS, e.estado)}`)).join('')) +\n  (f.historial_cuadra\n    ? ''\n    : vacio('El estado actual no sale de ningún cambio registrado por el sistema (por ejemplo, se cambió a mano).'));\n\n// Otras oportunidades del mismo email: cada una con un enlace a su propia ficha.\nconst htmlOtras = (f.otras_oportunidades_mismo_email && f.otras_oportunidades_mismo_email.length)\n  ? tabla(f.otras_oportunidades_mismo_email.map((o) =>\n      `<tr><td style=\"padding:5px 12px 5px 0;font-size:14px;\">` +\n      `<a href=\"${esc(FICHA_BASE + '?oportunidad_id=' + encodeURIComponent(o.oportunidad_id))}\" target=\"_blank\" ` +\n      `style=\"color:${TURQUESA};font-weight:bold;\">Oportunidad ${esc(o.oportunidad_id)}</a></td>` +\n      `<td style=\"padding:5px 0;font-size:14px;\">${esc(txt(TIPOS, o.tipo_reforma))} · ${esc(txt(ESTADOS, o.estado_oportunidad))} · ` +\n      `${esc(fecha(o.fecha_solicitud))}</td></tr>`).join(''))\n  : vacio('Ninguna.');\n\n// ---- 9. La página completa -----------------------------------------------------\nconst cuerpo =\n  seccion('Contacto', htmlContacto) +\n  seccion('Solicitud', htmlSolicitud) +\n  seccion('Presupuesto', htmlPresupuesto) +\n  seccion('Visitas', htmlVisitas) +\n  seccion('Llamadas registradas', htmlLlamadas) +\n  seccion('Historial', htmlHistorial) +\n  seccion('Fotos', htmlFotos) +\n  seccion('Otras solicitudes con el mismo email', htmlOtras);\n\nreturn { json: { html: pagina(`Oportunidad ${esc(f.oportunidad_id)}`, cuerpo), codigo: 200,\n                 aviso_tecnico: false, mensaje_tecnico: '' } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -128
+      ],
+      "id": "9ad2d472-f77e-484c-806c-e395d74a6c90",
+      "name": "construir_pagina_ficha"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": "={{ $json.codigo }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1104,
+        -128
+      ],
+      "id": "c667b609-336f-446c-a178-79f5fc9fec7e",
+      "name": "responder_ficha"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "807311ce-d564-4799-b8e1-e2bb797deb9a",
+              "leftValue": "={{ $json.aviso_tecnico }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1312,
+        -128
+      ],
+      "id": "3fc87d50-b983-4fd8-9008-5eb75bd558e1",
+      "name": "es_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "jVVsWYknS0DDKhaO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jVVsWYknS0DDKhaO",
+          "cachedResultName": "WF4_aviso_tecnico"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "flujo": "={{ $workflow.name }}",
+            "nodo": "leer_ficha",
+            "mensaje_error": "={{ $json.mensaje_tecnico }}",
+            "oportunidad_id": "={{ $('validar_enlace').item.json.oportunidad_id }}",
+            "ejecucion_id": "={{ $execution.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "flujo",
+              "displayName": "flujo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "nodo",
+              "displayName": "nodo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "ejecucion_id",
+              "displayName": "ejecucion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1520,
+        -224
+      ],
+      "id": "ddfffb7a-4fbf-4aaf-ac3b-883ada608302",
+      "name": "Call 'WF4_aviso_tecnico'"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "validar_enlace",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validar_enlace": {
+      "main": [
+        [
+          {
+            "node": "enlace_valido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enlace_valido": {
+      "main": [
+        [
+          {
+            "node": "leer_ficha",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "responder_enlace_no_valido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_ficha": {
+      "main": [
+        [
+          {
+            "node": "construir_pagina_ficha",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "construir_pagina_ficha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "construir_pagina_ficha": {
+      "main": [
+        [
+          {
+            "node": "responder_ficha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "responder_ficha": {
+      "main": [
+        [
+          {
+            "node": "es_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "es_aviso_tecnico": {
+      "main": [
+        [
+          {
+            "node": "Call 'WF4_aviso_tecnico'",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "XyWcmtuXIy3yT4eY",
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": -1,
+    "availableInMCP": false
+  },
+  "id": "O1On7nlUWCMmNwQs",
+  "tags": []
+}

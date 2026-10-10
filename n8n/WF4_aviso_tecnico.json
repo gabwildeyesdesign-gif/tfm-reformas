@@ -1,0 +1,147 @@
+{
+  "name": "WF4_aviso_tecnico",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "flujo"
+            },
+            {
+              "name": "nodo"
+            },
+            {
+              "name": "mensaje_error"
+            },
+            {
+              "name": "oportunidad_id",
+              "type": "number"
+            },
+            {
+              "name": "ejecucion_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "bfc0eb27-ca1c-4fc1-a65b-19947890fbb6",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF4 · Construir el aviso técnico (para Telegram y para el email).\n// Entrada ($json): los 5 datos que envía el flujo que ha fallado:\n//   flujo, nodo, mensaje_error, oportunidad_id, ejecucion_id.\n// Salida: { telegram, asunto, html }.\n// Determinista: ningún LLM interviene.\n// RGPD: este aviso NUNCA lleva datos personales del cliente (nombre, teléfono,\n// email): solo datos técnicos. Telegram es un servicio externo.\n// ---------------------------------------------------------------------------\n\n// ---- 1. Escapar texto antes de meterlo en HTML ------------------------------\n// Telegram (en modo HTML) y el email interpretan <, > y &. Un mensaje de error\n// que los contenga rompería el aviso (pasó en WF2 el 06/10 con Markdown).\n// esc() los cambia por su forma inofensiva. String() convierte números a texto.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')     // < deja de abrir etiquetas\n    .replace(/>/g, '&gt;')     // > deja de cerrarlas\n    .replace(/\"/g, '&quot;')   // comillas dobles (dentro de atributos)\n    .replace(/'/g, '&#39;');   // comillas simples\n}\n\n// ---- 2. Limpiar cada dato: si falta o está vacío, un guion ------------------\n// El flujo que llama puede no tener algún dato (p. ej. sin oportunidad).\nfunction texto(valor) {\n  // null o undefined = el dato no ha llegado.\n  if (valor === null || valor === undefined) return '—';\n  // trim() quita espacios y saltos de línea al principio y al final.\n  const limpio = String(valor).trim();\n  // Si después de limpiar no queda nada, también un guion.\n  return limpio === '' ? '—' : limpio;\n}\n\n// Los cinco datos de entrada, ya limpios.\nconst flujo = texto($json.flujo);\nconst nodo = texto($json.nodo);\nconst oportunidad = texto($json.oportunidad_id);\nconst ejecucion = texto($json.ejecucion_id);\nlet mensaje = texto($json.mensaje_error);   // \"let\": puede cambiar (abajo se recorta)\n\n// ---- 3. Recortar errores muy largos ------------------------------------------\n// Un aviso tiene que leerse de un vistazo, y no se manda a un servicio externo\n// más texto del necesario. 500 caracteres bastan para identificar el error;\n// el detalle completo está en la ejecución de n8n (Executions).\nconst MAXIMO = 500;\nif (mensaje.length > MAXIMO) {\n  mensaje = mensaje.slice(0, MAXIMO) + '… (recortado)';\n}\n\n// ---- 4. Fecha y hora del aviso, en hora de Madrid ----------------------------\n// new Date() = ahora. toLocaleString la escribe en formato español.\nconst cuando = new Date().toLocaleString('es-ES', {\n  timeZone: 'Europe/Madrid',\n  day: '2-digit', month: '2-digit', year: 'numeric',\n  hour: '2-digit', minute: '2-digit', second: '2-digit',\n});\n\n// ---- 5. Mensaje de Telegram (modo HTML) -------------------------------------\n// <b>...</b> = negrita. \"\\n\" = salto de línea. TODO dato variable pasa por esc().\nconst telegram =\n  `⚠️ <b>ERROR TÉCNICO · Reformas Amedida</b>\\n\\n` +\n  `<b>Flujo:</b> ${esc(flujo)}\\n` +\n  `<b>Paso:</b> ${esc(nodo)}\\n` +\n  `<b>Oportunidad:</b> ${esc(oportunidad)}\\n` +\n  `<b>Ejecución:</b> ${esc(ejecucion)}\\n` +\n  `<b>Cuándo:</b> ${esc(cuando)}\\n\\n` +\n  `<b>Error:</b>\\n${esc(mensaje)}\\n\\n` +\n  `Revisar en n8n → Executions.`;\n\n// ---- 6. Asunto del email ------------------------------------------------------\n// Sin datos del cliente (los asuntos se ven en las notificaciones del móvil).\n// Si hay oportunidad, se añade su número; si no, solo el flujo.\nconst asunto = oportunidad === '—'\n  ? `[Técnico] Error en ${flujo}`\n  : `[Técnico] Error en ${flujo} · Oportunidad ${oportunidad}`;\n\n// ---- 7. Cuerpo del email (HTML sencillo) --------------------------------------\n// Una fila \"etiqueta | valor\". El valor SIEMPRE pasa por esc().\nfunction fila(etiqueta, valor) {\n  return `<tr><td style=\"padding:4px 12px 4px 0;color:#5B6B79;vertical-align:top;\">${etiqueta}</td>` +\n         `<td style=\"padding:4px 0;font-weight:bold;\">${esc(valor)}</td></tr>`;\n}\n\n// Saltos de línea del error -> <br> para que se vean en el email.\nconst mensajeHtml = esc(mensaje).replace(/\\r?\\n/g, '<br>');\n\nconst html =\n  `<div style=\"font-family:Arial,Helvetica,sans-serif;color:#1F2933;\">` +\n  `<div style=\"background:#8A1C1C;color:#FFFFFF;padding:12px 16px;border-radius:6px 6px 0 0;font-weight:bold;\">` +\n  `Error técnico · Reformas Amedida</div>` +\n  `<div style=\"border:1px solid #E5E9ED;border-top:none;padding:12px 16px;border-radius:0 0 6px 6px;\">` +\n  `<table>` +\n  fila('Flujo', flujo) + fila('Paso', nodo) + fila('Oportunidad', oportunidad) +\n  fila('Ejecución', ejecucion) + fila('Cuándo', cuando) +\n  `</table>` +\n  `<p style=\"margin:12px 0 4px;color:#5B6B79;\">Error:</p>` +\n  `<div style=\"background:#F6F8FA;padding:8px 12px;border-radius:4px;font-family:monospace;\">${mensajeHtml}</div>` +\n  `<p style=\"font-size:12px;color:#5B6B79;margin-top:12px;\">Aviso automático para el responsable técnico. ` +\n  `No contiene datos personales del cliente. Detalle completo en n8n → Executions.</p>` +\n  `</div></div>`;\n\n// ---- 8. Salida: los tres textos listos para enviar ---------------------------\nreturn { json: { telegram, asunto, html } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "1fc3c9b6-072e-4f05-9d91-e086e7234455",
+      "name": "construir_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "chatId": "CHAT_ID_TECNICO",
+        "text": "={{ $json.telegram }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        432,
+        -144
+      ],
+      "id": "4d61572a-1a7d-41b6-96f3-72aabf6bff27",
+      "name": "enviar_telegram_tecnico",
+      "credentials": {
+        "telegramApi": {
+          "id": "q2WXRUI8zqCbuQTW",
+          "name": "ReformasAmedida_administracion"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "admin@example.com",
+        "subject": "={{ $json.asunto }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        432,
+        208
+      ],
+      "id": "f79adf15-5d09-45ce-a69c-c56a84759f18",
+      "name": "enviar_email_tecnico",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "qOQGRUYs3yP5VFAb",
+          "name": "Gmail buena"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "construir_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "construir_aviso_tecnico": {
+      "main": [
+        [
+          {
+            "node": "enviar_email_tecnico",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "enviar_telegram_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviar_email_tecnico": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "id": "jVVsWYknS0DDKhaO",
+  "tags": []
+}

@@ -1,0 +1,148 @@
+{
+  "name": "WF4_errores_no_atrapados",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "be3f85fe-258c-4b05-b7f6-2c3d39c8004b",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF4 · Errores no atrapados · Traducir los datos del Error Trigger a los 5\n// campos que espera WF4_aviso_tecnico.\n// Entrada ($json): lo que entrega el Error Trigger (forma de la documentación\n// oficial de n8n):\n//   - caso normal: workflow.name, execution.id, execution.lastNodeExecuted,\n//     execution.error.message\n//   - si falló el DISPARADOR del flujo: no hay execution completo; los datos\n//     vienen en trigger.node y trigger.error\n// Salida: { flujo, nodo, mensaje_error, oportunidad_id, ejecucion_id }.\n// ---------------------------------------------------------------------------\n\n// \"?? {}\": si falta una parte, un objeto vacío, para que las líneas de abajo\n// no fallen al leer dentro de ella.\nconst wf = $json.workflow ?? {};    // datos del flujo que ha fallado\nconst ex = $json.execution ?? {};   // datos de la ejecución que ha fallado\nconst tr = $json.trigger ?? {};     // solo existe si falló su disparador\n\n// Nombre del flujo que ha fallado (p. ej. \"WF2_aviso_gate\").\nconst flujo = wf.name ?? 'flujo desconocido';\n\n// Paso que ha fallado: el último nodo ejecutado; si falló el disparador, el\n// nombre del disparador. \"?.\" lee dentro sin romper si la parte no existe.\nconst nodo = ex.lastNodeExecuted ?? tr.node?.name ?? 'disparador';\n\n// Texto del error: el de la ejecución o, si no hay, el del disparador.\nconst mensaje_error = ex.error?.message ?? tr.error?.message ?? 'Error sin mensaje';\n\n// Número de la ejecución. Según la documentación, solo existe si la ejecución\n// se guardó en la base de datos de n8n; si no, se indica.\n// String(): WF4_aviso_tecnico espera este campo como texto.\nconst ejecucion_id = (ex.id !== undefined && ex.id !== null) ? String(ex.id) : 'no guardada';\n\n// El Error Trigger no sabe a qué oportunidad afectaba el error: se envía null\n// y WF4_aviso_tecnico lo mostrará como un guion.\nreturn { json: { flujo, nodo, mensaje_error, oportunidad_id: null, ejecucion_id } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "f2f28f33-e128-46d8-bf3f-90012c103509",
+      "name": "normalizar_error"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "jVVsWYknS0DDKhaO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jVVsWYknS0DDKhaO",
+          "cachedResultName": "WF4_aviso_tecnico"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "oportunidad_id": "={{ $json.oportunidad_id }}",
+            "flujo": "={{ $json.flujo }}",
+            "nodo": "={{ $json.nodo }}",
+            "mensaje_error": "={{ $json.mensaje_error }}",
+            "ejecucion_id": "={{ $json.ejecucion_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "flujo",
+              "displayName": "flujo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nodo",
+              "displayName": "nodo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "ejecucion_id",
+              "displayName": "ejecucion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        416,
+        0
+      ],
+      "id": "5e886073-744b-4eaf-8993-7c67074e4563",
+      "name": "llamar_aviso_tecnico"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "normalizar_error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "normalizar_error": {
+      "main": [
+        [
+          {
+            "node": "llamar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "id": "XyWcmtuXIy3yT4eY",
+  "tags": []
+}
