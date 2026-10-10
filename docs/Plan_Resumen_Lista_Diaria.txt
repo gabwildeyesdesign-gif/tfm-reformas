@@ -1,0 +1,978 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: resumen de la solicitud en cada elemento de GET /llamadas-del-dia
+(D26.1, bloque 4a-2 de D26.6)
+
+Documento de plan · Nivel N0 · 2026-10-10 · Rama feat/n0-resumen-lista-diaria
+(desde main = origin/main = ea96f39)
+Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+
+Fuentes: el encargo del Bloque A del 2026-10-10 (decisiones D26.1, D26.3 y
+D26.7 ya tomadas y pre-decisiones 1-8 del tutor),
+docs/Decisiones_D26_Ficha_del_Cliente_en_la_Lista_Diaria.md (entero), la
+Adenda (secciones 5.7 y 5.9), el plan del endpoint que se amplía
+(docs/Plan_Endpoint_Listado_WF3.txt, sobre todo la pre-decisión 6 y la
+sección 1.5), el plan modelo más reciente
+(docs/Plan_Endpoint_Ficha_Oportunidad.txt, secciones 0, 4 y 8.4), el código
+y la base de datos real, comprobados el mismo día (sección 0).
+
+Nota sobre nombres: D26.x y D25.x son decisiones de Gabi (documentos ya en
+docs/). Las "pre-decisiones" son las 8 del tutor en el encargo. P1-P10 son
+las preguntas abiertas de ESTE plan (sección 11). K = hechos comprobados en
+el código, M = mediciones en la base de datos real, C = contradicciones y
+hallazgos (sección 1), R = riesgos, N = pruebas en negativo, S =
+comprobaciones del script de servicio, CASO = del script HTTP. Ninguna de
+estas letras tiene que ver con las de otros planes.
+
+
+================================================================
+0. COMPROBACIONES HECHAS ANTES DE ESCRIBIR ESTE PLAN (solo lectura)
+================================================================
+
+Leído:
+  - CLAUDE.md, entera ("Cómo trabajamos" con la regla de las conexiones de
+    prueba sin commit, la regla de uso de la suite con su nota del
+    2026-10-03 y la lección del 2026-10-10 sobre la suspensión durante las
+    pruebas en negativo, limitación P4, puertos, borrados y gotchas).
+  - docs/Decisiones_D26_Ficha_del_Cliente_en_la_Lista_Diaria.md, ENTERO
+    (D26.1-D26.7, sección 4 y la nota del estado de 4a-1).
+  - Adenda: secciones 5.7 (GET /llamadas-del-dia, con su nota del
+    2026-10-08) y 5.9 (la ficha).
+  - docs/Plan_Endpoint_Listado_WF3.txt: secciones 0, 1 (1.5 entera, con la
+    lista de "lo que NO sale"), 4 (consultas) y 6 (pruebas y N1-N12).
+  - docs/Plan_Endpoint_Ficha_Oportunidad.txt: secciones 0, 3, 4, 7, 8 (8.4
+    entera), 9, 10, 11 y 12.
+  - Código: app/services/listado_llamadas_service.py,
+    app/schemas/listado_llamadas.py, app/api/listado_llamadas.py,
+    app/services/datos_oportunidad.py, app/services/condicion_seguimiento.py,
+    app/services/ficha_oportunidad_service.py (cómo usa COLUMNAS_CASO y
+    SQL_MODO_TRANSACCION), app/services/aviso_gate_service.py (ídem),
+    app/schemas/aviso_gate.py (ReformaAviso) y app/schemas/common.py
+    (TipoReforma, NivelAcabados, EstadoVisita, MAX_M2_LEAD).
+  - scripts/check_listado_llamadas_service.py (entero),
+    scripts/check_listado_llamadas_http.py (constantes, preparación y CASO
+    2), scripts/check_followup_service.py (ConexionSinCommit, modelo de B0)
+    y la S3 de scripts/check_ficha_oportunidad_service.py (comprobaciones
+    con ast).
+  - docs/schema_actual.sql: leads (datos_estructurados JSONB y el CHECK
+    chk_leads_m2_rango) y visitas (texto_cliente TEXT NOT NULL con el CHECK
+    chk_visitas_texto_cliente_longitud, 1..1000).
+  - git log --oneline -6 y git status -sb: main = origin/main = ea96f39,
+    árbol limpio (comprobado con git rev-parse --short HEAD antes de crear
+    la rama). La rama feat/n0-ficha-oportunidad ya no existe en GitHub
+    (git fetch + git branch -a: solo main). Ver C1.
+
+Comprobado en el CÓDIGO:
+  - K1. obtener_listado envía OCHO órdenes en su transacción: el SET
+    (SQL_MODO_TRANSACCION), SELECT now(), la lectura de las dos reglas y
+    las cinco consultas de los apartados (leer_listado). Antes, fuera de la
+    transacción, el pool valida la conexión (SELECT 1 + rollback, como en
+    todos los endpoints). leer_listado envía exactamente CINCO, una por
+    apartado, sea cual sea el número de elementos.
+  - K2. Las dos consultas del listado YA hacen JOIN con leads (alias l):
+    SQL_OPORTUNIDADES (a, b, c) y SQL_VISITAS (d, e). SQL_VISITAS parte de
+    visitas (alias v). Por tanto, m2, nivel_acabados e
+    incluye_cambios_estructurales (de l) y texto_cliente (de v) se pueden
+    leer añadiendo COLUMNAS a las consultas existentes: ni JOIN nuevo ni
+    consulta nueva (pre-decisión 6).
+  - K3. COLUMNAS_CASO (datos_oportunidad.py) tiene las tres expresiones
+    con sus nombres internos "m2", "nivel_acabados" y
+    "cambios_estructurales" (este último NO se llama como el campo de la
+    respuesta, incluye_cambios_estructurales). m2 se convierte con
+    ::numeric y los cambios con ::boolean DENTRO de Postgres.
+  - K4. ReformaAviso (aviso_gate.py), el objeto "reforma" de gate-avisos y
+    de la ficha, tiene CUATRO campos: tipo_reforma, m2, nivel_acabados e
+    incluye_cambios_estructurales. Cada elemento de la lista YA tiene
+    tipo_reforma en su nivel. Ver C5 y la pre-decisión 2.
+  - K5. SQL_MODO_TRANSACCION la definen listado_llamadas_service y la
+    importan ficha_oportunidad_service y check_ficha_oportunidad_service.
+    Además, la S3 de check_ficha_oportunidad_service COMPRUEBA con ast que
+    la ficha la importa "de app.services.listado_llamadas_service" (líneas
+    298-301). Ver la pre-decisión 5.
+  - K6. Ningún script analiza el CONTENIDO de COLUMNAS_CASO con ast: la S3
+    de la ficha solo mira qué funciones se definen e importan. Agrupar las
+    tres expresiones dentro de datos_oportunidad.py sin cambiar su texto no
+    rompe ninguna comprobación existente (pre-decisión 1).
+  - K7. ConexionSinCommit está copiada en dos scripts
+    (check_followup_service.py y check_ficha_oportunidad_service.py, la
+    misma clase). La S5 de check_listado_llamadas_service.py abre
+    psycopg2.connect(DATABASE_URL) a secas y pasa su cursor a leer_listado
+    (línea 246); su try/finally NO tiene except, así que hoy un error dentro
+    de leer_listado aborta el script con una traza, sin recuento. Ver C8.
+  - K8. scripts/check_listado_llamadas_http.py: TEXTOS_PROHIBIDOS (línea
+    111) incluye "m2" y "texto_cliente", que este bloque PERMITE; y TODOS
+    los leads del script se crean con m2 = 6, nivel_acabados "medio" y
+    tipo "bano" (lead_http, línea 304, y los dos leads por SQL). Ver C6 y
+    C7.
+  - K9. El script HTTP ya crea visitas 'cancelada' (S_CANCELADA en b, y
+    E-cancelada) y la visita 'confirmada' de POST /gate-decisions
+    (D_GATE_CONF), cuyo texto_cliente es el texto fijo del sistema (P2 del
+    plan de /gate-decisions).
+
+Comprobado en la BASE DE DATOS REAL (2026-10-10, now() = 15:30:37 UTC =
+17:30 en Madrid). Dos scripts en el scratchpad, fuera del repositorio:
+    medir_resumen.py       SHA-256 98fc5a3e5e5fbf2806e63c26d7df0138383221ce64c8b61756d819c50fbed219
+    verificar_ids_altos.py SHA-256 09976069e15d5f69d691d964cae6ee7910d78f8ece2f93d288d1541a87114bd0
+Los dos: conexión directa cuya PRIMERA orden es SET TRANSACTION ISOLATION
+LEVEL REPEATABLE READ, READ ONLY (medir_resumen la confirma con
+current_setting: 'repeatable read' y 'on', al empezar y al terminar); solo
+SELECT; terminan en ROLLBACK; imprimen solo recuentos, ids, fechas y
+longitudes, nunca un nombre, email, teléfono o texto. medir_resumen abre
+su conexión con ConexionSinCommit (con su autoprueba, [OK]) porque pasa su
+cursor al leer_listado REAL de main, para que los recuentos de M3 sean
+exactamente los de la lista de hoy.
+Las 4 preguntas de esta medición: (1) no escribe (READ ONLY + ROLLBACK);
+(2) el código que recibe la conexión es la versión buena de main, sin
+ningún commit (git grep de commit/INSERT/UPDATE/DELETE en el servicio y en
+condicion_seguimiento: solo el comentario "ningún FOR UPDATE"), y aun así
+un commit lanzaría CommitProhibido; no hay versiones rotas en esta
+medición; (3) si se corta, nada que deshacer; (4) no toca el 8000 (no
+levanta servidor) ni escribe datos reales.
+  - M1. Tipo JSON de las tres claves en TODOS los leads (jsonb_typeof, que
+    nunca da error): m2 "number" 27; nivel_acabados "string" 27;
+    incluye_cambios_estructurales "boolean" 27. Ninguna clave ausente.
+    Leads: 27; con datos_estructurados NULL: 0.
+        SELECT COALESCE(jsonb_typeof(datos_estructurados -> %s), 'missing'),
+               count(*) FROM leads GROUP BY 1;
+  - M2. nivel_acabados fuera de ['basico', 'medio', 'alto'] (el Enum
+    NivelAcabados): 0. incluye_cambios_estructurales con tipo distinto de
+    boolean: 0. Hoy ningún lead haría fallar las conversiones (C4).
+  - M3. La lista de HOY, con el leer_listado real y las reglas leídas (24 y
+    48; dia_visitas = lunes 2026-10-12). Elementos | con algún campo del
+    resumen null | sin la clave 'contacto':
+        a) gates_sin_decision          1 | 0 | 0   (id 1522)
+        b) seguimientos_por_abrir     12 | 0 | 4   (233, 234, 243, 253, 469,
+                                                    586, 587, 1523, 1524,
+                                                    1526, 1527, 1528)
+        c) seguimientos_abiertos       0 | 0 | 0
+        d) visitas_sin_confirmar       0 | 0 | 0
+        e) visitas_proximo_laborable   0 | 0 | 0
+        TOTAL                         13 | 0 | 4
+    Los campos del resumen se midieron con las expresiones de COLUMNAS_CASO
+    (las que se van a reutilizar), una consulta por elemento SOLO en esta
+    medición. Los 4 sin 'contacto' tienen el resumen completo: la ausencia
+    de 'contacto' no afecta a los tres campos (C3).
+    (El 2026-10-07 b) tenía 8: entre tanto, cinco solicitudes reales del
+    chat de los días 4 y 7 cumplieron su plazo de 48 h.)
+  - M4. texto_cliente: 1 visita en toda la tabla ('confirmada', la de la
+    visita acordada por el Gate), 74 caracteres. Longitud máxima real: 74.
+    Ninguna visita sale en la lista de hoy (no es 'solicitada' ni es del
+    12/10).
+        SELECT estado, count(*), max(char_length(texto_cliente)) FROM visitas
+        GROUP BY estado;
+  - M5. Oportunidades por estado: nueva 8, pendiente_aprobacion 1, perdida
+    5, presupuesto_enviado 12, visita_agendada 1. TOTAL 27 (igual que en la
+    medición de la ficha, 10:18 UTC).
+  - M6. Los ids altos de M3 (1522-1528) son solicitudes REALES del chat
+    (canal 'chat_web', 4 y 7 de octubre), sin email de prueba: no son restos
+    de ningún script (verificar_ids_altos.py). Hay 3 oportunidades de
+    clientes con email @example.com (233, 234 y 236): son los datos de
+    prueba antiguos que D25.16 manda conservar. Clientes con las marcas de
+    los dos scripts del listado (http-listado-% y check-listado-svc-%): 0.
+  - M7. Puerto 8024: nadie escucha (netstat), el mismo que ya usa
+    check_listado_llamadas_http (pre-decisión 7).
+
+
+================================================================
+1. CONTRADICCIONES Y HALLAZGOS DETECTADOS ANTES DE DISEÑAR
+================================================================
+
+  C1. CLAUDE.md (y la nota del estado de 4a-1 en la sección 4 de D26)
+      dicen que la ficha está "pendiente de merge" en
+      feat/n0-ficha-oportunidad. No es cierto ya: sus commits están en main
+      (ea96f39 = origin/main) y esa rama no existe en GitHub. Se corrige en
+      el Bloque D con una nota FECHADA (los documentos de decisiones no se
+      reescriben), no cambiando el texto original.
+  C2. El plan del listado (1.5, "Lo que NO sale") y la Adenda 5.7 dicen que
+      m2, nivel_acabados y texto_cliente NO salen, con la justificación de
+      la pre-decisión 6 de aquel plan ("viaja por email"). D26.1 lo revierte
+      y D26 (sección 1.3) corrige la justificación (la razón válida es la
+      ACUMULACIÓN). En el Bloque D: nota fechada en la 1.5 del plan del
+      listado y en la Adenda 5.7; el texto original no se toca.
+  C3. El encargo agrupa "leads sin 'contacto' o con datos_estructurados
+      incompletos" como causas de null. Solo la segunda lo es: los tres
+      campos salen de claves del JSONB distintas de 'contacto' (M3: los 4
+      sin 'contacto' tienen el resumen entero). Se prueban por separado
+      (8.2, CASO 10 y CASO 19).
+  C4. ALCANCE DE UN DATO MAL FORMADO: no es el mismo en la lista que en la
+      ficha. En leads solo m2 tiene CHECK (chk_leads_m2_rango, que además
+      garantiza que el ::numeric no falla). nivel_acabados e
+      incluye_cambios_estructurales NO tienen ninguna restricción en la base
+      de datos. Si un lead tuviera "incluye_cambios_estructurales": "quizás",
+      el ::boolean de la consulta daría un error de Postgres; si tuviera
+      nivel_acabados "premium", Pydantic rechazaría el Enum. En la ficha eso
+      tumba UNA ficha; en la lista tumba la lista ENTERA del día (500 a WF3)
+      por un solo cliente. Hoy hay 0 leads así (M1, M2): el único camino de
+      escritura real es POST /leads, que valida los tipos con Pydantic. Ver
+      R1 y P5.
+  C5. ReformaAviso no se puede reutilizar tal cual como "solicitud": trae
+      tipo_reforma, que el elemento ya tiene (K4). Reutilizarla obligaría a
+      repetir tipo_reforma dentro del mismo elemento, o a quitarlo del nivel
+      del elemento (un cambio que ROMPE una clave que ya existe, sin
+      necesidad). Lo evalúa la pre-decisión 2.
+  C6. La minimización del script HTTP cambia de significado: "m2" y
+      "texto_cliente" salen de TEXTOS_PROHIBIDOS (K8). Lo que hoy prueba
+      "ningún m2 ni texto en ningún nivel" pasa a probarse con las claves
+      EXACTAS de cada nivel (texto_cliente SOLO en elementos de visita, CASO
+      2) y con la búsqueda en el texto de la respuesta de los textos de las
+      visitas canceladas (no deben salir nunca, CASO 17).
+  C7. Con todos los leads de prueba iguales (m2 6, "medio", K8), un JOIN
+      que leyera el resumen de OTRO lead (por ejemplo, el primer lead del
+      mismo cliente) daría los mismos valores y pasaría todas las pruebas.
+      Las pruebas nuevas usan valores DISTINTOS en cada caso (8.2), y N7 lo
+      demuestra.
+  C8. Pre-decisión 4 (ConexionSinCommit en la S5): no basta con añadir
+      connection_factory. Como el try de la S5 no tiene except (K7), un
+      commit() de una versión rota lanzaría CommitProhibido y el script
+      terminaría con una traza en vez de con un FALLO contado. B0 añade la
+      rama except que lo cuenta (sección 8.0).
+  C9. D26.7 hará de texto_cliente un resumen corto y filtrado del Agente 2.
+      HASTA ENTONCES, la columna admite 1.000 caracteres de texto libre, y
+      la lista lo ACUMULA (justo el riesgo de D26 sección 1.3). Hoy hay una
+      sola visita de 74 caracteres (M4) y ninguna en la lista. Este bloque
+      solo MUESTRA la columna (D26.7: decidido); se anota como R2.
+
+
+================================================================
+2. CONTRATO
+================================================================
+
+2.1 Quién lo llama y para qué
+  Sin cambios: WF3 (n8n, bloque 5, todavía no construido) cada día laborable
+  a las 9:00, con la credencial X-Gate-Secret. Lo nuevo: cada elemento dice
+  QUÉ pidió el cliente, para que administración decida si le basta o abre la
+  ficha completa (enlace que monta n8n con oportunidad_id, D26.1; no es un
+  campo del endpoint). Según el encargo, hoy NINGÚN flujo publicado de n8n
+  llama a este endpoint (WF3 no existe): el cambio de contrato no rompe nada
+  en n8n. (Dato del encargo, no comprobable desde este repositorio.)
+
+2.2 Qué NO cambia
+  Ruta, llave (X-Gate-Secret, 401 idéntico), entrada (ninguna), códigos
+  (200 / 401 / 503 / 500), orden de las comprobaciones (401 -> 503 -> 200),
+  los cinco apartados con sus condiciones, plazos y orden, el nivel raíz
+  (generado_en, dia_visitas, reglas), contacto, fechas, sin repeticiones,
+  solo lectura con sus tres barreras y el 503 sin log. Todas las claves que
+  existen hoy siguen existiendo con el mismo valor: el cambio SOLO AÑADE
+  (8.3 lo demuestra sobre los datos reales).
+
+2.3 Qué cambia, campo a campo
+  Modelo NUEVO SolicitudLlamada (app/schemas/listado_llamadas.py,
+  extra="forbid"), el MISMO para los cinco apartados:
+    m2                             Decimal | null. (l.datos_estructurados
+                                   ->> 'm2')::numeric. En el JSON viaja
+                                   como TEXTO exacto ("12.35"), igual que en
+                                   la ficha; nunca float.
+    nivel_acabados                 NivelAcabados | null ('basico', 'medio',
+                                   'alto'; el Enum de common.py).
+    incluye_cambios_estructurales  bool | null. (... ->>
+                                   'incluye_cambios_estructurales')::boolean.
+  Cada campo es null si su clave falta en el JSONB (o vale null en él):
+  nunca se inventa un valor (D4).
+
+  LlamadaOportunidad (a, b, c), una clave nueva:
+    oportunidad_id, motivo, tipo_reforma, solicitud (NUEVA), contacto,
+    fecha_presupuesto.
+  LlamadaVisita (d, e), dos claves nuevas:
+    oportunidad_id, motivo, tipo_reforma, solicitud (NUEVA), contacto,
+    estado_visita, fecha_visita, fecha_solicitud_visita, texto_cliente
+    (NUEVA).
+    texto_cliente   str (nunca null: la columna es NOT NULL con CHECK
+                    1..1000). El texto de ESA visita (la activa que justifica
+                    el elemento), tal como está en la columna: en una visita
+                    del chat, el que envió el Agente 2; en una acordada por
+                    teléfono tras el Gate, el texto fijo del sistema (P2 del
+                    plan de /gate-decisions). Sin recorte ni filtro aquí
+                    (D26.7, fuera de alcance).
+  "solicitud" va justo después de tipo_reforma (lo que pidió, junto) y
+  SIEMPRE existe como objeto (nunca null), aunque sus tres campos sean null:
+  n8n no tiene que distinguir "no hay objeto" de "no hay datos".
+
+  Ejemplo (a, b, c):
+    {"oportunidad_id": 1523, "motivo": "seguimiento_por_abrir",
+     "tipo_reforma": "bano",
+     "solicitud": {"m2": "6.5", "nivel_acabados": "medio",
+                   "incluye_cambios_estructurales": false},
+     "contacto": {...}, "fecha_presupuesto": "2026-10-04T12:00:00+02:00"}
+
+2.4 Lo que SIGUE sin salir (minimización, RGPD; D26.1)
+  email (en ningún nivel), cualquier importe (con o sin IVA), IVA, umbral,
+  motivo_gate, requiere_aprobacion, lead_token, cliente_id, lead_id,
+  presupuesto_id, visita_id, fotos, el informe del Gate, canal,
+  mensaje_original, confianza_ia, prioridad, el estado de la oportunidad,
+  los datos de la ficha de clientes, y texto_cliente en los elementos de
+  oportunidad (a, b, c) y de cualquier visita que no sea la del elemento
+  (las canceladas, en particular). Defensa doble, como hasta ahora: las
+  consultas no los leen y todos los modelos tienen extra="forbid".
+  Motivo (D26 sección 1.3): la lista ACUMULA a muchos clientes en un solo
+  mensaje; el resumen dice qué pidieron, no quiénes son ni cuánto cuesta.
+
+2.5 Pre-decisión 2: "solicitud" anidada frente a campos sueltos (Regla de Tres)
+  a) Objeto anidado "solicitud" (SolicitudLlamada, modelo NUEVO de tres
+     campos), el mismo en los cinco apartados.                 [PROPUESTA]
+     A favor: agrupa "qué pidió" y lo separa de "a quién llamar" (contacto)
+     y "por qué hoy" (motivo, fechas); un solo modelo con extra="forbid"
+     para los cinco apartados, así que la minimización se prueba con un
+     conjunto de claves para ese nivel; en n8n, una sola plantilla
+     ("{{solicitud.m2}} m², acabados {{solicitud.nivel_acabados}}") sirve
+     para las cinco listas; si mañana se añade otro dato de la solicitud,
+     el nivel del elemento no crece. Mismo patrón que contacto
+     (ContactoLlamada).
+     En contra: un nivel más de anidamiento en n8n; y una asimetría:
+     texto_cliente queda FUERA del objeto, porque es de la visita
+     (visitas.texto_cliente), no de la solicitud (leads). En contra en su
+     contexto: ninguno de memoria ni de rendimiento (son tres columnas más
+     en dos consultas que ya existen).
+  b) Tres campos sueltos en el elemento (m2, nivel_acabados,
+     incluye_cambios_estructurales al lado de tipo_reforma).
+     A favor: plano, lo más fácil de leer en una expresión de n8n.
+     En contra: el elemento pasa a 8 claves (oportunidad) y 10 (visita)
+     mezclando identidad, solicitud, contacto y fechas; los tres nombres se
+     repiten en dos modelos (LlamadaOportunidad y LlamadaVisita) en vez de
+     en uno; y un dato nuevo de la solicitud volvería a tocar los dos
+     modelos y las claves exactas de los dos.
+  c) Reutilizar ReformaAviso como "reforma" (el mismo objeto que
+     gate-avisos y la ficha).
+     A favor: la misma forma en los tres endpoints; ningún modelo nuevo.
+     En contra (C5): ReformaAviso trae tipo_reforma, que el elemento ya
+     tiene. O se repite (dos fuentes del mismo dato en un elemento, que
+     n8n podría leer de cualquiera de las dos), o se quita del elemento,
+     que ROMPE una clave existente sin necesidad. Además ataría la lista
+     diaria a un modelo del aviso del Gate: un campo nuevo de la ficha
+     (que lleva datos completos) entraría solo en la lista acumulada,
+     sin pasar por este contrato, justo lo que la minimización quiere
+     evitar.
+  Propuesta: a). Pregunta abierta P2. texto_cliente va SOLO en LlamadaVisita
+  (decidido en el encargo), como campo del elemento.
+
+2.6 Tabla de códigos
+  Sin cambios (Adenda 5.7). OJO al 500 (C4, R1): un lead con nivel_acabados
+  fuera del Enum o con incluye_cambios_estructurales no booleano daría 500
+  en TODA la lista. Hoy: 0 (M1, M2).
+
+
+================================================================
+3. CONSULTAS SQL (pre-decisión 6)
+================================================================
+
+Valores SIEMPRE como parámetros; los textos SQL son fijos del programa.
+
+SQL_OPORTUNIDADES (a, b, c): tres columnas más AL FINAL del SELECT, con las
+expresiones COMPARTIDAS (sección 4, una sola fuente):
+    SELECT o.id,
+           o.tipo_reforma,
+           l.datos_estructurados ? 'contacto',
+           l.datos_estructurados -> 'contacto' ->> 'nombre',
+           l.datos_estructurados -> 'contacto' ->> 'telefono',
+           p.created_at,
+           (l.datos_estructurados ->> 'm2')::numeric,                         -- NUEVA
+           l.datos_estructurados ->> 'nivel_acabados',                        -- NUEVA
+           (l.datos_estructurados ->> 'incluye_cambios_estructurales')::boolean -- NUEVA
+    FROM oportunidades o
+    JOIN presupuestos p ON p.oportunidad_id = o.id
+    JOIN leads l        ON l.id = o.lead_id
+    <WHERE y ORDER BY de cada apartado, SIN CAMBIOS>
+  Las tres últimas líneas NO se escriben en listado_llamadas_service: las
+  monta una función de datos_oportunidad (sección 4). Van al FINAL para
+  que el desempaquetado de las seis columnas de hoy no cambie de posición.
+
+SQL_VISITAS (d, e): las mismas tres columnas compartidas y v.texto_cliente:
+    SELECT v.oportunidad_id, o.tipo_reforma,
+           l.datos_estructurados ? 'contacto',
+           ... ->> 'nombre', ... ->> 'telefono',
+           v.estado, v.fecha_propuesta, v.created_at,
+           <las tres compartidas>,                                            -- NUEVAS
+           v.texto_cliente                                                    -- NUEVA
+    FROM visitas v
+    JOIN oportunidades o ON o.id = v.oportunidad_id
+    JOIN leads l         ON l.id = o.lead_id
+    <WHERE y ORDER BY de d) y e), SIN CAMBIOS>
+  v.texto_cliente es el de LA MISMA fila de visitas que ya filtra el WHERE
+  (solo 'solicitada' en d, 'solicitada' o 'confirmada' en e): nunca el de
+  una cancelada (CASO 17). El índice parcial de una visita activa por
+  oportunidad sigue garantizando un elemento por oportunidad.
+
+Número de órdenes por petición (K1):
+  ANTES:   8 en la transacción (SET, now(), reglas, 5 apartados) + la
+           validación del pool (SELECT 1 + rollback).
+  DESPUÉS: 8 + la validación del pool. IGUAL. leer_listado sigue enviando
+           exactamente 5, con 0, 1 o 1.000 elementos.
+  Sin JOIN nuevo (K2): las tablas leads y visitas ya están en las dos
+  consultas. Se comprueba con un cursor que cuenta las órdenes (S8) y en
+  negativo con una versión que pide el resumen elemento a elemento (N6).
+  Alternativa descartada: una consulta aparte con los resúmenes de todos
+  los oportunidad_id de la lista (WHERE o.id = ANY(...)): no es N+1 (sería
+  6 en vez de 5), pero añade un viaje al pooler (20-60 ms) y un
+  emparejamiento por id en Python, sin ninguna ventaja: los datos ya están
+  en las filas que se leen.
+  Volumen: unos 100 bytes más por elemento, más texto_cliente en las
+  visitas (hasta 1.000 caracteres hoy; unos 300 tras D26.7). Con los 13
+  elementos de hoy, irrelevante.
+
+
+================================================================
+4. UNA SOLA FUENTE DE LAS EXPRESIONES (pre-decisión 1)
+================================================================
+
+4.1 Opciones (Regla de Tres)
+  a) Subgrupo con nombre en datos_oportunidad.py.             [PROPUESTA]
+       COLUMNAS_SOLICITUD = (
+           ("m2", "(l.datos_estructurados ->> 'm2')::numeric"),
+           ("nivel_acabados", "l.datos_estructurados ->> 'nivel_acabados'"),
+           ("cambios_estructurales",
+            "(l.datos_estructurados ->> 'incluye_cambios_estructurales')::boolean"),
+       )
+       COLUMNAS_CASO = (..., *COLUMNAS_SOLICITUD, ("fotos_urls", ...), ...)
+     El "*" desempaqueta la tupla en su sitio: COLUMNAS_CASO queda con los
+     MISMOS 17 pares, en el MISMO orden (los tres textos se escriben UNA
+     vez, en COLUMNAS_SOLICITUD). Y dos funciones nuevas en el mismo
+     módulo, con el patrón de columnas_caso_sql y caso_desde_fila:
+       columnas_solicitud_sql()       las tres expresiones unidas por comas;
+       solicitud_desde_fila(valores)  los tres valores -> SolicitudLlamada
+                                      (zip strict=True: un número de valores
+                                      distinto es un error, no un
+                                      desplazamiento silencioso).
+     A favor: la dependencia queda NOMBRADA y se puede comprobar con ast
+     (el listado importa columnas_solicitud_sql de datos_oportunidad y no
+     tiene ningún texto con "->> 'm2'"); gate-avisos y la ficha no cambian
+     ni una línea (siguen usando COLUMNAS_CASO, igual que hoy).
+     En contra: toca datos_oportunidad.py, que usan gate-avisos (WF2 y el
+     formulario del Gate, PUBLICADOS) y la ficha. Coste: una demostración
+     de "sin cambios" como la de B1 de la ficha (4.2), antes del cambio de
+     contrato.
+  b) El listado busca las tres por nombre dentro de COLUMNAS_CASO
+     (dict(COLUMNAS_CASO)["m2"], ...), sin tocar datos_oportunidad.py.
+     A favor: riesgo CERO para gate-avisos y la ficha (no se toca su
+     módulo).
+     En contra: el listado depende de tres nombres INTERNOS de otro módulo
+     escritos como texto ("cambios_estructurales"); y la construcción de
+     SolicitudLlamada vive en el listado, lejos de la de ReformaAviso, así
+     que una regla común (por ejemplo, cómo se trata un null) podría
+     divergir. Un nombre mal escrito da KeyError al primer uso (ruidoso,
+     no silencioso).
+  c) Copiar las tres expresiones en listado_llamadas_service.
+     A favor: ninguna dependencia nueva. En contra: es lo que la
+     pre-decisión prohíbe: dos fuentes que pueden divergir (por ejemplo, si
+     D26.7 o una migración cambia cómo se lee m2, la lista y la ficha
+     dirían cosas distintas del mismo cliente). Descartada; es la N5.
+  Propuesta: a). Pregunta abierta P1. (Si Gabi prefiere no tocar el módulo
+  de WF2 en esta rama, b) es correcta y no necesita el paso B1.)
+
+4.2 Cómo se demuestra "sin cambios" para gate-avisos y la ficha (paso B1)
+  1. Los cuatro scripts de los dos endpoints, SIN tocarlos, antes y
+     después: check_aviso_gate_service 18/18, check_aviso_gate_http 75/75,
+     check_ficha_oportunidad_service 40/40 y check_ficha_oportunidad_http
+     69/69; "git diff --stat ea96f39 -- scripts/" vacío (se enseña).
+  2. COLUMNAS_CASO en tiempo de ejecución es IGUAL a la tupla literal de
+     main (git show ea96f39:app/services/datos_oportunidad.py, analizada
+     con ast.literal_eval sobre su asignación), y columnas_caso_sql() da el
+     mismo texto. Se enseña True / False.
+  3. ast: ninguna de las tres expresiones aparece escrita más de UNA vez
+     en todo app/ (búsqueda en las constantes de texto de cada .py); y
+     ast.dump de las funciones que ya existían en datos_oportunidad.py es
+     igual al de main.
+  4. Respuestas iguales sobre los DATOS REALES: SHA-256 de
+     model_dump_json() de obtener_aviso para los 7 casos con Gate y de
+     obtener_ficha para las 27 oportunidades, con el código de main (una
+     copia en el scratchpad) y con el de B1, en la misma transacción de
+     solo lectura (o en dos, comparando updated_at para descartar cambios
+     de n8n en medio). Imprime "7/7 iguales" y "27/27 iguales" y los
+     hashes, nunca el contenido. Las 4 preguntas: (1) no escribe (READ ONLY
+     + rollback; los dos servicios no tienen INSERT/UPDATE: git grep); (2)
+     las dos versiones son la de main y la de B1, sin commit (git grep), y
+     la conexión es ConexionSinCommit; (3) si se corta, nada que deshacer;
+     (4) ni el 8000 ni escrituras.
+  5. Prueba en negativo del paso (N8): cambiar UNA expresión de
+     COLUMNAS_SOLICITUD hace fallar a la vez la lista, gate-avisos y la
+     ficha: demuestra que la fuente es una sola.
+
+
+================================================================
+5. PRE-DECISIONES 3, 4, 5, 7 Y 8 (validadas o discutidas)
+================================================================
+
+5.1 Pre-decisión 3 (nulls): VALIDADA, con un matiz (C3, C4).
+  Los tres campos pueden ser null, cada uno por separado, como en la
+  ficha; el objeto solicitud existe siempre. Medido hoy (M3): 0 de 13
+  elementos con algún null; 0 de 27 leads con una clave ausente o de otro
+  tipo (M1). Un null nunca da 500 (CASO 19 y N10). Lo que SÍ daría 500 no
+  es un null sino un valor mal formado (C4): se documenta (R1) y P5
+  propone cómo cerrarlo más adelante.
+
+5.2 Pre-decisión 4 (ConexionSinCommit en la S5): SE ACEPTA, en un commit
+  PROPIO (B0), ANTES del cambio de contrato. Motivo para hacerlo aquí: este
+  bloque reescribe la S5 de todos modos (valores del resumen y recuento de
+  órdenes), y la regla de CLAUDE.md desde el 2026-10-08 se aplica a toda
+  prueba que pase su conexión al código; dejarla para "otra rama" otra vez
+  sería escribir la S5 nueva sobre una base que incumple la regla. Hacerlo
+  en un commit aparte (con el código del servicio SIN TOCAR) permite
+  demostrar que el arreglo del script no cambia ningún resultado: 39/39 +
+  las comprobaciones nuevas de B0. Detalle en 8.0.
+
+5.3 Pre-decisión 5 (SQL_MODO_TRANSACCION): SE QUEDA en
+  listado_llamadas_service. Regla de Tres:
+  a) Quedarse donde está (la ficha la importa del listado).  [PROPUESTA]
+     A favor: cero cambios en la ficha y en su script (la S3 de
+     check_ficha_oportunidad_service comprueba que se importa "de
+     app.services.listado_llamadas_service", K5); un solo texto, sin
+     copias. En contra: la ficha depende del módulo del listado por una
+     constante que no es "del listado".
+  b) Moverla a un módulo común (por ejemplo app/services/solo_lectura.py)
+     y que el listado y la ficha la importen de allí. A favor: el nombre
+     del módulo dice lo que es. En contra: toca la ficha (recién
+     integrada) y su script (la comprobación de K5 fallaría), más una
+     demostración de "sin cambios" de los dos, en una rama que no lo
+     necesita.
+  c) Moverla y dejar en el listado una re-exportación para que la ficha
+     no cambie. En contra: dos nombres para lo mismo, y la comprobación
+     de K5 seguiría pasando aunque la constante ya no fuera "del listado":
+     la prueba dejaría de decir la verdad.
+  Propuesta: a). Se moverá cuando aparezca un TERCER lector (Regla de
+  Tres en sentido literal: con dos usos, la extracción no compensa).
+  Pregunta abierta P6.
+
+5.4 Pre-decisión 7 (puerto 8024): VALIDADA (M7).
+
+5.5 Pre-decisión 8 (fuera de alcance): VALIDADA; sección 10.
+
+
+================================================================
+6. ARCHIVOS
+================================================================
+
+  Paso B0 (solo el script; el servicio no se toca):
+    scripts/check_listado_llamadas_service.py   S0 (autoprueba de
+                                                ConexionSinCommit) y S5
+                                                con connection_factory,
+                                                except CommitProhibido y
+                                                la comprobación de clase
+                                                (8.0).
+  Paso B1 (solo si se aprueba P1 = a; sin cambios de comportamiento):
+    app/services/datos_oportunidad.py           COLUMNAS_SOLICITUD,
+                                                columnas_solicitud_sql() y
+                                                solicitud_desde_fila()
+                                                (4.1). COLUMNAS_CASO, el
+                                                mismo contenido.
+    app/schemas/listado_llamadas.py             SolicitudLlamada (la
+                                                necesita
+                                                solicitud_desde_fila; nadie
+                                                la usa todavía).
+  Paso B2 (el cambio de contrato):
+    app/schemas/listado_llamadas.py             solicitud en
+                                                LlamadaOportunidad y
+                                                LlamadaVisita; texto_cliente
+                                                en LlamadaVisita; docstring
+                                                de minimización al día.
+    app/services/listado_llamadas_service.py    las columnas nuevas en
+                                                SQL_OPORTUNIDADES y
+                                                SQL_VISITAS (montadas con
+                                                columnas_solicitud_sql) y el
+                                                desempaquetado en
+                                                _llamadas_oportunidad y
+                                                _llamadas_visita.
+  NO cambian: app/api/listado_llamadas.py (el router no sabe nada del
+  contenido), app/main.py, aviso_gate_service, ficha_oportunidad_service,
+  sus esquemas y sus scripts. Sin migración: el esquema no cambia;
+  docs/schema_actual.sql no se regenera.
+  Bloque C: scripts/check_listado_llamadas_service.py y
+  scripts/check_listado_llamadas_http.py (8.1, 8.2).
+  Bloque D: Adenda 5.7 (nota fechada: contrato nuevo y "lo que no sale"),
+  nota fechada en la 1.5 del plan del listado, CLAUDE.md, nota fechada en la
+  sección 4 de D26 (estado de 4a-2 y corrección de C1) y este plan.
+  Ningún secreto se imprime: los scripts solo usan los valores en las
+  cabeceras.
+
+
+================================================================
+7. RELACIÓN CON D26.7 (texto_cliente)
+================================================================
+
+  Este bloque muestra visitas.texto_cliente tal cual (decidido). Cuando
+  D26.7 limite la longitud (unos 300) y filtre emails y teléfonos, la lista
+  lo heredará sin cambiar su código: lee la columna. Dos avisos para ese
+  plan: (1) hasta entonces, la lista diaria puede acumular textos libres de
+  hasta 1.000 caracteres (R2); (2) la migración de D26.7 que baje el CHECK a
+  unos 300 fallará si hay filas más largas (hoy la más larga tiene 74, M4),
+  y la copia en logs.detalle (R10 del plan de la ficha) sigue sin limpiarse
+  sola.
+
+
+================================================================
+8. PRUEBAS
+================================================================
+
+Regla para todas: un script que espera una excepción marca FALLO explícito
+en la rama else ("la excepción se ha tragado"). Las pruebas en negativo, de
+una en una, sobre copias en el scratchpad, con Docker/n8n y el navegador
+CERRADOS (se le pedirá a Gabi) y comprobando Kernel-Power 506/507 en su
+intervalo (lección del 2026-10-10).
+
+8.0 Paso B0: ConexionSinCommit en check_listado_llamadas_service (antes del
+    cambio de contrato; el servicio sin tocar)
+  S0. NUEVA. Autoprueba: una conexión con
+      connection_factory=ConexionSinCommit; commit() tiene que lanzar
+      CommitProhibido; rama else -> FALLO "la excepción se ha tragado".
+  S5. La conexión propia se abre con connection_factory=ConexionSinCommit,
+      y una comprobación nueva exige isinstance(cn, ConexionSinCommit) (que
+      la defensa está en LA conexión que recibe el código, no solo en la de
+      S0). El try gana una rama except CommitProhibido que lo cuenta como
+      FALLO ("leer_listado llamó a commit()") y deja que el finally haga el
+      ROLLBACK; la comprobación "no queda ningún dato propio" se mantiene.
+  Resultado previsto con el servicio de main: 39/39 + 2 = 41/41 (S0 y la
+  de la clase). Las 4 preguntas de la S5 (con B0):
+    (1) Escribe en tablas reales DENTRO de una transacción: un cliente con
+        check-listado-svc-<8>@example.com, su lead, seis oportunidades,
+        cuatro presupuestos y dos visitas, todas propias. Nada se confirma.
+    (2) El código recibe el cursor de una ConexionSinCommit: si
+        leer_listado (o una versión rota) llama a commit(), sale
+        CommitProhibido, se cuenta como FALLO y el ROLLBACK deshace todo.
+        Si la cerrara (cursor.connection.close()), el ROLLBACK del finally
+        daría InterfaceError y el script terminaría con traza (código 1),
+        pero Postgres deshace la transacción de una conexión cerrada: no
+        queda nada. No puede reutilizarla fuera (no se la guarda nadie).
+    (3) Si se corta a mitad: la transacción muere con la conexión y no
+        queda nada; la última comprobación de la siguiente ejecución
+        cuenta 0 clientes con la marca.
+    (4) No toca el 8000 (sin servidor) ni ninguna fila ajena (solo
+        INSERT de filas propias; leer_listado lee las ajenas, que es
+        lectura).
+  Pruebas en negativo de B0:
+    N-B0a. Copia del SERVICIO cuyo leer_listado llama a
+       cursor.connection.commit() al empezar, con el script de B0:
+       FALLO "leer_listado llamó a commit()" y 0 restos. Previsto 33/34:
+       las 8 comprobaciones de la S5 posteriores a leer_listado no llegan a
+       ejecutarse (el total baja de 41 a 34) y se cuenta 1 FALLO. La S6 y
+       la S7 no llaman a esa función rota (espía y 503 antes de leer).
+       Las 4 preguntas: (1) igual que la S5; (2) la versión rota llama a
+       commit() sobre la ConexionSinCommit: lanza, no confirma; (3) igual;
+       (4) igual. NO se ejecuta el script de main contra esta copia: ese
+       commit SÍ confirmaría las filas propias en tablas reales (el
+       incidente de la N12 de create-followup-task, 2026-10-08), y
+       demostraría lo que ya se sabe.
+    N-B0b. Copia del SCRIPT con la S5 abierta sin connection_factory (el
+       de main, con S0 y la comprobación de clase): previsto 40/41, falla
+       "la conexión de la S5 es ConexionSinCommit". Se ejecuta con el
+       servicio BUENO (que no llama a commit): no escribe nada fuera de la
+       transacción.
+
+8.1 Bloque C: scripts/check_listado_llamadas_service.py (sin servidor)
+  Se mantienen S0-S7 (con B0). Cambian o se añaden:
+  S4b. NUEVA. solicitud_desde_fila (pura): (Decimal("12.35"), "alto", True)
+       -> sus tres valores, m2 de tipo Decimal; (None, None, None) -> tres
+       None sin excepción; dos o cuatro valores -> ValueError (strict),
+       rama else -> FALLO.
+  S5.  Ampliada. Dentro de la misma transacción con ROLLBACK, un segundo
+       lead propio con valores DISTINTOS (m2 12.35, "alto", true) y un
+       tercero SIN las tres claves (m2 ausente: el CHECK lo admite, C3).
+       Para cada elemento PROPIO de los cinco apartados: solicitud igual
+       a la de SU lead (m2 como Decimal exacto); el del lead sin claves,
+       tres None y ningún error; texto_cliente de cada visita propia de
+       d) y e) igual al insertado (textos distintos por visita).
+  S8.  NUEVA. Recuento de órdenes: la S5 abre su cursor con un
+       cursor_factory que cuenta las llamadas a execute; leer_listado
+       tiene que enviar EXACTAMENTE 5, con todos los elementos propios y
+       reales de la lista (se imprime cuántos elementos había). Además,
+       ninguna orden de las 5 contiene "WHERE o.id = %s" ni similar por
+       elemento (se imprimen los 5 textos normalizados, solo su
+       comienzo).
+  S9.  NUEVA. Reutilización sin copia (ast, se enseña la salida):
+       listado_llamadas_service.py importa columnas_solicitud_sql y
+       solicitud_desde_fila de app.services.datos_oportunidad; ninguna
+       constante de texto del listado contiene "->> 'm2'",
+       "'nivel_acabados'" ni "'incluye_cambios_estructurales'"; en todo
+       app/ cada una de las tres expresiones aparece escrita UNA sola vez;
+       ninguno de los archivos tocados importa fastapi ni fastmcp.
+  Las 4 preguntas de la S5 ampliada: las de 8.0, con más filas propias
+  (dos leads más); nada cambia en las respuestas.
+
+8.2 Bloque C: scripts/check_listado_llamadas_http.py (HTTP real, 8024)
+  Mismo esquema de hoy (uvicorn.Server en un hilo, SIN --reload, puerto
+  8024; si está ocupado, se para y avisa; foto de lo ajeno con id_base;
+  limpieza solo de lo propio). Cambios:
+  - Claves EXACTAS (copiadas de ESTE plan, 2.3, no del código):
+      CLAVES_OPORTUNIDAD = {oportunidad_id, motivo, tipo_reforma,
+        solicitud, contacto, fecha_presupuesto}
+      CLAVES_VISITA = {oportunidad_id, motivo, tipo_reforma, solicitud,
+        contacto, estado_visita, fecha_visita, fecha_solicitud_visita,
+        texto_cliente}
+      CLAVES_SOLICITUD = {m2, nivel_acabados,
+        incluye_cambios_estructurales}
+    TEXTOS_PROHIBIDOS sin "m2" ni "texto_cliente" (C6); el resto igual
+    (email, importe, iva, umbral, ids, fotos, informe,
+    estado_oportunidad), más "motivo_gate" y "requiere_aprobacion".
+  - Valores DISTINTOS por caso (C7): lead_http recibe m2, nivel_acabados
+    e incluye_cambios_estructurales; cada caso propio usa un m2 propio con
+    decimales (por ejemplo 6.25, 7.5, 12.35...) y alterna los niveles. Los
+    casos con Gate siguen siendo los de cambios estructurales (así se
+    provoca el Gate), y además se varía m2 y el nivel. Cada visita propia
+    lleva un texto_cliente propio con la marca RUN.
+  Casos nuevos o ampliados (se mantienen los CASOS 1-17 de hoy, con su
+  numeración, ampliados donde se indica):
+  CASO 2 (ampliado) Forma y minimización: claves exactas en los cinco
+          apartados y en cada solicitud; ninguna clave prohibida en ningún
+          nivel; ningún email propio ni importe propio en el texto de la
+          respuesta (como hoy).
+  CASO 18 NUEVO. Valores del resumen en los CINCO apartados: para cada
+          elemento propio (G-dentro en a; S-dentro, B2, OP_L y los de orden
+          en b; C en c; D1, D2 y D-pasada en d; los E-* de e), solicitud
+          igual a lo que se envió para SU lead; m2 es un TEXTO del JSON
+          (isinstance str) e igual a str(Decimal(enviado)) ("12.35", no
+          12.35 ni "12.349999"); nivel_acabados y
+          incluye_cambios_estructurales, los enviados. En d) y e),
+          texto_cliente igual al enviado o insertado (en D_GATE_CONF, si
+          saliera en e, el texto fijo leído por SQL de su visita).
+  CASO 19 NUEVO. Nulls: un lead propio por SQL SIN las tres claves (con
+          'contacto'), con presupuesto propio por SQL de hace 49 h, sin
+          Gate, en 'presupuesto_enviado': sale en b) con solicitud =
+          {m2: null, nivel_acabados: null,
+          incluye_cambios_estructurales: null}, objeto presente, 200 y
+          ningún 500. Y el lead SIN 'contacto' de hoy (OP_L): contacto
+          no_disponible y solicitud COMPLETA (C3).
+  CASO 10 (ampliado) Mismo email, otro lead: B1 y B2 con m2 y nivel
+          DISTINTOS; B2 en b) trae SU solicitud, no la de B1 (como el
+          contacto). Es el caso que ve N7.
+  CASO 17 (ampliado) Ningún texto de visita ajeno al elemento: los
+          textos de las visitas 'cancelada' (S-cancelada y E-cancelada)
+          NO aparecen en el texto de la respuesta; el de cada visita
+          activa propia aparece EXACTAMENTE una vez; y ningún elemento de
+          a), b) o c) tiene la clave texto_cliente (lo dice ya el CASO 2,
+          se repite con su propio título para que N4 sea legible).
+  CASO 20 NUEVO. texto_cliente largo y con caracteres especiales: una
+          visita propia de e) insertada por SQL con 1.000 caracteres
+          EXACTOS (el máximo del CHECK) que incluyen tildes, eñe, comillas
+          dobles y un salto de línea: llega idéntico (comparación exacta
+          y len = 1000).
+  CASO 15 (ajuste) La repetición compara también solicitud y
+          texto_cliente de los elementos propios.
+  Las 4 preguntas (para todo el script; cambia solo lo nuevo):
+    (1) Escribe en tablas reales: SOLO filas propias (clientes con la
+        marca http-listado-<8>@example.com y lo que cuelga de ellos), por
+        los endpoints y por SQL, con commit. Nuevo: el lead sin claves y
+        su presupuesto por SQL (CASO 19) y la visita de 1.000 caracteres
+        (CASO 20), los dos propios. Nunca reglas_negocio, tarifas_base ni
+        umbrales_gate.
+    (2) El código bajo prueba es el servidor: usa su propio pool, no
+        recibe ninguna conexión del script. Las versiones rotas de 8.4
+        solo cambian lo que se LEE (ninguna escribe), así que no pueden
+        confirmar nada del script; las que provocan 500 (N10) dejan logs
+        del manejador global sin marca: el script los lista (id > id_base,
+        ruta /llamadas-del-dia) y los borra por id exacto tras comprobar
+        que son los esperados (regla de CLAUDE.md, como N2b del listado).
+    (3) Si se corta a mitad: quedan filas propias con la marca, que borra
+        limpiar() al empezar la siguiente ejecución (la comprobación final
+        cuenta 0). Los logs de un 500 se anotan con su id en la salida al
+        aparecer, para borrarlos a mano por id exacto si el script no
+        llega al final.
+    (4) No toca el uvicorn del 8000 (puerto 8024). Datos reales: la lista
+        los incluye (es lo que devuelve), pero las comprobaciones de
+        valores miran SOLO elementos propios; de los ajenos solo se exige
+        la forma (claves exactas) y la minimización.
+  Recuento: se conocerá al escribirlo (hoy 88; previsto unos 120).
+
+8.3 Regresión y compatibilidad
+  - Tras B1: 4.2 entera (los cuatro scripts de gate-avisos y la ficha SIN
+    tocar, COLUMNAS_CASO igual, huellas 7/7 y 27/27).
+  - Tras B2: prueba mínima por HTTP real en el 8024 (200 con un caso
+    propio en cada tipo de elemento y sus claves nuevas, 401 con el valor
+    de WEBHOOK_SECRET, 503 con clave falsa en memoria).
+  - Compatibilidad sobre los DATOS REALES (solo lectura, script en el
+    scratchpad): en UNA transacción READ ONLY y con el MISMO "ahora",
+    leer_listado de main (copia en el scratchpad) y el de B2: quitando
+    "solicitud" y "texto_cliente" de la respuesta nueva, las dos son
+    IGUALES (mismo JSON, mismo orden). Demuestra que el cambio solo
+    añade. Las 4 preguntas: (1) no escribe (READ ONLY + rollback); (2)
+    las dos versiones sin commit (git grep), con ConexionSinCommit; (3)
+    nada que deshacer; (4) ni el 8000 ni escrituras.
+  - Bloque C: los dos scripts actualizados; check_ficha_oportunidad_service
+    (40/40), check_ficha_oportunidad_http (69/69), check_aviso_gate_service
+    (18/18) y check_aviso_gate_http (75/75), porque comparten
+    datos_oportunidad; check_followup_tasks_http (125/125) y
+    check_followup_service (34/34), porque comparten
+    condicion_seguimiento con el apartado b); y la suite completa con la
+    regla de uso de CLAUDE.md (Docker/n8n y el navegador CERRADOS,
+    enchufado, tapa abierta, mover el ratón en las tandas largas, hora de
+    inicio y fin, Kernel-Power 506/507 al terminar: si los hay, la pasada
+    no vale). Siguen siendo 41 scripts (ninguno nuevo). check_graceful_shutdown
+    y check_mcp_connection desde copias con otro puerto; uvicorn propio
+    detenido por su PID. La salida de los cinco scripts de P4 se revisa a
+    mano. Nunca "N/N" si no sale en una sola pasada.
+
+8.4 Pruebas en negativo (sobre COPIAS en el scratchpad, una por prueba y
+    DE UNA EN UNA, con su .env, borradas al terminar; el código real no
+    cambia: git diff vacío al terminar). Cada una da un resultado EXACTO
+    con la lista de lo que falla, que se escribe en este plan y en el
+    commit del Bloque C. Lo de abajo es la PREVISIÓN ("al menos"), no el
+    criterio de aceptación. Formato: servicio | HTTP.
+  N1.  m2 como float (SolicitudLlamada.m2: float, o float(...) en
+       solicitud_desde_fila): servicio, S4b y S5 (m2 no es Decimal); HTTP,
+       CASO 18 (m2 sale como número en el JSON, no como texto). Al menos
+       2 | 1.
+  N2.  Email en el resumen (contacto ->> 'email' añadido a las columnas y
+       "email" a SolicitudLlamada): HTTP, CASO 2 (claves exactas de
+       solicitud, clave prohibida "email", email propio en el texto). Al
+       menos 0 | 3.
+  N3.  Un importe en el resumen (p.importe_min_con_iva en SQL_OPORTUNIDADES
+       y el campo en SolicitudLlamada; en las visitas, null): HTTP, CASO 2
+       (claves exactas, "importe" prohibida, importe propio en el texto).
+       Al menos 0 | 3.
+  N4.  texto_cliente en los elementos de oportunidad (subconsulta con el
+       texto de la ÚLTIMA visita de la oportunidad, también cancelada, y
+       el campo en LlamadaOportunidad): HTTP, CASO 2 (claves exactas de
+       a, b, c) y CASO 17 (el texto de S-cancelada aparece). Al menos
+       0 | 2.
+  N5.  Expresiones COPIADAS en listado_llamadas_service (el mismo texto,
+       sin importar de datos_oportunidad): MUTANTE EQUIVALENTE en
+       comportamiento. Servicio, solo S9 (ast); HTTP sin cambios
+       (previsto: el total). Demuestra por qué existe S9: ninguna prueba
+       de comportamiento puede ver una copia idéntica.
+  N6.  Una consulta por elemento (N+1: el resumen leído con un SELECT por
+       oportunidad_id dentro de _llamadas_oportunidad y _llamadas_visita):
+       servicio, S8 (más de 5 órdenes; se imprime cuántas); HTTP sin
+       cambios (mismos datos). Al menos 1 | 0.
+  N7.  Resumen del PRIMER lead del cliente (no del de la oportunidad), el
+       análogo de la N7 del listado para el contacto: HTTP, CASO 10 (B2
+       trae el m2 de B1). Con datos iguales en todos los leads (C7) no se
+       vería: es la prueba de que los valores distintos hacen falta. Al
+       menos 0 | 1.
+  N8.  Una expresión COMPARTIDA cambiada (en COLUMNAS_SOLICITUD,
+       "NOT (...)::boolean" en los cambios estructurales): fallan a la vez
+       el listado (S5, CASO 18), la ficha (sus casos de reforma) y
+       gate-avisos (los suyos). Demuestra que la fuente es una sola (como
+       N4 de la ficha con a_madrid). Al menos 1 | 1, más los de la ficha y
+       gate-avisos.
+  N9.  texto_cliente en d) y e) leído de OTRA visita de la oportunidad (la
+       más antigua, también cancelada, en vez de v.texto_cliente): HTTP,
+       CASO 18 en la visita de E que tenga una cancelada anterior
+       (preparación: E-sustituida, una oportunidad con una visita
+       cancelada y otra activa, de textos distintos) y CASO 17. Al menos
+       0 | 2. (La preparación de E-sustituida se añade a 8.2 si se
+       aprueba N9.)
+  N10. Nulls que revientan (SolicitudLlamada con los tres campos
+       obligatorios, sin "| None"): servicio, S4b (tres None) y S5 (lead
+       sin claves: ValidationError); HTTP, CASO 19 y "ningún 500" (CASO
+       16), y en cascada todo lo que necesita el 200 (la lista ENTERA cae
+       por un solo lead: es C4 hecho visible). Los logs del manejador
+       global de esos 500 se borran por id exacto tras comprobarlos.
+  N-B0a y N-B0b: sección 8.0.
+  (No se propone una negativa "sin extra='forbid'": quitarlo no cambia
+  nada observable mientras las consultas no lean más; lo cubren N2 y N3,
+  que añaden el campo al esquema Y a la consulta.)
+
+
+================================================================
+9. RIESGOS
+================================================================
+
+  R1. Un solo lead mal formado tumba la lista ENTERA (C4): 500 a WF3 y
+      ninguna llamada ese día. Hoy 0 (M1, M2); el único camino real de
+      escritura (POST /leads) valida tipos. Mitigación propuesta (P5,
+      fuera de este bloque): dos CHECK en leads como el de m2 (defensa
+      doble), o expresiones tolerantes en COLUMNAS_SOLICITUD. Hasta
+      entonces, documentado en la Adenda 5.7.
+  R2. texto_cliente sin límite corto ni filtro hasta D26.7 (C9): la lista
+      acumulada puede llevar texto libre de hasta 1.000 caracteres por
+      visita, con lo que el cliente o el agente hayan escrito. Hoy: una
+      visita de 74 caracteres, ninguna en la lista (M4).
+  R3. B1 toca datos_oportunidad, que usan WF2 y el formulario del Gate
+      PUBLICADOS. Mitigación: paso propio con su [PARA] y la demostración
+      de 4.2 antes de cambiar el contrato; o P1 = b) (no tocar el módulo).
+  R4. La lista crece por elemento (unos 100 bytes más, y el texto en las
+      visitas). Con 13 elementos hoy, irrelevante; anotado con R2 del plan
+      del listado (sin paginación).
+  R5. El email de WF3 (bloque 5) decidirá cómo pinta un resumen con nulls
+      ("m² no indicados"): si no lo hace, n8n escribiría "null". Fuera de
+      alcance; se anota para el plan de WF3.
+  R6. B0 cambia un script que está en main y en la suite: si B0 rompiera
+      algo, la suite lo vería. Mitigación: commit propio, 41/41 con el
+      servicio SIN tocar antes de seguir.
+
+
+================================================================
+10. FUERA DE ALCANCE (pre-decisión 8 y otros)
+================================================================
+
+  - WF3 en n8n y su email (bloque 5); cómo junta d) y e) en un bloque
+    "Visitas" (D26.3) y cómo pinta los nulls (R5).
+  - El enlace a la ficha: lo monta n8n con oportunidad_id (D26.1).
+  - D26.7: límite y filtro de texto_cliente, su migración, el prompt del
+    Agente 2 y la copia en logs.detalle.
+  - El registro del resultado de todas las llamadas y el formulario
+    ampliado (4b).
+  - La búsqueda de clientes (D26.5).
+  - Los CHECK de nivel_acabados e incluye_cambios_estructurales en leads
+    (P5, R1).
+  - Mover SQL_MODO_TRANSACCION a un módulo común (5.3, P6).
+  - Una ConexionSinCommit compartida entre scripts (hoy copiada en dos;
+    B0 añade la tercera copia, con el mismo patrón; ver P7).
+  - Reutilizar EstadoOportunidad y EstadoVisita en los demás servicios.
+
+
+================================================================
+11. PREGUNTAS ABIERTAS (con propuesta)
+================================================================
+
+  P1.  Una sola fuente (pre-decisión 1): opción a), COLUMNAS_SOLICITUD en
+       datos_oportunidad.py con el paso B1 y su demostración (4.2). ¿O b),
+       buscar por nombre en COLUMNAS_CASO sin tocar el módulo de WF2?
+  P2.  Forma (pre-decisión 2): opción a), objeto "solicitud"
+       (SolicitudLlamada nuevo, tres campos), después de tipo_reforma;
+       texto_cliente como campo de LlamadaVisita, al final.
+  P3.  Nombre del objeto: "solicitud" (la palabra de D26.1) y no "reforma"
+       (la de la ficha), porque no es el mismo objeto (no lleva
+       tipo_reforma).
+  P4.  B0 (pre-decisión 4) en un commit propio antes del contrato, con
+       N-B0a y N-B0b, y SIN ejecutar el script de main contra la copia que
+       hace commit (8.0).
+  P5.  R1: ¿se acepta para N0 como limitación documentada? Propuesta: sí,
+       con una nota en la Adenda 5.7 y una tarea anotada en CLAUDE.md
+       (migración con dos CHECK en leads, expand-contract no aplica porque
+       solo AÑADE). La alternativa de expresiones tolerantes (CASE
+       jsonb_typeof ...) cambiaría también la ficha y gate-avisos, y
+       escondería el dato malo en vez de impedirlo.
+  P6.  SQL_MODO_TRANSACCION se queda en listado_llamadas_service (5.3).
+  P7.  ConexionSinCommit: tercera copia en el script (como las dos
+       existentes) y no un módulo compartido de scripts, que sería otra
+       rama.
+  P8.  N9 (texto de otra visita): ¿se añade, con su caso E-sustituida? La
+       consulta lee v.texto_cliente de la misma fila filtrada, así que el
+       fallo es poco probable; la propuesta es SÍ, porque la preparación
+       cuesta una oportunidad y protege la minimización de las canceladas.
+  P9.  CASO 20 (1.000 caracteres): se propone mantenerlo aunque D26.7 baje
+       el límite: ese día el CASO cambiará con la migración, y mientras
+       tanto prueba el máximo real de la columna.
+  P10. Pruebas en negativo de B1 además de N8: ninguna más; las
+       comprobaciones 1-4 de 4.2 son las mismas que ya validó la N13 de la
+       ficha.
+
+
+================================================================
+12. BLOQUES
+================================================================
+
+  A.  Este plan (sin código). [PARA]
+  B0. ConexionSinCommit en la S5 de check_listado_llamadas_service (solo el
+      script): 41/41 con el servicio de main, N-B0a y N-B0b. Commit
+      propio. [PARA]
+  B1. (Si P1 = a) COLUMNAS_SOLICITUD, columnas_solicitud_sql,
+      solicitud_desde_fila y SolicitudLlamada, SIN cambios de
+      comportamiento: demostración de 4.2 (cuatro scripts sin tocar,
+      COLUMNAS_CASO igual, ast, huellas 7/7 y 27/27). [PARA]
+  B2. El cambio de contrato (esquema y servicio del listado), con la prueba
+      mínima por HTTP real en el 8024 y la compatibilidad sobre los datos
+      reales (8.3). [PARA]
+  C.  Pruebas completas (8.1, 8.2), pruebas en negativo N1-N10 de una en
+      una con sus resultados EXACTOS en 8.4 (comprobando Kernel-Power
+      506/507 en su intervalo), regresión y suite completa con la regla de
+      uso. [PARA]
+  D.  Documentación: Adenda 5.7 (nota fechada con el contrato nuevo, lo que
+      sigue sin salir, R1 y R2 como limitaciones), nota fechada en la 1.5
+      del plan del listado (C2), CLAUDE.md (estado de 4a-2, corrección de
+      C1, la tarea de P5 y el pendiente de la S5 resuelto), nota fechada en
+      la sección 4 de D26 (estado de 4a-2 y C1) y este plan con los
+      hashes. [PARA]
+  Cada bloque, un commit con los recuentos reales y el SHA-256 de cada
+  script del scratchpad que dé un recuento, y git push. Todo el código,
+  scripts incluidos, comentado línea a línea o en grupos de 2-4 líneas
+  (también dentro de las funciones auxiliares de los scripts), con "# SQL"
+  encima de cada execute; antes de cada commit se mide el número de
+  sentencias en tramos de más de 4 sin comentario y se pone en el mensaje.
+  Nada de merge a main sin la confirmación explícita de Gabi, después de la
+  revisión del tutor, y siempre con --ff-only.
