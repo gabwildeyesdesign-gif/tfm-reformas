@@ -150,6 +150,32 @@ class EstadoOportunidad(str, Enum):
     PERDIDA = "perdida"
 
 
+class EstadoVisita(str, Enum):
+    """
+    Estados posibles de una visita (columna visitas.estado).
+
+    Copiados del CHECK real visitas_estado_check (docs/schema_actual.sql),
+    en el mismo orden. Mismo criterio que EstadoOportunidad: si aquí
+    faltara un valor que la base de datos admite, leer una visita en ese
+    estado daría un 500.
+
+    Se añadió el 2026-10-10 para la ficha (GET
+    /oportunidades/{id}/ficha, P10 de docs/Plan_Endpoint_Ficha_Oportunidad.txt),
+    que devuelve TODAS las visitas. No sustituye a EstadoVisitaListado
+    (app/schemas/listado_llamadas.py), que tiene solo las dos activas a
+    propósito.
+    """
+
+    # Pedida por el cliente desde el chat (POST /visits).
+    SOLICITADA = "solicitada"
+    # Acordada por teléfono con administración (POST /gate-decisions).
+    CONFIRMADA = "confirmada"
+    # Hecha. En N0 se escribe a mano.
+    COMPLETADA = "completada"
+    # Sustituida por otra visita del mismo cliente.
+    CANCELADA = "cancelada"
+
+
 # Número máximo de fotos que se aceptan en un lead.
 #
 # PROVISIONAL — PENDIENTE (limitación documentada en

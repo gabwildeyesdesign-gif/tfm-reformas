@@ -27,6 +27,10 @@ from psycopg2.extras import Json
 # lectura (plan docs/Plan_Endpoint_Aviso_Gate.txt).
 from app.api import aviso_gate as aviso_gate_api
 from app.api import estimates as estimates_api
+# Router de GET /oportunidades/{oportunidad_id}/ficha: la ficha completa de
+# cualquier oportunidad, solo lectura (desde el 2026-10-10, el octavo; plan
+# docs/Plan_Endpoint_Ficha_Oportunidad.txt).
+from app.api import ficha_oportunidad as ficha_oportunidad_api
 # Router de POST /create-followup-task: abre el seguimiento de 48 h (desde
 # el 2026-10-08, el séptimo; plan docs/Plan_Endpoint_Create_Followup_Task.txt).
 from app.api import followup_tasks as followup_tasks_api
@@ -144,6 +148,13 @@ app.include_router(listado_llamadas_api.router)
 # 'seguimiento_pendiente'. Usa la llave del Gate (X-Gate-Secret): cambia
 # el estado de una oportunidad y es una herramienta de administración.
 app.include_router(followup_tasks_api.router)
+
+# Octavo router: GET /oportunidades/{oportunidad_id}/ficha
+# (app/api/ficha_oportunidad.py). Solo REST, sin tool MCP, y de SOLO
+# LECTURA: la abre administración antes de llamar a un cliente, con o sin
+# Gate (D26.2). La llave del Gate (X-Gate-Secret) va en el propio router,
+# para todas sus rutas: devuelve email, importes e informes.
+app.include_router(ficha_oportunidad_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna
