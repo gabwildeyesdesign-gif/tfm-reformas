@@ -28,6 +28,16 @@ minutos menos, aplicado al final de la preparación (ver allí por qué). El lí
 
 Marca propia: emails http-listado-<8 caracteres>@example.com (dominio
 reservado), tokens uuid4. El valor de los secretos NUNCA se imprime.
+
+(Ampliado el 2026-10-10: resumen de la solicitud, D26.1; plan
+docs/Plan_Resumen_Lista_Diaria.txt, 8.2.) Cada elemento lleva el objeto
+"solicitud" (m2, nivel_acabados, incluye_cambios_estructurales) y los de
+visita, texto_cliente. Cada lead propio usa un m2 y un nivel DISTINTOS y
+cada visita propia un texto propio con la marca RUN, para que leer el dato
+de otro lead u otra visita no pase desapercibido. CASOS nuevos: 18 (valores
+del resumen en los cinco apartados), 19 (nulls), 20 (texto de 1.000
+caracteres) y 21 (ningún texto de visita ajeno al elemento). Los números son
+identificadores, no el orden de salida: 18-21 se ejecutan antes del 16.
 """
 
 # ----------------------------------------------------------------------
@@ -91,25 +101,32 @@ PATRON_EMAIL = "http-listado-%@example.com"
 # Zona de Madrid y una marca corta de esta ejecución (para nombres únicos).
 MADRID = ZoneInfo("Europe/Madrid")
 RUN = uuid.uuid4().hex[:6]
-# Las claves EXACTAS de cada nivel, copiadas del PLAN (1.5), no del código.
+# Las claves EXACTAS de cada nivel, copiadas del PLAN (1.5 del plan del
+# listado; las de los elementos, de la 2.3 del plan del resumen), no del código.
 CLAVES_RAIZ = {"generado_en", "dia_visitas", "reglas", "gates_sin_decision", "seguimientos_por_abrir",
                "seguimientos_abiertos", "visitas_sin_confirmar", "visitas_proximo_laborable"}
 # Las de reglas y las de cada elemento de a), b) y c).
 CLAVES_REGLAS = {"horas_recordatorio_gate", "horas_seguimiento_presupuesto"}
-CLAVES_OPORTUNIDAD = {"oportunidad_id", "motivo", "tipo_reforma", "contacto", "fecha_presupuesto"}
-# Las de cada elemento de d) y e), y las del contacto (sin email).
-CLAVES_VISITA = {"oportunidad_id", "motivo", "tipo_reforma", "contacto", "estado_visita",
-                 "fecha_visita", "fecha_solicitud_visita"}
+CLAVES_OPORTUNIDAD = {"oportunidad_id", "motivo", "tipo_reforma", "solicitud", "contacto", "fecha_presupuesto"}
+# Las de cada elemento de d) y e) (texto_cliente SOLO aquí), y las del
+# contacto (sin email).
+CLAVES_VISITA = {"oportunidad_id", "motivo", "tipo_reforma", "solicitud", "contacto", "estado_visita",
+                 "fecha_visita", "fecha_solicitud_visita", "texto_cliente"}
 CLAVES_CONTACTO = {"nombre", "telefono", "origen"}
+# Las del objeto "solicitud", el mismo en los cinco apartados.
+CLAVES_SOLICITUD = {"m2", "nivel_acabados", "incluye_cambios_estructurales"}
 # Apartados de oportunidades y de visitas, con su motivo esperado.
 APARTADOS_OP = {"gates_sin_decision": "gate_sin_decision", "seguimientos_por_abrir": "seguimiento_por_abrir",
                 "seguimientos_abiertos": "seguimiento_abierto"}
 APARTADOS_VI = {"visitas_sin_confirmar": "visita_sin_confirmar",
                 "visitas_proximo_laborable": "visita_proximo_laborable"}
 # Lo que NO debe salir nunca, en ningún nivel (plan, 1.5): claves que
-# contengan alguno de estos textos.
+# contengan alguno de estos textos. Desde el 2026-10-10 (D26.1), "m2" y
+# "texto_cliente" ya NO están: salen, y su sitio lo fijan las claves exactas
+# (C6 del plan del resumen). Se añaden "motivo_gate" y "requiere_aprobacion".
 TEXTOS_PROHIBIDOS = ("email", "importe", "iva", "umbral", "lead_token", "lead_id", "cliente_id",
-                     "presupuesto_id", "visita_id", "m2", "fotos", "texto_cliente", "informe", "estado_oportunidad")
+                     "presupuesto_id", "visita_id", "fotos", "informe", "estado_oportunidad",
+                     "motivo_gate", "requiere_aprobacion")
 
 # ----------------------------------------------------------------------
 # Contadores
@@ -285,11 +302,34 @@ def cuerpo(r):
 
 # Emails propios creados (para comprobar que no salen en la respuesta).
 EMAILS = []
+# El resumen ENVIADO de cada oportunidad propia: oportunidad_id ->
+# (m2 como Decimal o None, nivel_acabados o None, cambios o None).
+SOLICITUDES = {}
+# El texto de la visita ACTIVA de cada oportunidad propia
+# (oportunidad_id -> texto) y los textos de las visitas canceladas.
+TEXTOS_VISITA = {}
+CANCELADAS = []
+# Niveles que se van alternando, y el contador de leads (cada lead, un
+# resumen distinto).
+NIVELES = ("basico", "medio", "alto")
+contador_resumen = 0
+
+
+def siguiente_resumen():
+    """Un m2 y un nivel DISTINTOS para cada lead propio (C7 del plan del
+    resumen): 5.03, 5.06, 5.09... con los niveles alternos. Se quedan por
+    debajo de 6,65 m², el punto de corte del Gate del baño en "alto" (D9),
+    para que un caso sin cambios estructurales no tenga Gate."""
+    # global: se modifica el contador del archivo.
+    global contador_resumen
+    contador_resumen += 1
+    # El m2 con dos decimales y el nivel que toca.
+    return Decimal("5.00") + Decimal("0.03") * contador_resumen, NIVELES[contador_resumen % 3]
 
 
 def lead_http(etiqueta, estructural=False, email=None, nombre=None, telefono=None):
-    """Crea un lead por POST /leads. Devuelve (oportunidad_id, lead_token,
-    nombre, telefono)."""
+    """Crea un lead por POST /leads, con un m2 y un nivel propios. Devuelve
+    (oportunidad_id, lead_token, nombre, telefono)."""
     # Token único (clave de idempotencia de POST /leads) y email propio, que se
     # guarda en EMAILS para buscarlo después en las respuestas.
     token = str(uuid.uuid4())
@@ -299,16 +339,22 @@ def lead_http(etiqueta, estructural=False, email=None, nombre=None, telefono=Non
     nombre = nombre or f"Listado {etiqueta} {RUN}"
     # Un teléfono distinto por lead: "6" + 8 cifras aleatorias.
     telefono = telefono or "6" + str(uuid.uuid4().int)[:8]
-    # Petición real a POST /leads con la cabecera de n8n.
+    # El resumen de ESTE lead (distinto de todos los demás).
+    m2, nivel = siguiente_resumen()
+    # Petición real a POST /leads con la cabecera de n8n. m2 viaja como
+    # número JSON (float(...)), como lo enviará n8n.
     r = requests.post(f"{BASE}/leads", headers=AUTH_WEBHOOK, timeout=30, json={
-        "nombre": nombre, "email": email, "telefono": telefono, "tipo_reforma": "bano", "m2": 6,
-        "nivel_acabados": "medio", "incluye_cambios_estructurales": estructural, "fotos": [],
+        "nombre": nombre, "email": email, "telefono": telefono, "tipo_reforma": "bano", "m2": float(m2),
+        "nivel_acabados": nivel, "incluye_cambios_estructurales": estructural, "fotos": [],
         "lead_token": token,
     })
     # Sin el lead no tiene sentido seguir.
     assert r.status_code == 201, r.text
+    # Se apunta lo enviado para esa oportunidad (CASO 18).
+    op = r.json()["oportunidad_id"]
+    SOLICITUDES[op] = (m2, nivel, estructural)
     # Se devuelven el id de la oportunidad y los datos de contacto enviados.
-    return r.json()["oportunidad_id"], token, nombre, telefono
+    return op, token, nombre, telefono
 
 
 def calcular(op):
@@ -350,14 +396,59 @@ def poner_estado(op, estado):
              {"estado": estado, "op": op, "patron": PATRON_EMAIL})
 
 
-def insertar_visita(op, fecha, estado):
-    """Inserta una visita en una oportunidad PROPIA (comprobado antes)."""
+def insertar_visita(op, fecha, estado, texto):
+    """Inserta una visita en una oportunidad PROPIA (comprobado antes), con
+    su texto propio, que se apunta: el de una activa en TEXTOS_VISITA y el
+    de una cancelada en CANCELADAS."""
     # Comprobación de propiedad: la oportunidad tiene que ser propia.
+    # SQL: cuenta esa oportunidad solo si es propia (tiene que dar 1).
     assert consultar(f"SELECT count(*) FROM oportunidades WHERE id = %(op)s AND {PROPIO['oportunidades']};",
                      {"op": op, "patron": PATRON_EMAIL})[0] == 1
-    # SQL: la visita, con un texto fijo.
+    # SQL: la visita, con el texto recibido.
     escribir("INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
-             "VALUES (%s, %s, %s, 'prueba del listado');", (op, fecha, estado))
+             "VALUES (%s, %s, %s, %s);", (op, fecha, estado, texto))
+    # Se apunta dónde tiene (o no) que salir ese texto.
+    if estado == "cancelada":
+        CANCELADAS.append(texto)
+    else:
+        TEXTOS_VISITA[op] = texto
+
+
+def todos_los_textos(objeto):
+    """Todos los VALORES de texto de un JSON, en cualquier nivel (para
+    contar cuántas veces sale un texto_cliente, CASO 21)."""
+    # Un diccionario: los textos de cada valor (recursión).
+    if isinstance(objeto, dict):
+        return [t for valor in objeto.values() for t in todos_los_textos(valor)]
+    # Una lista: los textos de cada elemento.
+    if isinstance(objeto, list):
+        return [t for elemento in objeto for t in todos_los_textos(elemento)]
+    # Un texto es él mismo; un número, un booleano o null no es texto.
+    return [objeto] if isinstance(objeto, str) else []
+
+
+def solicitud_coincide(solicitud, esperada):
+    """True si el objeto "solicitud" de la respuesta es el enviado:
+    m2 como TEXTO del JSON e igual como Decimal ("5.0" == 5; hallazgo de
+    B2), y nivel y cambios iguales. Los None tienen que llegar como null."""
+    # Lo enviado para ese lead.
+    m2, nivel, cambios = esperada
+    # Sin objeto (o sin diccionario), no coincide.
+    if not isinstance(solicitud, dict):
+        return False
+    # m2: null si no se envió; si se envió, un texto que, como Decimal, es igual.
+    if m2 is None:
+        m2_ok = solicitud.get("m2") is None
+    else:
+        # try: un texto que no es un número daría InvalidOperation (un
+        # ArithmeticError); se cuenta como "no coincide", sin romper el script.
+        try:
+            m2_ok = isinstance(solicitud.get("m2"), str) and Decimal(solicitud["m2"]) == m2
+        except ArithmeticError:
+            m2_ok = False
+    # "is" en cambios: True/False/None exactos (un 1 o un 0 no valen).
+    return (m2_ok and solicitud.get("nivel_acabados") == nivel
+            and solicitud.get("incluye_cambios_estructurales") is cambios)
 
 
 def todas_las_claves(objeto):
@@ -538,12 +629,14 @@ try:
     retrasar_presupuesto(S_VISITA[0], 48, 1)
     # SQL (en insertar_visita): visita 'solicitada' el martes siguiente al lunes 2.
     insertar_visita(S_VISITA[0], datetime.combine(LUNES_2 + timedelta(days=1), hora_del_dia(10), tzinfo=MADRID),
-                    "solicitada")
+                    "solicitada", f"texto S-visita {RUN}")
     # Con una visita solo 'cancelada': cuenta como "sin visita".
     S_CANCELADA = caso("S-cancelada", gate=False)
     retrasar_presupuesto(S_CANCELADA[0], 48, 1)
-    # SQL (en insertar_visita): una visita solo 'cancelada'.
-    insertar_visita(S_CANCELADA[0], datetime.combine(LUNES_1, hora_del_dia(10), tzinfo=MADRID), "cancelada")
+    # SQL (en insertar_visita): una visita solo 'cancelada' (su texto no debe
+    # salir nunca, CASO 21).
+    insertar_visita(S_CANCELADA[0], datetime.combine(LUNES_1, hora_del_dia(10), tzinfo=MADRID), "cancelada",
+                    f"texto S-cancelada {RUN}")
     # Base del plazo: oportunidad vieja y presupuesto nuevo (fuera), y al revés (dentro).
     S_OP_VIEJA = caso("S-op-vieja", gate=False)
     # SQL: la oportunidad PROPIA se hace "vieja" (creada hace 72 h)...
@@ -580,17 +673,22 @@ try:
     cur.execute("INSERT INTO clientes (nombre, email, telefono) VALUES (%s, %s, %s) RETURNING id;",
                 (NOMBRE_FICHA_L, EMAIL_L, TEL_FICHA_L))
     cliente_l = cur.fetchone()[0]
+    # Su resumen, distinto de todos los demás (CASO 19: sin 'contacto', pero
+    # con la solicitud COMPLETA).
+    m2_l, nivel_l = siguiente_resumen()
     # SQL: su lead, con los datos de la reforma pero SIN la clave 'contacto'
     # (como los leads de antes del 2026-09-25) y sin fotos; Json(...) convierte
     # el diccionario en JSONB; RETURNING id devuelve el id del lead.
     cur.execute("INSERT INTO leads (cliente_id, canal, fotos_urls, datos_estructurados) "
                 "VALUES (%s, 'check_listado', '[]'::jsonb, %s) RETURNING id;",
-                (cliente_l, Json({"tipo_reforma": "bano", "nivel_acabados": "medio", "m2": 6,
+                (cliente_l, Json({"tipo_reforma": "bano", "nivel_acabados": nivel_l, "m2": float(m2_l),
                                   "incluye_cambios_estructurales": False})))
     lead_l = cur.fetchone()[0]
     # SQL: su oportunidad, en 'nueva' (el único estado desde el que se calcula).
     cur.execute("INSERT INTO oportunidades (lead_id, tipo_reforma) VALUES (%s, 'bano') RETURNING id;", (lead_l,))
     OP_L = cur.fetchone()[0]
+    # Lo enviado para esa oportunidad.
+    SOLICITUDES[OP_L] = (m2_l, nivel_l, False)
     # commit: el servidor tiene que ver estas tres filas.
     cn.commit()
     # Se calcula por la API (queda sin Gate) y se atrasa a 48 h + 5 min.
@@ -606,17 +704,19 @@ try:
     # D_1 y D_2: sin Gate; cada uno pide su visita por POST /visits, uno en cada
     # lunes (a los dos lados del cambio de hora), a las 08:30.
     D_1, D_2 = caso("D1", gate=False), caso("D2", gate=False)
-    for (op, token, _, _), lunes in ((D_1, LUNES_1), (D_2, LUNES_2)):
+    for (op, token, _, _), lunes, etiqueta in ((D_1, LUNES_1, "D1"), (D_2, LUNES_2, "D2")):
+        # El texto de ESA visita, propio y con la marca RUN.
+        TEXTOS_VISITA[op] = f"texto {etiqueta} {RUN}"
         # Petición real a POST /visits con el lead_token de ese caso.
         r = requests.post(f"{BASE}/visits", headers=AUTH_WEBHOOK, timeout=30, json={
-            "lead_token": token, "fecha": lunes.isoformat(), "hora": "08:30", "texto_cliente": "prueba listado"})
+            "lead_token": token, "fecha": lunes.isoformat(), "hora": "08:30", "texto_cliente": TEXTOS_VISITA[op]})
         assert r.status_code == 201, r.text
     # D_PASADA: visita 'solicitada' de hace 3 días (por SQL; la API no deja
     # pedir fechas pasadas).
     D_PASADA = caso("D-pasada", gate=False)
     poner_estado(D_PASADA[0], "visita_agendada")
     insertar_visita(D_PASADA[0], datetime.combine(HOY - timedelta(days=3), hora_del_dia(10), tzinfo=MADRID),
-                    "solicitada")
+                    "solicitada", f"texto D-pasada {RUN}")
     # D_GATE_CONF: Gate decidido con visita_acordada: crea una visita
     # 'confirmada' (no debe salir en d).
     D_GATE_CONF = caso("D-gate", gate=True)
@@ -624,6 +724,11 @@ try:
         "oportunidad_id": D_GATE_CONF[0], "decision": "visita_acordada", "fecha": LUNES_1.isoformat(),
         "hora": "09:30", "informe": "prueba del listado"})
     assert r.status_code == 201, r.text
+    # Su texto es el fijo del sistema (P2 del plan de /gate-decisions): se lee
+    # por SQL de SU visita confirmada, por si saliera en algún apartado.
+    TEXTOS_VISITA[D_GATE_CONF[0]] = consultar(
+        "SELECT texto_cliente FROM visitas WHERE oportunidad_id = %s AND estado = 'confirmada';",
+        (D_GATE_CONF[0],))[0]
     # e) Visitas en los extremos del próximo laborable (SQL, cada una en su
     #    oportunidad por el índice de una visita activa por oportunidad).
     # Diccionario etiqueta -> oportunidad_id de las visitas de e).
@@ -642,8 +747,54 @@ try:
         # una visita), y su visita insertada por SQL.
         op = caso(etiqueta, gate=False)[0]
         poner_estado(op, "visita_agendada")
-        insertar_visita(op, instante, estado)
+        insertar_visita(op, instante, estado, f"texto {etiqueta} {RUN}")
         VISITAS_E[etiqueta] = op
+    # E-sustituida (para la N9): una visita CANCELADA primero (la más
+    # antigua) y después la activa del próximo laborable, con textos
+    # distintos. Fuera de VISITAS_E, para no cambiar el orden del CASO 12.
+    E_SUST = caso("E-sustituida", gate=False)[0]
+    poner_estado(E_SUST, "visita_agendada")
+    insertar_visita(E_SUST, datetime.combine(DIA, hora_del_dia(12), tzinfo=MADRID), "cancelada",
+                    f"texto E-sustituida cancelada {RUN}")
+    insertar_visita(E_SUST, datetime.combine(DIA, hora_del_dia(11, 30), tzinfo=MADRID), "solicitada",
+                    f"texto E-sustituida activa {RUN}")
+    # E-largo (CASO 20): texto de 1.000 caracteres EXACTOS (el máximo del
+    # CHECK) con tildes, eñe, comillas dobles y un salto de línea.
+    base_largo = f'Texto largo {RUN}: tildes áéíóú, eñe ñÑ, comillas "dobles" y un salto\nde línea. '
+    # Se rellena con una palabra con eñe y tilde, y se corta a 1.000 justos.
+    TEXTO_LARGO = (base_largo + "ñandú " * 200)[:1000]
+    E_LARGO = caso("E-largo", gate=False)[0]
+    poner_estado(E_LARGO, "visita_agendada")
+    insertar_visita(E_LARGO, datetime.combine(DIA, hora_del_dia(11), tzinfo=MADRID), "solicitada", TEXTO_LARGO)
+    # N19 (CASO 19): un lead propio SIN las tres claves del resumen (con
+    # 'contacto'), por SQL, con su presupuesto de hace 49 h, sin Gate y en
+    # 'presupuesto_enviado': tiene que salir en b) con tres null.
+    EMAIL_N = f"http-listado-{uuid.uuid4().hex[:8]}@example.com"
+    EMAILS.append(EMAIL_N)
+    NOMBRE_N = f"Listado Sin Claves {RUN}"
+    # SQL: su cliente (email propio); RETURNING id da su id.
+    cur.execute("INSERT INTO clientes (nombre, email, telefono) VALUES (%s, %s, %s) RETURNING id;",
+                (NOMBRE_N, EMAIL_N, "600000104"))
+    cliente_n = cur.fetchone()[0]
+    # SQL: su lead, solo con tipo_reforma y 'contacto' (m2, nivel_acabados e
+    # incluye_cambios_estructurales AUSENTES; el CHECK de m2 lo admite).
+    cur.execute("INSERT INTO leads (cliente_id, canal, fotos_urls, datos_estructurados) "
+                "VALUES (%s, 'check_listado', '[]'::jsonb, %s) RETURNING id;",
+                (cliente_n, Json({"tipo_reforma": "bano",
+                                  "contacto": {"nombre": NOMBRE_N, "email": EMAIL_N, "telefono": "600000104"}})))
+    lead_n = cur.fetchone()[0]
+    # SQL: su oportunidad, ya en 'presupuesto_enviado' (sin m2 no se puede
+    # calcular por la API).
+    cur.execute("INSERT INTO oportunidades (lead_id, tipo_reforma, estado) "
+                "VALUES (%s, 'bano', 'presupuesto_enviado') RETURNING id;", (lead_n,))
+    OP_N = cur.fetchone()[0]
+    # SQL: su presupuesto sin importes y sin Gate (requiere_aprobacion es
+    # false por defecto), creado hace 49 h.
+    cur.execute("INSERT INTO presupuestos (oportunidad_id, created_at) VALUES (%s, now() - interval '49 hours');",
+                (OP_N,))
+    # commit: el servidor tiene que ver estas filas. Lo enviado: tres None.
+    cn.commit()
+    SOLICITUDES[OP_N] = (None, None, None)
     # Los dos casos "fuera", AL FINAL y con 10 minutos de margen: preparar
     # todo lo demás lleva más de un minuto, y con 1 minuto de margen (la
     # primera versión) podían cruzar el límite antes de consultar, o entre
@@ -708,6 +859,17 @@ try:
     comprobar("claves exactas en cada elemento de d) y e), y en su contacto",
               all(set(e) == CLAVES_VISITA and set(e["contacto"]) == CLAVES_CONTACTO
                   for n in APARTADOS_VI for e in L.get(n, [])))
+    # Todos los objetos "solicitud" de los cinco apartados (un {} si alguno
+    # faltara, para que la comprobación FALLE sin romper el script).
+    solicitudes = [e.get("solicitud", {}) for n in (*APARTADOS_OP, *APARTADOS_VI) for e in L.get(n, [])]
+    # "solicitud" es SIEMPRE un objeto (nunca null) con sus tres claves exactas.
+    comprobar("\"solicitud\" es un objeto con claves exactas en los cinco apartados",
+              solicitudes != [] and all(isinstance(s, dict) and set(s) == CLAVES_SOLICITUD for s in solicitudes),
+              f"({len(solicitudes)} objetos)")
+    # texto_cliente solo en los elementos de visita (d y e), nunca en a, b, c.
+    comprobar("texto_cliente solo en d) y e)",
+              not any("texto_cliente" in e for n in APARTADOS_OP for e in L.get(n, []))
+              and all("texto_cliente" in e for n in APARTADOS_VI for e in L.get(n, [])))
     # Cada elemento lleva el motivo de su apartado.
     comprobar("motivo de cada elemento = el de su apartado",
               all(e["motivo"] == m for n, m in {**APARTADOS_OP, **APARTADOS_VI}.items() for e in L.get(n, [])))
@@ -726,6 +888,11 @@ try:
         {"patron": PATRON_EMAIL}) if f[0]]
     comprobar("ningún importe propio en el texto de la respuesta",
               importes != [] and not any(i in R.text for i in importes), f"({len(importes)} importes buscados)")
+    # Y tampoco DENTRO de "solicitud": ningún valor de texto con "@" (un
+    # email) ni con un importe propio. str(s) es el objeto como texto.
+    comprobar("ningún email ni importe dentro de \"solicitud\"",
+              not any("@" in t for s in solicitudes for t in todos_los_textos(s))
+              and not any(i in str(s) for s in solicitudes for i in importes))
 
     # ==================================================================
     print("\nCASO 3 - Reglas y día")
@@ -845,6 +1012,11 @@ try:
     # Ni el nombre ni el teléfono de B1 aparecen en el texto.
     comprobar("ni el nombre ni el teléfono de la ficha (los de B1) aparecen",
               B1[2] not in R.text and B1[3] not in R.text)
+    # Y su resumen también es el de SU lead (m2 y nivel distintos de los de
+    # B1): si el listado leyera el primer lead del cliente, traería los de B1.
+    comprobar("B2: solicitud de SU lead, no la de B1 (m2 y nivel distintos)",
+              solicitud_coincide(e.get("solicitud"), SOLICITUDES[B2[0]])
+              and not solicitud_coincide(e.get("solicitud"), SOLICITUDES[B1[0]]), f"({e.get('solicitud')})")
     # El lead sin 'contacto': todo null y origen no_disponible...
     e = B.get(OP_L, {})
     comprobar("lead sin 'contacto': nombre y telefono null, origen 'no_disponible'",
@@ -1005,10 +1177,100 @@ try:
         return {"reglas": c.get("reglas"), "dia_visitas": c.get("dia_visitas"),
                 **{n: [e for e in c.get(n, []) if e["oportunidad_id"] in mios]
                    for n in (*APARTADOS_OP, *APARTADOS_VI)}}
-    # Dos llamadas seguidas, filtradas igual: tienen que coincidir.
+    # Dos llamadas seguidas, filtradas igual: tienen que coincidir. Se
+    # comparan los elementos ENTEROS, así que también su "solicitud" y, en
+    # d) y e), su texto_cliente.
     r1, r2 = solo_propio(cuerpo(listado())), solo_propio(cuerpo(listado()))
-    comprobar("dos llamadas seguidas dan lo mismo (reglas, día y elementos propios)",
+    comprobar("dos llamadas seguidas dan lo mismo (reglas, día y elementos propios, con solicitud y texto)",
               r1 == r2 and r1["reglas"] is not None, f"({sum(len(v) for k, v in r1.items() if isinstance(v, list))} propios)")
+
+    # ==================================================================
+    print("\nCASO 18 - Resumen de la solicitud en los cinco apartados (valores de SU lead)")
+    # ==================================================================
+    # Los elementos propios que tienen que salir, por apartado (los de los
+    # CASOS 4 a 8 y E-sustituida y E-largo). OP_N tiene su propio CASO 19.
+    ESPERADOS_18 = {
+        "gates_sin_decision": (A, [G_DENTRO[0]]),
+        "seguimientos_por_abrir": (B, [S_DENTRO[0], S_CANCELADA[0], S_PRES_VIEJO[0], S_50[0], S_60[0], S_70[0],
+                                       B2[0], OP_L]),
+        "seguimientos_abiertos": (C, [C_ABIERTO[0]]),
+        "visitas_sin_confirmar": (D, [D_1[0], D_2[0], D_PASADA[0], S_VISITA[0]]),
+        "visitas_proximo_laborable": (E, [VISITAS_E[k] for k in ("E-inicio", "E-0900", "E-1000", "E-ultimo")]
+                                      + [E_SUST, E_LARGO]),
+    }
+    # Una comprobación por apartado: TODOS sus elementos esperados salen, con
+    # la solicitud ENVIADA para su lead (m2 como texto e igual como Decimal).
+    for nombre, (elementos, ops) in ESPERADOS_18.items():
+        # Los que faltan o no coinciden (lista vacía = todo bien).
+        malos = [op for op in ops if not solicitud_coincide(elementos.get(op, {}).get("solicitud"), SOLICITUDES[op])]
+        comprobar(f"{nombre}: {len(ops)} propios con la solicitud de SU lead", malos == [],
+                  f"(no coinciden: {[(op, elementos.get(op, {}).get('solicitud')) for op in malos]})")
+    # m2 es un TEXTO del JSON en todos los elementos propios que lo tienen
+    # (nunca un número: un float no es exacto).
+    m2_propios = [e["solicitud"].get("m2") for elementos in (A, B, C, D, E) for op, e in elementos.items()
+                  if op in SOLICITUDES and isinstance(e.get("solicitud"), dict)
+                  and SOLICITUDES[op][0] is not None]
+    comprobar("m2 viaja como texto en todos los elementos propios",
+              m2_propios != [] and all(isinstance(v, str) for v in m2_propios),
+              f"({len(m2_propios)} valores; ejemplo {m2_propios[:1]})")
+    # texto_cliente de cada visita propia de d) y e): el de SU visita activa,
+    # el enviado por POST /visits o el insertado por SQL.
+    for nombre, elementos in (("visitas_sin_confirmar", D), ("visitas_proximo_laborable", E)):
+        # Las visitas propias del apartado y las que no traen su texto.
+        ops = [op for op in elementos if op in SOLICITUDES]
+        malos = [op for op in ops if elementos[op].get("texto_cliente") != TEXTOS_VISITA.get(op)]
+        comprobar(f"{nombre}: texto_cliente de SU visita en los {len(ops)} propios", ops != [] and malos == [],
+                  f"(no coinciden: {malos})")
+
+    # ==================================================================
+    print("\nCASO 19 - Nulls: un lead sin las tres claves no rompe la lista")
+    # ==================================================================
+    # La respuesta es 200 (si algún null reventara, sería un 500 en la lista ENTERA).
+    comprobar("la lista con un lead sin las tres claves -> 200", R.status_code == 200, f"({R.status_code})")
+    # El lead sin claves sale en b), con el objeto presente y los tres null.
+    e = B.get(OP_N, {})
+    comprobar("lead sin las tres claves: sale en b) con solicitud = tres null (objeto presente)",
+              e.get("solicitud") == {"m2": None, "nivel_acabados": None, "incluye_cambios_estructurales": None},
+              f"({e.get('solicitud')})")
+    # Su contacto sí existe: la falta de las tres claves no le afecta.
+    comprobar("  ... y su contacto es el de la solicitud",
+              e.get("contacto") == {"nombre": NOMBRE_N, "telefono": "600000104", "origen": "solicitud"})
+    # Al revés (C3): el lead SIN 'contacto' tiene la solicitud COMPLETA (lo
+    # enviado para él no tiene ningún None, así que coincidir es estar completa).
+    e = B.get(OP_L, {})
+    comprobar("lead sin 'contacto': contacto no_disponible y solicitud COMPLETA (C3)",
+              e.get("contacto", {}).get("origen") == "no_disponible"
+              and solicitud_coincide(e.get("solicitud"), SOLICITUDES[OP_L]), f"({e.get('solicitud')})")
+
+    # ==================================================================
+    print("\nCASO 20 - texto_cliente de 1.000 caracteres con tildes, eñe, comillas y salto de línea")
+    # ==================================================================
+    # El texto llega IDÉNTICO, carácter a carácter, con su longitud máxima.
+    t = E.get(E_LARGO, {}).get("texto_cliente")
+    comprobar("llega idéntico (comparación exacta)", t == TEXTO_LARGO)
+    comprobar("  y mide 1.000 caracteres", isinstance(t, str) and len(t) == 1000,
+              f"({len(t) if isinstance(t, str) else t})")
+
+    # ==================================================================
+    print("\nCASO 21 - Ningún texto de visita ajeno al elemento")
+    # ==================================================================
+    # Todos los valores de texto de la respuesta (en cualquier nivel).
+    textos_respuesta = todos_los_textos(L)
+    # Los textos de las visitas CANCELADAS no salen nunca (S-cancelada,
+    # E-cancelada y la cancelada de E-sustituida).
+    salen = [t for t in CANCELADAS if t in R.text or any(t in v for v in textos_respuesta)]
+    comprobar(f"los {len(CANCELADAS)} textos de visitas canceladas NO aparecen", CANCELADAS != [] and salen == [],
+              f"(aparecen: {salen})")
+    # El de cada visita activa propia sale EXACTAMENTE una vez si su
+    # oportunidad está en d) o e), y ninguna vez si no está.
+    mal_contados = [op for op, t in TEXTOS_VISITA.items()
+                    if textos_respuesta.count(t) != (1 if (op in D or op in E) else 0)]
+    comprobar(f"cada texto de visita activa propia sale una vez (o ninguna si no está en d/e): "
+              f"{len(TEXTOS_VISITA)} textos", mal_contados == [], f"(mal contados: {mal_contados})")
+    # Ningún elemento de a), b) o c) lleva texto_cliente (como en el CASO 2,
+    # con su propio título).
+    comprobar("ningún elemento de a), b) o c) tiene texto_cliente",
+              not any("texto_cliente" in e for n in APARTADOS_OP for e in L.get(n, [])))
 
     # ==================================================================
     print("\nCASO 16 - Ningún 500")

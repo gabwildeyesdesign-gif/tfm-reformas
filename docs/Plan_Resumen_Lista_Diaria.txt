@@ -233,6 +233,22 @@ levanta servidor) ni escribe datos reales.
       la lista lo ACUMULA (justo el riesgo de D26 sección 1.3). Hoy hay una
       sola visita de 74 caracteres (M4) y ninguna en la lista. Este bloque
       solo MUESTRA la columna (D26.7: decidido); se anota como R2.
+  C10. (Nota 2026-10-10, Bloque C, hallazgo al ejecutar la S9.) La
+      afirmación "en todo app/ cada expresión aparece escrita UNA sola vez
+      (en datos_oportunidad.py)" de 4.2, 8.1 y su nota NO se midió antes de
+      escribirla, y es falsa: app/services/estimate_service.py (líneas
+      431-433, la consulta con la que POST /calculate-estimate lee m2, nivel
+      y cambios para calcular) tiene su propia copia de las tres desde
+      124ba1b (2026-09-20), anterior a datos_oportunidad.py. No la crea esta
+      rama. Primera ejecución de la S9: 63/66 (falla "una sola vez" en las
+      tres). Decisión de Gabi (revisada por el tutor): la S9 exige (a)
+      EXACTAMENTE una vez en datos_oportunidad.py, (b) en ningún otro
+      archivo de app/ salvo estimate_service.py, donde se TOLERA (esté o
+      no, para no fallar el día que se pague la deuda), y (c) ningún texto
+      del listado con un trozo de las expresiones; búsqueda con espacios
+      normalizados, imprimiendo dónde aparece cada una. Deuda técnica en
+      CLAUDE.md: que calculate-estimate lea las tres de COLUMNAS_CASO, en su
+      propia rama y con su regresión (REST y tool MCP).
 
 
 ================================================================
@@ -819,6 +835,45 @@ intervalo (lección del 2026-10-10).
         valores miran SOLO elementos propios; de los ajenos solo se exige
         la forma (claves exactas) y la minimización.
   Recuento: se conocerá al escribirlo (hoy 88; previsto unos 120).
+  (Nota 2026-10-10, Bloque C, decisiones de Gabi revisadas por el tutor
+  antes de escribir los scripts; SUSTITUYEN a lo que dicen 8.1 y 8.2 en
+  esos puntos.)
+  - CASO 17 NO cambia: sigue siendo "no toca nada ajeno". Lo que el plan
+    llama "CASO 17" en C6, 8.2, N4 y N9 (textos de visitas ajenas al
+    elemento) es un CASO NUEVO, el CASO 21, dentro del try y antes del CASO
+    16: léase CASO 21 en esos cuatro sitios. Cada visita propia lleva su
+    propio texto_cliente con la marca RUN (insertar_visita recibe el texto).
+  - S4b: se QUITA "dos o cuatro valores -> ValueError" (con argumentos
+    separados sería un TypeError de Python, no una prueba de nuestro
+    código; el desplazamiento de columnas lo ven la S5 y el CASO 18). Queda:
+    (12.35, "alto", True) exacto con m2 Decimal; (None, None, None) sin
+    error; nivel "premium" -> ValidationError, con rama else FALLO (R1
+    hecho visible). En N1, léase solicitud_desde por solicitud_desde_fila.
+  - S9: se QUITA la comparación de datos_oportunidad.py con ea96f39 (una
+    comprobación de esta rama no puede vivir en un script de la suite:
+    fallaría en cuanto otra rama cambie el archivo, el mismo defecto de
+    check_migracion_iva_y_seguimiento el 2026-10-03). Se comprobó UNA vez:
+    git diff ea96f39 -- app/services/datos_oportunidad.py, salida VACÍA (0
+    líneas), el 2026-10-10 a las 23:55. Para lo demás de la S9, ver C10.
+  - Añadidos que no estaban en el plan: la S5 cuenta como FALLO cualquier
+    excepción inesperada dentro de ella (except Exception, con su tipo), y
+    no solo CommitProhibido, para que la N10 dé un recuento y no una traza.
+  (Nota 2026-10-10, Bloque C, C-1 y C-2: RESULTADOS con el código de la
+  rama, Docker/n8n y el navegador cerrados, sin ningún Kernel-Power 506/507
+  entre 23:41 y 23:44 ni entre 23:53 y 23:56.)
+  - check_listado_llamadas_service: 69/69, código 0 (23:54:59-23:55:05).
+    S8: 5 órdenes para 22 elementos (propios y reales). Antes, 63/66 por
+    C10 (23:42:06).
+  - check_listado_llamadas_http: 109/109, código 0 (23:42:37-23:43:43):
+    31 leads propios, 21 elementos propios, 18 peticiones (200, 401 y 503),
+    0 respuestas 500, 0 restos y lo ajeno igual en las 7 tablas.
+  - Comentarios (scratchpad/medir_comentarios.py, NUEVO, SHA-256
+    b09ae9d1c8ea7daca133ed389429f8fbbc6f86fb8f1fcc82b8cc47353b6bc14f): 0/268
+    y 0/549; el medidor 0/59. Calibrado con lo ya medido: 0/78 (servicio)
+    y 0/58 (esquema) iguales, con los mismos totales; en los scripts cuenta
+    además los cuerpos de los except (B0: 0/176, frente a 0/167 del
+    medidor anterior); en el esquema de main da 5/49 (el anterior, 10/49):
+    un tramo menos, no idéntico.
 
 8.3 Regresión y compatibilidad
   - Tras B1: 4.2 entera (los cuatro scripts de gate-avisos y la ficha SIN

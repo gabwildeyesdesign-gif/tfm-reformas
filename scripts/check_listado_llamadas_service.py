@@ -11,12 +11,27 @@ S5 añadidas el 2026-10-10, docs/Plan_Resumen_Lista_Diaria.txt, sección 8.0).
   S3. validar_reglas_listado con diccionarios: falta, 0, -5, 24.50, 8760,
       8761 y 99999999 (P6, corregida el 2026-10-07).
   S4. contacto_de: con y sin la clave 'contacto'.
+  S4b. solicitud_desde (el resumen de la solicitud, D26.1): valores
+      exactos con m2 Decimal, tres None sin error y un nivel fuera del Enum
+      rechazado (añadida el 2026-10-10, docs/Plan_Resumen_Lista_Diaria.txt,
+      8.1).
   S5. LÍMITE EXACTO del plazo y de los extremos del día, contra la base de
       datos, dentro de UNA transacción que termina en ROLLBACK: no queda
       ninguna fila. Marca propia: emails check-listado-svc-<8>@example.com.
       La conexión es una ConexionSinCommit: si leer_listado (o una versión
       rota) llama a commit(), sale CommitProhibido, se cuenta como FALLO y
-      el ROLLBACK lo deshace todo.
+      el ROLLBACK lo deshace todo. Desde el 2026-10-10, además: tres leads
+      con resúmenes DISTINTOS (uno sin las tres claves) y, en los cinco
+      apartados, cada elemento propio con la solicitud de SU lead y cada
+      visita con SU texto_cliente.
+  S8. Las cinco consultas siguen siendo cinco: un cursor que cuenta sus
+      órdenes demuestra que leer_listado envía exactamente 5, sin una
+      consulta por elemento (2026-10-10).
+  S9. Una sola fuente de las expresiones, con ast: el listado importa
+      COLUMNAS_CASO, no escribe ninguna de las tres expresiones, monta
+      COLUMNAS_SOLICITUD_SQL a nivel de módulo, y cada expresión aparece
+      UNA vez en datos_oportunidad.py y en ningún otro archivo de app/
+      salvo estimate_service.py, tolerado (hallazgo C10; 2026-10-10).
   S6. Modo de la transacción de obtener_listado: repeatable read y read
       only (con leer_listado sustituida EN MEMORIA por un espía).
   S7. obtener_listado lanza ConfiguracionIncompleta (503) con una clave
@@ -27,6 +42,8 @@ S5 añadidas el 2026-10-10, docs/Plan_Resumen_Lista_Diaria.txt, sección 8.0).
 Código de salida: 0 si todo está bien, 1 si hay algún fallo.
 """
 
+# ast: para leer el código fuente como un árbol, sin ejecutarlo (S9).
+import ast
 # sys: para tocar sys.path, la salida estándar y el código de salida.
 import sys
 # uuid: para que cada ejecución tenga su propia marca.
@@ -50,6 +67,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 import psycopg2
 # Json: diccionario de Python -> valor JSONB.
 from psycopg2.extras import Json
+# ValidationError: el error de Pydantic cuando un valor no cumple el esquema (S4b).
+from pydantic import ValidationError
 
 # La cadena de conexión (nunca se imprime).
 from app.config import DATABASE_URL
@@ -59,6 +78,9 @@ from app.db import connection as db
 # excepción del 503.
 from app.services import listado_llamadas_service as servicio
 from app.services.reglas_visita import ConfiguracionIncompleta
+# La fuente compartida de las expresiones del resumen (S9 la compara con
+# lo que monta el listado).
+from app.services.datos_oportunidad import COLUMNAS_CASO
 
 # Patrón SQL (LIKE) de los clientes de ESTE script.
 PATRON = "check-listado-svc-%@example.com"
@@ -100,6 +122,21 @@ class ConexionSinCommit(psycopg2.extensions.connection):
         # No se confirma NADA: se lanza el error y la transacción sigue
         # abierta, para que el ROLLBACK de la prueba la deshaga.
         raise CommitProhibido("commit() en una conexión de prueba: la prueba termina siempre en ROLLBACK")
+
+
+class CursorContador(psycopg2.extensions.cursor):
+    """Un cursor de psycopg2 normal que, además, apunta el texto de cada
+    orden que envía (S8: cuántas consultas hace leer_listado)."""
+
+    def __init__(self, *args, **kwargs):
+        # Se crea el cursor como siempre y se le añade la lista vacía.
+        super().__init__(*args, **kwargs)
+        self.ordenes = []
+
+    def execute(self, query, vars=None):
+        # Se apunta el texto de la orden y se envía como siempre.
+        self.ordenes.append(query)
+        return super().execute(query, vars)
 
 
 # ======================================================================
@@ -215,6 +252,31 @@ comprobar("sin 'contacto' -> None, None y origen 'no_disponible'",
           (c.nombre, c.telefono, c.origen.value) == (None, None, "no_disponible"))
 
 # ======================================================================
+print("\nS4b. solicitud_desde (el resumen de la solicitud)")
+# ======================================================================
+# Valores normales: salen los tres tal cual, y m2 sigue siendo Decimal
+# (nunca float: con float, 12.35 no sería exacto).
+s = servicio.solicitud_desde(Decimal("12.35"), "alto", True)
+comprobar("(12.35, 'alto', True) -> los tres valores, m2 Decimal",
+          (s.m2, s.nivel_acabados, s.incluye_cambios_estructurales) == (Decimal("12.35"), "alto", True)
+          and isinstance(s.m2, Decimal), f"({s.m2!r}, {s.nivel_acabados!r}, {s.incluye_cambios_estructurales!r})")
+# Las tres claves ausentes en el JSONB: tres None, sin ningún error.
+s = servicio.solicitud_desde(None, None, None)
+comprobar("(None, None, None) -> tres None sin excepción",
+          (s.m2, s.nivel_acabados, s.incluye_cambios_estructurales) == (None, None, None))
+# Un nivel fuera del Enum ('basico', 'medio', 'alto'): Pydantic lo rechaza.
+# Es R1 del plan hecho visible: un dato mal formado no se cuela (en la
+# lista entera, sería un 500). try/except/else: sin la excepción, FALLO.
+try:
+    servicio.solicitud_desde(Decimal("6"), "premium", False)
+# La esperada: el esquema rechaza el valor.
+except ValidationError:
+    comprobar("nivel 'premium' -> ValidationError (no se inventa ni se deja pasar)", True)
+# else: se aceptó un nivel que no existe.
+else:
+    comprobar("nivel 'premium' -> ValidationError", False, "(sin error: la excepción se ha tragado)")
+
+# ======================================================================
 print("\nS5. Límite EXACTO, en una transacción que termina en ROLLBACK")
 # ======================================================================
 # Conexión directa propia (no la del pool) y su cursor. Todo lo que se
@@ -222,7 +284,10 @@ print("\nS5. Límite EXACTO, en una transacción que termina en ROLLBACK")
 # ConexionSinCommit: ni leer_listado ni una versión rota de él pueden
 # confirmar nada de lo que se inserta aquí (ver S0).
 cn = psycopg2.connect(DATABASE_URL, connection_factory=ConexionSinCommit)
-cur = cn.cursor()
+# cursor_factory=CursorContador: el cursor apunta cada orden (para la S8).
+cur = cn.cursor(cursor_factory=CursorContador)
+# Lo que medirá la S8; se queda en None si la S5 no llega a leer el listado.
+ordenes_leer, elementos_leidos = None, None
 # La defensa tiene que estar en ESTA conexión, la que recibe el código, no
 # solo en la de S0.
 comprobar("la conexión de la S5 es ConexionSinCommit", isinstance(cn, ConexionSinCommit),
@@ -252,13 +317,39 @@ try:
                                 "contacto": {"nombre": "Servicio Listado", "email": "x@example.com",
                                              "telefono": "600000009"}})))
     lead = cur.fetchone()[0]
+    # SQL: un segundo lead del MISMO cliente con un resumen DISTINTO (m2 con
+    # decimales, "alto", con cambios): si el listado leyera el resumen de
+    # otro lead, los valores no cuadrarían (C7 del plan del resumen).
+    cur.execute("INSERT INTO leads (cliente_id, canal, fotos_urls, datos_estructurados) "
+                "VALUES (%s, 'check_listado', '[]'::jsonb, %s) RETURNING id;",
+                (cliente, Json({"tipo_reforma": "bano", "nivel_acabados": "alto", "m2": 12.35,
+                                "incluye_cambios_estructurales": True,
+                                "contacto": {"nombre": "Servicio Listado Dos", "email": "y@example.com",
+                                             "telefono": "600000010"}})))
+    lead_2 = cur.fetchone()[0]
+    # SQL: un tercer lead SIN las tres claves del resumen (solo tipo y
+    # contacto). El CHECK de m2 lo admite: una clave ausente da NULL, y un
+    # CHECK solo rechaza lo FALSO.
+    cur.execute("INSERT INTO leads (cliente_id, canal, fotos_urls, datos_estructurados) "
+                "VALUES (%s, 'check_listado', '[]'::jsonb, %s) RETURNING id;",
+                (cliente, Json({"tipo_reforma": "bano",
+                                "contacto": {"nombre": "Servicio Listado Tres", "email": "z@example.com",
+                                             "telefono": "600000011"}})))
+    lead_3 = cur.fetchone()[0]
+    # El resumen esperado de cada lead: (m2, nivel_acabados, cambios).
+    # m2 = 6 se guardó como entero; Decimal("6") es el mismo número.
+    RESUMEN = {lead: (Decimal("6"), "medio", False), lead_2: (Decimal("12.35"), "alto", True),
+               lead_3: (None, None, None)}
 
-    def oportunidad(estado, presupuesto_creado=None):
-        """Crea una oportunidad propia en ese estado y, si se pide, su
-        presupuesto con created_at FIJO. Devuelve su id."""
+    def oportunidad(estado, presupuesto_creado=None, de_lead=None):
+        """Crea una oportunidad propia en ese estado (del primer lead, o del
+        lead de_lead si se indica) y, si se pide, su presupuesto con
+        created_at FIJO. Devuelve su id."""
+        # Sin lead indicado, el primero (como antes de añadir los otros dos).
+        de_lead = de_lead or lead
         # SQL: la oportunidad, en el estado pedido; RETURNING id da su id.
         cur.execute("INSERT INTO oportunidades (lead_id, tipo_reforma, estado) VALUES (%s, 'bano', %s) "
-                    "RETURNING id;", (lead, estado))
+                    "RETURNING id;", (de_lead, estado))
         op = cur.fetchone()[0]
         # Solo si se pidió una fecha de presupuesto.
         if presupuesto_creado is not None:
@@ -267,11 +358,17 @@ try:
                         (op, presupuesto_creado))
         return op
 
+    # Texto de cada visita propia: oportunidad_id -> texto (para comparar).
+    TEXTOS = {}
+
     def visita(op, fecha, estado):
-        """Inserta una visita propia en esa oportunidad."""
-        # SQL: la visita, con un texto fijo (texto_cliente es obligatorio).
+        """Inserta una visita propia en esa oportunidad, con un texto propio
+        y DISTINTO por visita (lleva el id de la oportunidad y la marca)."""
+        # El texto de ESTA visita, guardado para compararlo después.
+        TEXTOS[op] = f"texto de la visita {op} {marca}"
+        # SQL: la visita (texto_cliente es obligatorio).
         cur.execute("INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
-                    "VALUES (%s, %s, %s, 'prueba de límite');", (op, fecha, estado))
+                    "VALUES (%s, %s, %s, %s);", (op, fecha, estado, TEXTOS[op]))
 
     # Un microsegundo: la unidad más pequeña de timestamptz.
     us = timedelta(microseconds=1)
@@ -290,9 +387,41 @@ try:
     # 'solicitada', dentro de d).
     v_fin = oportunidad("visita_agendada")
     visita(v_fin, fin, "solicitada")
+    # Del segundo lead: un Gate de 25 h (a), un seguimiento abierto (c) y una
+    # visita 'solicitada' una semana después del próximo laborable (d).
+    g_2 = oportunidad("pendiente_aprobacion", ahora - timedelta(hours=25), de_lead=lead_2)
+    c_2 = oportunidad("seguimiento_pendiente", ahora - timedelta(hours=1), de_lead=lead_2)
+    v_2 = oportunidad("visita_agendada", de_lead=lead_2)
+    visita(v_2, inicio + timedelta(days=7, hours=10), "solicitada")
+    # Del tercero (sin las tres claves): un seguimiento por abrir de 49 h (b)
+    # y una visita 'confirmada' a las 09:00 del próximo laborable (e).
+    s_3 = oportunidad("presupuesto_enviado", ahora - timedelta(hours=49), de_lead=lead_3)
+    v_3 = oportunidad("visita_agendada", de_lead=lead_3)
+    visita(v_3, inicio + timedelta(hours=9), "confirmada")
+    # Qué elemento propio tiene que salir en qué apartado, y de qué lead:
+    # oportunidad_id -> (apartado, etiqueta, lead).
+    ESPERADOS = {
+        g_dentro: ("gates_sin_decision", "Gate del lead 1", lead),
+        g_2: ("gates_sin_decision", "Gate del lead 2", lead_2),
+        s_dentro: ("seguimientos_por_abrir", "seguimiento del lead 1", lead),
+        s_3: ("seguimientos_por_abrir", "seguimiento del lead 3 (sin claves)", lead_3),
+        c_2: ("seguimientos_abiertos", "seguimiento abierto del lead 2", lead_2),
+        v_fin: ("visitas_sin_confirmar", "visita del lead 1", lead),
+        v_2: ("visitas_sin_confirmar", "visita del lead 2", lead_2),
+        v_inicio: ("visitas_proximo_laborable", "visita del lead 1", lead),
+        v_3: ("visitas_proximo_laborable", "visita del lead 3 (sin claves)", lead_3),
+    }
 
-    # Las cinco consultas con el MISMO cursor y el mismo now().
+    # Las cinco consultas con el MISMO cursor y el mismo now(). Antes se
+    # vacía la lista del cursor contador: solo cuenta lo de leer_listado.
+    cur.ordenes = []
     listado = servicio.leer_listado(cur, {G: 24, S: 48}, ahora)
+    # Para la S8: las órdenes enviadas y cuántos elementos tiene la lista
+    # (propios y reales).
+    ordenes_leer = list(cur.ordenes)
+    elementos_leidos = sum(len(getattr(listado, n)) for n in (
+        "gates_sin_decision", "seguimientos_por_abrir", "seguimientos_abiertos",
+        "visitas_sin_confirmar", "visitas_proximo_laborable"))
     # Los ids de cada apartado, para buscar los propios. getattr(listado, n)
     # lee el atributo cuyo nombre es el texto n (por ejemplo, la lista
     # listado.gates_sin_decision).
@@ -310,11 +439,41 @@ try:
     comprobar("visita en el fin exacto (00:00 del día siguiente) -> NO sale en e)",
               v_fin not in ids["visitas_proximo_laborable"])
     comprobar("  ... y sí en d) (es 'solicitada')", v_fin in ids["visitas_sin_confirmar"])
+
+    # El resumen de la solicitud (D26.1), elemento a elemento. Para buscar un
+    # elemento por su oportunidad_id: apartado -> {oportunidad_id: elemento}.
+    por_apartado = {n: {e.oportunidad_id: e for e in getattr(listado, n)} for n in (
+        "gates_sin_decision", "seguimientos_por_abrir", "seguimientos_abiertos",
+        "visitas_sin_confirmar", "visitas_proximo_laborable")}
+    # Cada elemento propio esperado: tiene que salir en SU apartado y con la
+    # solicitud de SU lead (m2 Decimal o None, nunca float).
+    for op, (apartado, etiqueta, de_lead) in ESPERADOS.items():
+        # El elemento (None si no sale: entonces la comprobación FALLA).
+        e = por_apartado[apartado].get(op)
+        # Lo que trae: (m2, nivel, cambios), o None si no salió.
+        visto = None if e is None else (e.solicitud.m2, e.solicitud.nivel_acabados,
+                                        e.solicitud.incluye_cambios_estructurales)
+        # El tipo de m2: Decimal, o None si la clave falta.
+        m2_exacto = e is not None and (e.solicitud.m2 is None or isinstance(e.solicitud.m2, Decimal))
+        comprobar(f"{apartado}: {etiqueta} -> solicitud de SU lead, m2 Decimal",
+                  visto == RESUMEN[de_lead] and m2_exacto, f"({visto})")
+    # Cada visita propia de d) y e): el texto de ESA visita, el insertado.
+    for op, (apartado, etiqueta, _) in ESPERADOS.items():
+        # Solo los apartados de visitas llevan texto_cliente.
+        if apartado.startswith("visitas_"):
+            e = por_apartado[apartado].get(op)
+            # El texto que trae (None si el elemento no salió).
+            texto = None if e is None else e.texto_cliente
+            comprobar(f"{apartado}: {etiqueta} -> texto_cliente de SU visita", texto == TEXTOS[op], f"({texto!r})")
 # El código bajo prueba intentó confirmar: FALLO contado (no una traza), y
 # el finally lo deshace todo. Las comprobaciones de arriba no llegan a
 # ejecutarse, así que el total baja (es lo esperado).
 except CommitProhibido:
     comprobar("leer_listado no llama a commit()", False, "(llamó a commit(); el ROLLBACK lo deshace)")
+# Cualquier otro error dentro (por ejemplo, un ValidationError por un null
+# que el esquema no admite): FALLO contado con su tipo, no una traza.
+except Exception as error:
+    comprobar("la S5 termina sin error", False, f"(salió {type(error).__name__}: {str(error)[:120]})")
 finally:
     # ROLLBACK: nada de lo de arriba queda en la base de datos.
     cn.rollback()
@@ -325,6 +484,100 @@ restos = cur.fetchone()[0]
 cn.rollback()
 cn.close()
 comprobar("tras el ROLLBACK no queda ningún dato propio", restos == 0, f"({restos})")
+
+# ======================================================================
+print("\nS8. Las mismas cinco consultas (cursor que cuenta las órdenes de la S5)")
+# ======================================================================
+# Si la S5 no llegó a leer el listado (por ejemplo, CommitProhibido), no
+# hay nada que medir: FALLO explícito, no un hueco silencioso.
+if ordenes_leer is None:
+    comprobar("leer_listado envía exactamente 5 órdenes", False, "(la S5 no llegó a leer el listado)")
+else:
+    # Exactamente 5, con todos los elementos (propios y reales) de la lista.
+    comprobar("leer_listado envía exactamente 5 órdenes", len(ordenes_leer) == 5,
+              f"({len(ordenes_leer)} órdenes para {elementos_leidos} elementos)")
+    # Y son las de siempre: tres que empiezan por la consulta de
+    # oportunidades (a, b, c) y dos por la de visitas (d, e).
+    bases = [servicio.SQL_OPORTUNIDADES] * 3 + [servicio.SQL_VISITAS] * 2
+    comprobar("las 5 son las dos consultas del listado (3 de oportunidades y 2 de visitas)",
+              len(ordenes_leer) == 5 and all(q.startswith(b) for q, b in zip(ordenes_leer, bases)))
+    # Se enseña el comienzo de cada WHERE (sin datos: solo texto del programa).
+    for q in ordenes_leer:
+        # " ".join(q.split()) junta los espacios y saltos de línea en uno.
+        normal = " ".join(q.split())
+        # Desde "WHERE" (o el principio si no lo hay), 70 caracteres.
+        print(f"      {normal[max(normal.find('WHERE'), 0):][:70]}")
+
+# ======================================================================
+print("\nS9. Una sola fuente de las expresiones del resumen (ast)")
+# ======================================================================
+# Los tres nombres del resumen dentro de COLUMNAS_CASO, escritos AQUÍ (no
+# leídos del servicio, que es lo que se prueba).
+NOMBRES = ("m2", "nivel_acabados", "cambios_estructurales")
+# Las tres expresiones, tal como están en la fuente compartida.
+EXPRESIONES = [dict(COLUMNAS_CASO)[n] for n in NOMBRES]
+# El código del listado, leído como árbol (ast.parse no lo ejecuta).
+ruta_listado = RAIZ_REPO / "app" / "services" / "listado_llamadas_service.py"
+arbol = ast.parse(ruta_listado.read_text(encoding="utf-8"))
+# ¿Importa COLUMNAS_CASO de datos_oportunidad (en el nivel del módulo)?
+importa = any(isinstance(n, ast.ImportFrom) and n.module == "app.services.datos_oportunidad"
+              and any(a.name == "COLUMNAS_CASO" for a in n.names) for n in arbol.body)
+comprobar("el listado importa COLUMNAS_CASO de app.services.datos_oportunidad", importa)
+# Todos los textos fijos (constantes str) del listado, docstrings incluidos,
+# con los espacios normalizados (" ".join(t.split()) deja un solo espacio
+# donde había varios o un salto de línea): una copia con otro formato
+# tampoco se escapa.
+textos = [" ".join(n.value.split()) for n in ast.walk(arbol)
+          if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+# Ninguno escribe un trozo de las tres expresiones.
+copiados = [t for t in ("->> 'm2'", "'nivel_acabados'", "'incluye_cambios_estructurales'")
+            if any(t in texto for texto in textos)]
+comprobar("ningún texto del listado escribe las expresiones", copiados == [], f"({copiados})")
+# COLUMNAS_SOLICITUD_SQL se asigna en el nivel del MÓDULO (se calcula una
+# vez, al importar)...
+en_modulo = any(isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "COLUMNAS_SOLICITUD_SQL"
+                                                  for t in n.targets) for n in arbol.body)
+# ...y ninguna función la vuelve a calcular dentro (ast.walk recorre todo).
+en_funcion = any(isinstance(a, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "COLUMNAS_SOLICITUD_SQL"
+                                                   for t in a.targets)
+                 for f in ast.walk(arbol) if isinstance(f, ast.FunctionDef) for a in ast.walk(f))
+comprobar("COLUMNAS_SOLICITUD_SQL se asigna a nivel de módulo, no en una función", en_modulo and not en_funcion)
+# En ejecución, es exactamente las tres expresiones de COLUMNAS_CASO, en
+# este orden, unidas por ", ".
+comprobar("COLUMNAS_SOLICITUD_SQL = las tres de COLUMNAS_CASO unidas por ', '",
+          servicio.COLUMNAS_SOLICITUD_SQL == ", ".join(EXPRESIONES))
+# En TODO app/: dónde aparece escrita cada expresión (espacios
+# normalizados). Se recorren todos los .py y sus textos fijos.
+# (Nota 2026-10-10, hallazgo C10 del plan: estimate_service.py, el cálculo
+# de POST /calculate-estimate, tiene su propia copia de las tres desde
+# 124ba1b, 2026-09-20, anterior a datos_oportunidad.py. Es deuda técnica
+# anotada en CLAUDE.md: ahí se TOLERA, esté o no, para que esta prueba no
+# falle el día que se pague la deuda.)
+# La fuente y el archivo tolerado.
+DATOS = "app/services/datos_oportunidad.py"
+TOLERADO = "app/services/estimate_service.py"
+# expresión -> lista de archivos, uno por cada aparición; y el recorrido de
+# todos los .py de app/ (rglob busca también en las subcarpetas).
+apariciones = {expresion: [] for expresion in EXPRESIONES}
+for archivo in sorted((RAIZ_REPO / "app").rglob("*.py")):
+    # Los textos fijos de ese archivo, y su ruta con barras normales.
+    arbol_archivo = ast.parse(archivo.read_text(encoding="utf-8"))
+    ruta = archivo.relative_to(RAIZ_REPO).as_posix()
+    for nodo in ast.walk(arbol_archivo):
+        # Solo constantes de texto, con los espacios normalizados.
+        if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str):
+            texto = " ".join(nodo.value.split())
+            # Una entrada por cada vez que la expresión aparece en ese texto.
+            for expresion in EXPRESIONES:
+                apariciones[expresion] += [ruta] * texto.count(" ".join(expresion.split()))
+for expresion, donde in apariciones.items():
+    # Se enseña dónde aparece, para que se vea también la copia tolerada.
+    print(f"      {expresion}: {donde}")
+    # (a) EXACTAMENTE una vez en datos_oportunidad.py (la fuente).
+    comprobar(f"una sola vez en {DATOS}: {expresion}", donde.count(DATOS) == 1, f"({donde.count(DATOS)})")
+    # (b) En ningún otro archivo, salvo el tolerado.
+    otros = sorted(set(donde) - {DATOS, TOLERADO})
+    comprobar(f"  ... y en ningún otro archivo de app/ (salvo {TOLERADO}, tolerado)", otros == [], f"({otros})")
 
 # ======================================================================
 print("\nS6. Modo de la transacción de obtener_listado")
