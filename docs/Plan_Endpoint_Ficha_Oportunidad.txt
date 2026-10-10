@@ -1140,6 +1140,88 @@ Número de órdenes por petición:
   fallo distinto, el que solo ve el CASO 10. La lista del Bloque C queda
   en N1-N8, N9b y N10-N14.)
 
+  (Nota 2026-10-10, Bloque C: RESULTADOS EXACTOS. Versión buena:
+  check_ficha_oportunidad_service 40/40 y check_ficha_oportunidad_http
+  69/69. Cada N sobre una copia en el scratchpad, de una en una, borrada
+  al terminar; el código real sin tocar (git status: solo los dos scripts
+  nuevos). Lanzador: negativos.py (scratchpad, SHA-256 67ff915b...3e5ce367,
+  completo en el mensaje del commit), que enseña el diff y el SHA-256 de
+  cada archivo roto. Formato: servicio | HTTP [| aviso servicio | aviso
+  HTTP].
+  N1   40/40 | 23/38. Fallan: WEBHOOK_SECRET en X-Webhook-Secret da 200;
+       los tres 422 y los tres 404 dan 401; los CASOS 4, 6 y 9 revientan
+       (401 donde se esperaba 200) y 5 y 12 en cascada; CASO 8 T6 y T7
+       (texto 0 veces); CASO 11. El servicio no ve la llave (está en el
+       router): 40/40 es lo esperado.
+  N2   32/39 | 31/38. Servicio: la S4 recibe EstadoNoPermiteAviso
+       (sin_gate) y, en cascada, primera orden, modo, cambio de en medio y
+       logs; la S5 recibe la OportunidadNoEncontrada de gate-avisos, no la
+       de la ficha. HTTP: CASOS 4, 6 y 9 revientan con 409
+       sin_presupuesto, 5 y 12 en cascada, CASO 8 T6 y T7.
+  N3   40/40 | 67/69. Fallan "importes ... son TEXTO" (12832.05 como
+       número) y "T3: los 8 campos de presupuesto iguales a /gate-avisos".
+  N4   40/40 | 65/69 | 17/18 | 73/75. Ficha: T4 fecha_visita, T6 a las
+       10:00, CASO 6 visitas y logs. Gate-avisos: sus casos de invierno.
+       Demuestra que a_madrid es UNA función para los dos endpoints.
+  N5   39/40 | 63/69. Servicio: S3, un texto SQL lee el detalle entero.
+       HTTP: claves exactas (las 20 fichas), claves prohibidas (detalle,
+       decision_id, presupuesto_id, visita_id), CASO 8: texto_cliente 2
+       veces en T6 y T7 y claves de detalle (precio_m2...).
+  N6   37/40 | 69/69. Servicio: S4 primera orden, 'read committed' y el
+       historial trae el cambio de en medio (no cuadra). HTTP 69/69, como
+       preveía el plan: sin concurrencia, por HTTP no se ve; por eso
+       existe la S4.
+  N7   40/40 | 67/69. Fallan T4 y T4b (informe vacío).
+  N8   40/40 | 66/69. Fallan T7 (visitas), CASO 6 visitas (falta la
+       cancelada) y CASO 8 T7 (el texto de la cancelada 0 veces).
+  N9b  39/40 | 68/69. Servicio: S4 "la ficha no escribe ningún log" (3
+       en vez de 2). HTTP: CASO 10, recuentos propios (logs 54). Logs de
+       oportunidades propias: los borró la limpieza (CASO 14 correcto).
+  N10  37/40 | 67/69. Servicio: S2 'ganada', log sin 'estado' y estado
+       distinto (evento añadido). HTTP: T9 y CASO 6 logs (evento de más).
+  N11  40/40 | 66/69 | 15/18 | 71/75. Ficha: T8 (contacto y nombre/
+       teléfono de la ficha de clientes) y CASO 9 (contacto de su
+       solicitud). Gate-avisos: sus casos de contacto.
+  N12  40/40 | 67/69. Fallan T7 (visita_sustituida no se interpreta, no
+       cuadra) y T10 (los logs que no son cambio de estado no cuadran).
+  N13  40/40 | 68/69 | 17/18 | 74/75. Ficha: CASO 9 (contacto de su
+       solicitud). Gate-avisos: sus casos de contacto. El CASO 12 no falla:
+       los dos endpoints comparten las columnas y salen igual de mal.
+  N14  40/40 | 67/69. Fallan las dos comprobaciones de lista del CASO 9.
+  Los recuentos totales cambian entre versiones porque un CASO o una S
+  que revienta cuenta como UN fallo ("termina sin excepción") y se salta
+  el resto de sus comprobaciones; así el recuento sigue siendo exacto.
+  Pasada sobre los datos reales (8.1; pasada_real_ficha.py, SHA-256
+  b494052590e4a1c9f52d62bc4cc0b726ad43bd434539608bc838b418c2ddd846): 27
+  oportunidades, 27 fichas sin error; [INFO] cuadran 27, no cuadran 0.
+  Orden del historial (punto a de la revisión de B2): construir_historial
+  conserva el orden recibido (S2) y el desempate por id del ORDER BY se
+  prueba por HTTP (CASO 6, dos logs con el mismo created_at).
+  Suspensión durante las pruebas en negativo: el registro de Windows
+  tiene un Modern Standby de 16:30:04 (506) a 16:40:50 (507), con el
+  portátil 30 min sin tocar. Se solapó con N13 (16:29:35-16:31:23), N14 y
+  las repeticiones de N1, N3 y N4 (hasta 16:36:27). Las cinco se
+  REPITIERON de 16:50:49 a 17:00:13, sin ningún 506/507 en ese intervalo,
+  con los MISMOS resultados exactos de arriba. N2 y N5-N12 (16:18-16:29)
+  y las primeras pasadas de N1, N3 y N4 (16:12-16:17): ningún 506/507
+  entre 16:12 y 16:30.
+  Regresión y suite completa (8.3), con la regla de uso (Gabi confirmó
+  enchufado, tapa abierta, y Docker/n8n y navegador cerrados): 41/41 con
+  código de salida 0 en UNA pasada, de 16:41:10 a 16:49:58, sin ningún
+  506/507 en ese intervalo ("ninguna suspension"; el 507 de las 16:40:50
+  es la salida de la suspensión anterior, 20 s antes de empezar). Dentro
+  de ella, la regresión de 8.3: check_aviso_gate_http 75/75,
+  check_aviso_gate_service 18/18, check_gate_decisions_http 121/121,
+  check_visits_http 55/55, check_listado_llamadas_service 39/39,
+  check_listado_llamadas_http 88/88, check_followup_tasks_http 125/125 y
+  check_lead_session_http 24/24; los dos nuevos 40/40 y 69/69.
+  check_graceful_shutdown y check_mcp_connection desde copias en el 8030
+  y el 8031; uvicorn del 8031 detenido por su PID (19892, el del log,
+  igual al de netstat; el de Popen, 34704, es el lanzador del venv). El
+  8000 (PID 7008) no se tocó. Salida de los cinco scripts de P4 revisada
+  a mano: sin fallos (check_foreign_keys sigue contando 9 por columnas,
+  ya anotado). Lanzador: suite.py (scratchpad, SHA-256 en el commit).)
+
 
 ================================================================
 9. RIESGOS
