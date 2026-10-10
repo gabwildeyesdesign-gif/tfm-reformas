@@ -5,6 +5,9 @@ PLAN: resumen de la solicitud en cada elemento de GET /llamadas-del-dia
 Documento de plan · Nivel N0 · 2026-10-10 · Rama feat/n0-resumen-lista-diaria
 (desde main = origin/main = ea96f39)
 Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+[Actualizado 2026-10-10: Bloque A APROBADO por el tutor sobre cc650c3,
+P1-P10 DECIDIDAS (nota en la sección 11). P1 = b): no hay Bloque B1
+(nota 4.3). Bloque B0 en curso.]
 
 Fuentes: el encargo del Bloque A del 2026-10-10 (decisiones D26.1, D26.3 y
 D26.7 ya tomadas y pre-decisiones 1-8 del tutor),
@@ -484,6 +487,28 @@ Número de órdenes por petición (K1):
      COLUMNAS_SOLICITUD hace fallar a la vez la lista, gate-avisos y la
      ficha: demuestra que la fuente es una sola.
 
+4.3 (Nota 2026-10-10: P1 decidida, opción b) con el ajuste del tutor;
+    SUSTITUYE a la propuesta a) de 4.1 y a todo 4.2, que quedan como
+    registro de la alternativa evaluada.)
+  - datos_oportunidad.py NO cambia (git diff vacío en él al final de la
+    rama). No hay paso B1.
+  - En listado_llamadas_service.py, a nivel de módulo (se ejecuta una sola
+    vez, al importarlo; uvicorn lo importa al arrancar, a través de
+    app/main.py y el router):
+        NOMBRES_SOLICITUD = ("m2", "nivel_acabados", "cambios_estructurales")
+        _EXPRESIONES = dict(COLUMNAS_CASO)
+        COLUMNAS_SOLICITUD_SQL = ", ".join(_EXPRESIONES[n] for n in NOMBRES_SOLICITUD)
+    Un nombre que no exista en COLUMNAS_CASO lanza KeyError en esa línea:
+    el servidor no llega a abrir el puerto. SQL_OPORTUNIDADES y SQL_VISITAS
+    añaden COLUMNAS_SOLICITUD_SQL al final de su SELECT (sección 3).
+  - SolicitudLlamada se construye en el listado con una función pura,
+    solicitud_desde(m2, nivel_acabados, cambios), probada en la S4b.
+  - Lo que sustituye a 4.2: (1) ningún script de gate-avisos ni de la
+    ficha cambia y datos_oportunidad.py tampoco, así que su regresión es la
+    suite (8.3); (2) la comprobación con ast de la S9 (nota de 8.1); (3) la
+    N8 (nota de 8.4); (4) N11, un nombre inexistente en NOMBRES_SOLICITUD:
+    el import del módulo falla con KeyError (por eso es "al arrancar").
+
 
 ================================================================
 5. PRE-DECISIONES 3, 4, 5, 7 Y 8 (validadas o discutidas)
@@ -682,6 +707,17 @@ intervalo (lección del 2026-10-10).
        ninguno de los archivos tocados importa fastapi ni fastmcp.
   Las 4 preguntas de la S5 ampliada: las de 8.0, con más filas propias
   (dos leads más); nada cambia en las respuestas.
+  (Nota 2026-10-10, P1 = b): la S4b prueba solicitud_desde (del listado),
+  no solicitud_desde_fila. La S9 pasa a ser: con ast,
+  listado_llamadas_service.py importa COLUMNAS_CASO de
+  app.services.datos_oportunidad; ninguna constante de texto del listado
+  contiene "->> 'm2'", "'nivel_acabados'" ni "'incluye_cambios_estructurales'";
+  COLUMNAS_SOLICITUD_SQL se asigna a nivel de MÓDULO (no dentro de una
+  función) y en tiempo de ejecución es igual a las tres expresiones de
+  COLUMNAS_CASO unidas por ", "; en todo app/ cada expresión aparece escrita
+  UNA sola vez (en datos_oportunidad.py); y datos_oportunidad.py es igual
+  al de ea96f39 (git diff vacío, comprobado en el script con el SHA-256 del
+  archivo de git show).)
 
 8.2 Bloque C: scripts/check_listado_llamadas_http.py (HTTP real, 8024)
   Mismo esquema de hoy (uvicorn.Server en un hilo, SIN --reload, puerto
@@ -852,6 +888,19 @@ intervalo (lección del 2026-10-10).
        por un solo lead: es C4 hecho visible). Los logs del manejador
        global de esos 500 se borran por id exacto tras comprobarlos.
   N-B0a y N-B0b: sección 8.0.
+  (Nota 2026-10-10, P1 = b) y P8 = sí.)
+  - N5 (copia) se mantiene: solo la S9 la ve.
+  - N8 pasa a ser: una expresión de COLUMNAS_CASO cambiada en una COPIA de
+    datos_oportunidad.py ("NOT (...)::boolean" en cambios_estructurales):
+    tienen que fallar a la vez el listado (S5, CASO 18), la ficha (sus casos
+    de reforma) y gate-avisos (los suyos). Se ejecutan los cuatro scripts
+    afectados sobre la misma copia, de uno en uno.
+  - N9 se ejecuta, con el caso E-sustituida en la preparación de 8.2.
+  - N11 NUEVA: un nombre que no existe en NOMBRES_SOLICITUD (por ejemplo
+    "m3"): importar app.services.listado_llamadas_service lanza KeyError, y
+    el uvicorn del script HTTP no arranca (el script se para y avisa). Se
+    enseña la traza literal. Demuestra el "ruidoso al arrancar" del ajuste
+    del tutor.
   (No se propone una negativa "sin extra='forbid'": quitarlo no cambia
   nada observable mientras las consultas no lean más; lo cubren N2 y N3,
   que añaden el campo al esquema Y a la consulta.)
@@ -942,6 +991,24 @@ intervalo (lección del 2026-10-10).
        comprobaciones 1-4 de 4.2 son las mismas que ya validó la N13 de la
        ficha.
 
+  (Nota 2026-10-10: decisiones de Gabi, revisión del tutor sobre cc650c3.
+  Plan APROBADO con estas decisiones.)
+  - P1: opción b). El listado NO toca datos_oportunidad.py. Ajuste del
+    tutor: las tres expresiones se resuelven por nombre desde COLUMNAS_CASO
+    UNA SOLA VEZ, AL IMPORTAR listado_llamadas_service (constante calculada
+    a nivel de módulo), no dentro de cada petición: si un nombre no existe,
+    KeyError al arrancar uvicorn (ruidoso e inmediato), nunca a las 9:00 en
+    WF3. Por tanto NO hay paso B1 (ver las notas de 4, 8.1, 8.4 y 12).
+  - P2 y P3: objeto "solicitud" (SolicitudLlamada, tres campos);
+    texto_cliente solo en LlamadaVisita.
+  - P4: B0 en un commit propio, como se propone.
+  - P5: SÍ. R1 se acepta en N0 como limitación documentada (Adenda 5.7) y
+    tarea anotada en CLAUDE.md (dos CHECK en leads). Se añade a la
+    limitación: cuando exista WF3, un fallo de la lista llegará a WF4
+    (avisos técnicos, ya construido en n8n el 2026-10-10).
+  - P6, P7, P9 y P10: como se proponen.
+  - P8: SÍ, N9 con su caso E-sustituida.
+
 
 ================================================================
 12. BLOQUES
@@ -968,6 +1035,11 @@ intervalo (lección del 2026-10-10).
       C1, la tarea de P5 y el pendiente de la S5 resuelto), nota fechada en
       la sección 4 de D26 (estado de 4a-2 y C1) y este plan con los
       hashes. [PARA]
+  (Nota 2026-10-10, P1 = b): NO hay Bloque B1. Orden: A, B0, B2, C, D.
+  B2 incluye SolicitudLlamada, NOMBRES_SOLICITUD / COLUMNAS_SOLICITUD_SQL a
+  nivel de módulo y solicitud_desde (4.3). C incluye N1-N11, N-B0 ya hechas
+  en B0. Antes de ejecutar cualquier script se pide a Gabi que confirme
+  Docker/n8n y el navegador cerrados.)
   Cada bloque, un commit con los recuentos reales y el SHA-256 de cada
   script del scratchpad que dé un recuento, y git push. Todo el código,
   scripts incluidos, comentado línea a línea o en grupos de 2-4 líneas
