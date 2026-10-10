@@ -115,3 +115,17 @@ plan de `GET /llamadas-del-dia` (`docs/Plan_Endpoint_Listado_WF3.txt`, pre-decis
   `docs/schema_actual.sql`): bajarlo exige una migración además del esquema Pydantic (defensa doble, como `m2`).
   Rechazadas: **A**, solo el prompt (probabilística: un fallo del modelo mete un teléfono en el email diario
   acumulado); **C**, quitar el texto de la lista (reabre el hueco de D26.1).
+
+**[Nota 2026-10-10, estado de 4a-1]** `GET /oportunidades/{oportunidad_id}/ficha` está IMPLEMENTADO y verificado en
+la rama `feat/n0-ficha-oportunidad`, **pendiente de merge** (plan `docs/Plan_Endpoint_Ficha_Oportunidad.txt`;
+contrato en la fila 9 y la sección 5.9 de la Adenda). Endpoint nuevo, como pide D26.6: `GET /gate-avisos` no cambia
+de contrato (sus piezas comunes se movieron a `app/services/datos_oportunidad.py` sin cambio de comportamiento).
+Respuestas a las preguntas abiertas de D26.2 (decisiones de Gabi, 2026-10-10): (a) el informe sale en la ficha y no
+en `GET /gate-avisos` (resuelta por D26.6); (b) fotos: se devuelven las rutas; (c) otras oportunidades: lista
+mínima `otras_oportunidades_mismo_email`, sin contacto. Desviaciones de D26.2: el umbral es el **vigente**, no el
+aplicado (no hay columna; deuda técnica `presupuestos.umbral_gate_aplicado`); y en N0 no se registra quién abre
+una ficha (la auditoría de lecturas queda para D26.5, como ya preveía). Hallazgo para D26.7: el log de la solicitud de
+visita guarda una copia de `texto_cliente` en `logs.detalle`, que no se limpia sola cuando se limite o filtre el
+texto (R10 del plan). Historial medido el 2026-10-10: las 27 oportunidades reales cuadran; las 'ganada' puestas a
+mano no cuadrarán, por diseño. Verificación: 40/40 y 69/69, catorce pruebas en negativo y suite completa 41/41.
+Siguiente: 4a-2 (resumen en la lista diaria, D26.1), en otra rama.

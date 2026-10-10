@@ -18,6 +18,7 @@ endpoints y revisión técnica final.
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST |
 | 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura |
 | 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura |
+| 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
 autenticación del webhook): además del cuerpo, toda petición debe traer la
@@ -816,6 +817,21 @@ scripts/check_aviso_gate_service.py (18/18), con ocho pruebas en negativo,
 una de ellas (N6, float) mutante equivalente (detalle en la sección 4.2 del
 plan y en el commit b6e9adf).
 
+(Nota 2026-10-10, rama feat/n0-ficha-oportunidad, Bloque B1, commit
+1c0b2d4.) a_madrid y deducir_sin_iva ya no se definen en
+aviso_gate_service.py: se MOVIERON, sin cambiar su cuerpo, a
+app/services/datos_oportunidad.py, que comparte con la ficha (5.9) las 17
+columnas del caso (COLUMNAS_CASO) y la construcción del contacto, la
+reforma, las fotos y el presupuesto. aviso_gate_service las importa de ahí
+(también deducir_sin_iva, para que los scripts las sigan encontrando con el
+mismo nombre). SIN cambios de comportamiento, demostrado así: scripts sin
+tocar, 75/75 y 18/18 antes y después; ast.dump de las dos funciones igual
+al de main (ff22450); el SQL que llega a Postgres, el mismo texto (130 y
+839 caracteres normalizados); y las respuestas de las 7 oportunidades
+reales con Gate, idénticas byte a byte (SHA-256). En negativo, una mudanza
+con nombre y email intercambiados da 17/18 y 74/75. Este contrato no
+cambia.
+
 5.7 GET /llamadas-del-dia (añadido el 2026-10-07, rama feat/n0-listado-wf3)
 
 Para qué: devuelve la lista diaria de llamadas que WF3 (n8n) envía a
@@ -1069,6 +1085,173 @@ scripts/check_followup_service.py (34/34) y
 scripts/check_followup_tasks_http.py (125/125, puerto 8025), con catorce
 pruebas en negativo (N1-N12, N2b y N3b; resultados exactos en la sección
 6.3 del plan y en el commit ad072f5).
+
+5.9 GET /oportunidades/{oportunidad_id}/ficha (añadido el 2026-10-10, rama
+feat/n0-ficha-oportunidad)
+
+Para qué: la ficha completa de CUALQUIER oportunidad, con o sin Gate, para
+que administración sepa qué pidió el cliente antes de llamarle (D26.2): un
+caso con Gate, un seguimiento de 48 h o una visita pedida desde el chat. Es
+el "endpoint de ficha" de D25.9, como endpoint NUEVO (D26.6): GET
+/gate-avisos (5.6) no cambia y sigue siendo el aviso de WF2 y la consulta
+del formulario del Gate. La muestra una página protegida de n8n (fuera de
+esta rama). Nunca un agente de IA: devuelve email, importes e informes
+(D18.5). Solo REST, sin tool MCP, y de SOLO LECTURA. Plan completo y
+decisiones P1-P12: docs/Plan_Endpoint_Ficha_Oportunidad.txt.
+
+Autenticación: X-Gate-Secret (GATE_SECRET), como /gate-decisions,
+/gate-avisos, /llamadas-del-dia y /create-followup-task. A diferencia de
+ellos, la dependencia va en el ROUTER (APIRouter(prefix="/oportunidades",
+dependencies=[...]), P8): cualquier ruta futura bajo /oportunidades la
+hereda. El valor de WEBHOOK_SECRET da 401 en las dos cabeceras; el cuerpo y
+WWW-Authenticate son idénticos a los de /gate-avisos, y el 401 va antes que
+el 422 (sin cabecera y con id "abc": 401). Verificado.
+
+Entrada: solo el parámetro de la ruta, oportunidad_id, entero > 0
+(Annotated[int, Path(gt=0)]). Sin cuerpo ni parámetros de consulta. Lo
+envía n8n desde un enlace, no un LLM (1.1a no aplica).
+
+Respuesta 200, campo a campo (fechas en hora de Madrid con su desfase;
+importes y m2 como Decimal, que viaja en el JSON como TEXTO exacto; todos
+los modelos con extra="forbid"):
+  oportunidad_id, estado_oportunidad (EstadoOportunidad, los 8 del CHECK) y
+    fecha_solicitud (leads.created_at).
+  contacto, reforma y fotos: los MISMOS objetos y las MISMAS reglas de 5.6
+    (contacto de la solicitud, nunca la ficha de clientes; "no_disponible"
+    sin la clave 'contacto'), construidos por las mismas funciones
+    (app/services/datos_oportunidad.py). Verificado: para un caso con Gate,
+    iguales a los de /gate-avisos.
+  presupuesto           null si la oportunidad no tiene presupuesto. Si lo
+                        tiene, los 8 campos del presupuesto de 5.6 (con IVA
+                        de las columnas, sin IVA DEDUCIDO con
+                        deducir_sin_iva, umbral_gate_vigente) más
+                        requiere_aprobacion ("si hubo Gate").
+  visitas               TODAS, también canceladas y completadas, lo más
+                        antiguo primero: estado_visita (EstadoVisita, los 4
+                        del CHECK visitas_estado_check), fecha_visita
+                        (visitas.fecha_propuesta), fecha_solicitud_visita
+                        (visitas.created_at) y texto_cliente.
+  llamadas              los resultados de llamadas ya registrados (hoy, como
+                        mucho una fila de decisiones_gate): tipo_llamada
+                        ("gate" en N0; 4b añadirá valores, no campos),
+                        resultado, motivo, fecha_registro, fecha_visita y el
+                        INFORME entero (D26.2). Es la diferencia principal
+                        con /gate-avisos, que nunca lo devuelve.
+  historial             los cambios de estado, lo más antiguo primero
+                        (evento, estado, fecha). Siempre empieza por el alta.
+  historial_cuadra      true si el estado actual es el que dejó el último
+                        evento y todos los logs de cambio se entendieron.
+  otras_oportunidades_mismo_email
+                        las OTRAS oportunidades del mismo cliente (la ficha
+                        de clientes es única por email): oportunidad_id,
+                        tipo_reforma, estado_oportunidad y fecha_solicitud.
+                        Sin la propia y sin datos de contacto (P6).
+
+Lo que NO sale (minimización, RGPD): lead_token, cliente_id, lead_id,
+presupuesto_id, visita_id, decision_id, log_id, logs.detalle (ni entero ni
+ninguna clave suelta), logs.accion de los logs que no son cambio de estado,
+los datos de la ficha de clientes, canal, mensaje_original, confianza_ia,
+prioridad, datos_completos, aprobado_por, duracion_estimada_dias,
+updated_at y fecha_ultimo_contacto (P12). Defensa doble: las consultas no
+los leen (salvo cliente_id y presupuestos.id, que se leen para la consulta
+5 y para saber si hay presupuesto, y no se devuelven) y extra="forbid".
+Verificado: claves exactas en todos los niveles de 20 fichas y ninguna
+clave prohibida.
+
+Historial: se reconstruye de logs, sin tabla nueva. El alta ('nueva', en
+oportunidades.created_at) no tiene log; cada log de cambio deja un estado:
+  presupuesto_calculado      detalle ->> 'estado': 'presupuesto_enviado' o
+                             'pendiente_aprobacion' (otro valor: no se
+                             entiende).
+  visita_solicitada          'visita_agendada'.
+  gate_decision_registrada   detalle ->> 'decision': visita_acordada ->
+                             'visita_agendada'; descartar -> 'perdida'.
+  seguimiento_abierto        'seguimiento_pendiente'.
+Del detalle solo se leen esas DOS claves ("->>"): nunca el detalle entero,
+que en las visitas lleva el texto del cliente. visita_sustituida no es un
+cambio de estado (la sustitución se ve en visitas), y
+presupuesto_requiere_revision, visita_configuracion_incompleta y los logs
+del manejador global (entity_type 'sistema') no entran. Un log de cambio
+que no se entiende no sale y historial_cuadra pasa a false. Cuando el
+historial no cuadra, la ficha lo dice y NUNCA añade un evento inventado
+(5.3 del plan). Las acciones se importan de los servicios que las
+escriben. El 2026-10-10, las 27 oportunidades reales daban ficha sin error
+y las 27 cuadraban.
+
+| Código | motivo | Cuándo | Reintento en n8n |
+|---|---|---|---|
+| 200 | — | La oportunidad existe (con o sin presupuesto, con o sin Gate, en cualquier estado) | — |
+| 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET en cualquiera de las dos cabeceras; antes que el 422 | NO |
+| 422 | (Pydantic) | oportunidad_id no es un entero > 0 ("0", "-1", "abc") | NO |
+| 404 | oportunidad_no_encontrada | No existe la oportunidad (también 2147483648 y 99999999999999999999: 404, nunca 500, verificado) | NO |
+| 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+No hay 409 (la ficha no depende del estado ni del Gate), ni 503 (no lee
+reglas_negocio: el umbral sale de umbrales_gate con LEFT JOIN), ni 201.
+
+Orden de las comprobaciones: 401 -> 422 -> 404 -> 200.
+
+SOLO LECTURA, con tres barreras: get_db_connection() (termina con
+rollback); la PRIMERA orden de la transacción es SET TRANSACTION ISOLATION
+LEVEL REPEATABLE READ, READ ONLY (el mismo texto que 5.7, importado, no
+copiado); y ningún FOR UPDATE. REPEATABLE READ hace falta aquí: la ficha
+junta cinco consultas (cabecera, visitas, llamadas, historial y otras
+oportunidades), y con READ COMMITTED una decisión registrada entre la
+primera y la cuarta daría una ficha que se contradice (estado anterior y,
+a la vez, el evento nuevo). Con una sola foto de los datos no pasa.
+Verificado: con un cambio CONFIRMADO por otra conexión en mitad de la
+ficha, la ficha trae el estado y el historial de antes, y cuadra; sin
+REPEATABLE READ, trae el evento nuevo y no cuadra. No escribe nada,
+tampoco en logs (verificado: recuentos y fechas propios iguales antes y
+después de una tanda de 200, 404, 401 y 422). Repetir la petición devuelve
+el mismo cuerpo, byte a byte.
+
+LIMITACIONES (asumidas en N0):
+  - Auditoría de lecturas: la base de datos no registra quién ni cuándo
+    abrió una ficha (P7, opción c). La llave es compartida y no identifica
+    al operador (5.5), así que un registro diría solo "alguien con la llave
+    de administración". Se hará con la búsqueda de clientes (D26.5), que ya
+    lo prevé, junto con la identificación del operador (N1).
+  - Umbral: se devuelve el VIGENTE (umbrales_gate.umbral de hoy), no el que
+    aplicó el Gate, que D26.2 pedía (P2). El aplicado solo está en la foto
+    del cálculo en logs. DEUDA TÉCNICA, la misma de 5.6: la columna
+    presupuestos.umbral_gate_aplicado. El 2026-10-10 coincidían en los 7
+    casos reales con Gate.
+  - 'ganada' sin registro: en N0 'ganada' (y 'perdida' tras la visita) se
+    pone A MANO y ningún log lo registra, así que esas oportunidades darán
+    SIEMPRE historial_cuadra = false, por diseño. La página de n8n tiene
+    que decirlo con un texto neutro, no como una alarma.
+  - Copia de texto_cliente en logs: el log de la solicitud de visita
+    ('visita_solicitada' y 'visita_sustituida', visits_service.py) guarda
+    una copia de texto_cliente en logs.detalle. La ficha no la lee, pero
+    cuando D26.7 limite y filtre texto_cliente esa copia NO se limpiará
+    sola, y un borrado por RGPD tiene que incluir esas filas de logs, no
+    solo visitas.texto_cliente (R10 del plan). Para el plan de D26.7.
+  - Leads sin la clave 'contacto': 17 de las 27 oportunidades reales (datos
+    de prueba anteriores al 2026-09-25) salen con "no_disponible"; su ficha
+    no sirve para llamar (C4 del plan).
+  - otras_oportunidades_mismo_email agrupa por un email NO verificado: si
+    alguien escribió el email de otra persona, la ficha de una enseña que
+    existe la solicitud de la otra (tipo, estado y fecha, sin contacto).
+    Solo lo ve quien tiene la llave de administración.
+  - Las rutas de las fotos se devuelven tal como se guardaron (P5); hoy no
+    son URLs que la página pueda abrir.
+  - El informe es texto libre de administración y sale entero. La llave
+    X-Gate-Secret abre ahora la ficha completa de CUALQUIER cliente: nunca
+    dársela al Agente 2. Una vez en n8n, los datos ya no los protege esta
+    API.
+  - Sin paginación: listas pequeñas en N0.
+
+Implementación: app/services/datos_oportunidad.py (compartido con 5.6,
+Bloque B1), app/services/ficha_oportunidad_service.py (obtener_ficha,
+leer_ficha, estado_tras, construir_historial), app/api/ficha_oportunidad.py,
+app/schemas/ficha_oportunidad.py y EstadoVisita en app/schemas/common.py;
+octavo include_router en app/main.py. Sin migración. Verificación:
+scripts/check_ficha_oportunidad_service.py (40/40) y
+scripts/check_ficha_oportunidad_http.py (69/69, puerto 8026), con catorce
+pruebas en negativo (N1-N8, N9b y N10-N14; resultados exactos en la
+sección 8.4 del plan y en el commit 377bac9); suite completa 41/41 en una
+pasada válida.
 
 6. Revisión técnica final — hallazgos y resolución
 

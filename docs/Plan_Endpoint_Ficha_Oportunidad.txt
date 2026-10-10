@@ -1144,8 +1144,11 @@ Número de órdenes por petición:
   check_ficha_oportunidad_service 40/40 y check_ficha_oportunidad_http
   69/69. Cada N sobre una copia en el scratchpad, de una en una, borrada
   al terminar; el código real sin tocar (git status: solo los dos scripts
-  nuevos). Lanzador: negativos.py (scratchpad, SHA-256 67ff915b...3e5ce367,
-  completo en el mensaje del commit), que enseña el diff y el SHA-256 de
+  nuevos). Lanzador: negativos.py (scratchpad, SHA-256
+  67ff915bc544f599c379ed8b794ea73b983cbaca3fa0e8dd9672e477ec5ce367 [corregido
+  el 2026-10-10 en el Bloque D: la abreviatura de 377bac9 terminaba mal en
+  "3e5ce367"; el mensaje de ese commit lo tiene bien], completo también en
+  el mensaje del commit), que enseña el diff y el SHA-256 de
   cada archivo roto. Formato: servicio | HTTP [| aviso servicio | aviso
   HTTP].
   N1   40/40 | 23/38. Fallan: WEBHOOK_SECRET en X-Webhook-Secret da 200;
@@ -1366,3 +1369,25 @@ Número de órdenes por petición:
   2-4 líneas, con "# SQL" encima de cada execute. Nada de merge a main sin
   la confirmación explícita de Gabi, después de la revisión del tutor, y
   siempre con --ff-only.
+
+  (Nota 2026-10-10: HASHES DE LOS BLOQUES, rama feat/n0-ficha-oportunidad.)
+  A.  680982f  plan; 20eb472  decisiones de Gabi y ajustes del tutor
+      (sección 11, 8.4 sin N9 ni N6b, R10).
+  B1. 1c0b2d4  datos_oportunidad.py; aviso_gate_service lo usa. 18/18 y
+      75/75 antes y después, comprobar_b1 15/15, huellas 7/7; N13 17/18,
+      74/75, 14/15 y 5/7. Procedencia de los recuentos (scratchpad, en el
+      mensaje de 26a60b4):
+      comprobar_b1.py  1eeaabe67579c199c15da7f69af5f75eaee22e4c456a913fb6752821d1f588dc
+      huellas_aviso.py fb7f957f9d0edf91805499984c4582b8ec2ea91f7ecb362bd6b0430acc94e950
+  B2. 26a60b4  el endpoint; prueba mínima en el 8026 19/19
+      (prueba_minima_ficha.py
+      57f1e95c23bfc4aac021a1767109742f64b62d59871ecf5562c55c714e5a8070).
+  C.  377bac9  los dos scripts (40/40 y 69/69), N1-N14 con sus resultados
+      en 8.4, pasada sobre los datos reales 27/27 y suite 41/41.
+      28c4c26  solo comentarios en los dos scripts (corrección del tutor):
+      187/391 -> 0/391 y 21/181 -> 0/181 sentencias en tramos de más de 4
+      sin comentario; ast.dump igual al de 377bac9; 0 líneas de código en
+      el diff; otra vez 40/40 y 69/69.
+  D.  El commit de este bloque (el siguiente a 28c4c26): fila 9 y sección
+      5.9 de la Adenda, nota en la 5.6, CLAUDE.md, nota en la sección 4 de
+      D26 y esta nota. Su hash queda en el historial de la rama.

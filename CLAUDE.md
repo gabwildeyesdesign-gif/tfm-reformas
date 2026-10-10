@@ -195,6 +195,12 @@ cabecera X-Gate-Secret, solo REST, sin tool MCP. Detalle en "Estado
 actual".)
 (Nota 2026-10-10: "pendiente de merge" ya no es cierto: integrado en
 main en 1af758a, comprobado en GitHub.)
+(Nota 2026-10-10: desde el 2026-10-10, en la rama feat/n0-ficha-oportunidad
+(pendiente de merge), GET /oportunidades/{oportunidad_id}/ficha: la ficha
+completa de cualquier oportunidad, con o sin Gate (D26.2). Solo REST, sin
+tool MCP, de SOLO LECTURA, octavo include_router, cabecera X-Gate-Secret
+puesta en el ROUTER (no en la ruta). No forma parte de los 5 endpoints
+originales.)
 Lo que sigue es la especificación completa, no el estado actual.
 
 calculate-estimate tiene las dos (MCP en producción, REST para
@@ -488,6 +494,18 @@ SOLO REST.
 > contrato de GET /llamadas-del-dia (sus scripts comprueban claves EXACTAS)
 > y GET /gate-avisos, que usan WF2 y el formulario del Gate, PUBLICADOS en
 > n8n. Búsqueda de clientes por identificador: mejora posterior (D26.5).
+>
+> **(Nota 2026-10-10, tarde.) Bloque actual: 4a-1, GET
+> /oportunidades/{oportunidad_id}/ficha**, implementado y verificado en la
+> rama `feat/n0-ficha-oportunidad`, **pendiente de merge** (bloques A, B1,
+> B2, C y D cerrados; plan docs/Plan_Endpoint_Ficha_Oportunidad.txt). Es un
+> endpoint NUEVO (D26.6): GET /gate-avisos no cambia de contrato; B1 solo
+> movió sus piezas comunes a app/services/datos_oportunidad.py, sin cambio
+> de comportamiento (WF2 y el formulario del Gate no se tocan). Misma regla
+> de siempre: no hacer merge sin la confirmación explícita de Gabi, después
+> de la revisión del tutor, y siempre con `--ff-only`. El siguiente bloque
+> de backend es 4a-2 (resumen de la solicitud en cada elemento de GET
+> /llamadas-del-dia, D26.1), en su propia rama.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -802,6 +820,22 @@ de netstat). Salida de los cinco scripts de P4 revisada a mano: sin
 fallos. Aviso de memoria: con 8 GB, una tanda larga de pruebas en negativo
 en segundo plano se cortó por falta de memoria con Docker/n8n abierto; se
 ejecutaron de una en una tras cerrarlo.)
+(Nota 2026-10-10, rama feat/n0-ficha-oportunidad: la suite tiene ahora 41
+scripts, con check_ficha_oportunidad_service y check_ficha_oportunidad_http
+(puerto 8026, nunca el 8000). 41/41 en UNA pasada válida el 2026-10-10, de
+16:41:10 a 16:49:58, con la regla de uso (Gabi confirmó enchufado, tapa
+abierta, y Docker/n8n y navegador cerrados) y sin ningún Kernel-Power
+506/507 en el intervalo. OJO: con el minuto de margen a cada lado, el
+comando encontró un 507 a las 16:40:50: era la SALIDA de un Modern Standby
+(506 a las 16:30:04) que terminó 20 s antes de empezar la suite; el
+portátil llevaba 30 min sin tocarse. Esa suspensión SÍ se solapó con cinco
+pruebas en negativo, que se repitieron después sin suspensión y con los
+mismos resultados. Lección: en tandas largas sin intervención de Gabi, la
+pantalla a 30 min también suspende las pruebas en negativo; comprobar
+506/507 también para ellas. check_graceful_shutdown y check_mcp_connection
+desde copias en el 8030 y el 8031; uvicorn del 8031 detenido por su PID
+(19892, el del log, igual al de netstat). Salida de los cinco scripts de
+P4 revisada a mano: sin fallos.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -829,6 +863,38 @@ de la Adenda. Incidente de la N12 (2026-10-08): una versión rota dejó
 horas_seguimiento_presupuesto en 8761 en la tabla real; restaurada a 48 y
 regla nueva en "Cómo trabajamos" (conexiones de prueba sin commit).
 (Nota 2026-10-10: "pendiente de merge" ya no es cierto: integrado en main en 1af758a, comprobado en GitHub.)
+
+GET /oportunidades/{oportunidad_id}/ficha (rama feat/n0-ficha-oportunidad,
+2026-10-10, pendiente de merge; plan 680982f y 20eb472, B1 1c0b2d4, B2
+26a60b4, pruebas 377bac9, comentarios 28c4c26, documentación en el commit
+del Bloque D): la ficha completa de CUALQUIER oportunidad, con o sin Gate
+(D26.2, bloque 4a-1 de D26.6), para la página protegida de n8n que abre
+administración antes de llamar. Solo lectura, X-Gate-Secret EN EL ROUTER
+(P8), 200 / 401 / 422 / 404 (sin 409 ni 503). Contacto, reforma, fotos y
+presupuesto (con y sin IVA, umbral VIGENTE, requiere_aprobacion) salen de
+app/services/datos_oportunidad.py, compartido con GET /gate-avisos (B1:
+a_madrid y deducir_sin_iva movidas sin cambiar su cuerpo; 75/75 y 18/18
+con los scripts sin tocar, ast.dump igual, el mismo SQL y las respuestas
+de los 7 casos reales con Gate idénticas por SHA-256). Además: todas las
+visitas, las llamadas CON su informe, el historial de estados reconstruido
+de logs (solo detalle->>'estado' y ->>'decision'; nunca un evento
+inventado: historial_cuadra = false si no cuadra, por ejemplo 'ganada'
+puesta a mano) y otras_oportunidades_mismo_email. SET TRANSACTION
+ISOLATION LEVEL REPEATABLE READ, READ ONLY como primera orden (importada
+del listado). EstadoVisita nuevo en app/schemas/common.py.
+check_ficha_oportunidad_service 40/40 (la S4 demuestra REPEATABLE READ con
+un cambio confirmado en mitad de la ficha, con ConexionSinCommit) y
+check_ficha_oportunidad_http 69/69 (puerto 8026). En negativo, sobre
+copias, de una en una (servicio | HTTP): N1 40/40 | 23/38; N2 32/39 |
+31/38; N3 40/40 | 67/69; N4 40/40 | 65/69 (y gate-avisos 17/18 y 73/75);
+N5 39/40 | 63/69; N6 37/40 | 69/69 (solo la S4 lo ve); N7 40/40 | 67/69;
+N8 40/40 | 66/69; N9b 39/40 | 68/69; N10 37/40 | 67/69; N11 40/40 | 66/69
+(y 15/18 y 71/75); N12 40/40 | 67/69; N13 40/40 | 68/69 (y 17/18 y 74/75);
+N14 40/40 | 67/69. Pasada sobre los datos reales: 27/27 fichas sin error,
+27 cuadran. Contrato y limitaciones (auditoría de lecturas, umbral vigente
+y no el aplicado, 'ganada' sin registro, copia de texto_cliente en logs):
+fila 9 y sección 5.9 de la Adenda. Suite completa 41/41 en UNA pasada
+válida (ver "Suite de verificación").
 
 Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
@@ -947,6 +1013,10 @@ rápida, no sustituye esa documentación. Contiene:
   de la solicitud en la lista diaria, ficha para cualquier oportunidad,
   visitas en un solo bloque del email de WF3, nuevo orden de bloques
   (revisa D25.12) y búsqueda de clientes como mejora posterior.
+- Plan_Endpoint_Ficha_Oportunidad.txt — plan de GET
+  /oportunidades/{oportunidad_id}/ficha (D26.2, 4a-1): P1-P12 decididas,
+  el corte de aviso_gate_service (B1), pruebas en negativo N1-N14 con sus
+  resultados exactos y bloques A, B1, B2, C y D con sus hashes.
 - Plan_Ejecutor_Suite.txt — lanzador de la suite que impide la suspensión
   de Windows. APLAZADO el 2026-10-03; lo sustituye la regla de uso de este
   archivo.
