@@ -1,0 +1,1246 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: ficha completa de CUALQUIER oportunidad, con o sin Gate
+(GET /oportunidades/{oportunidad_id}/ficha; D26.2, bloque 4a-1 de D26.6)
+
+Documento de plan · Nivel N0 · 2026-10-10 · Rama feat/n0-ficha-oportunidad
+(desde 8746db2, que sale de main = ff22450)
+Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+
+Fuentes: el encargo del Bloque A del 2026-10-10 (decisiones D26.2 y D26.6
+ya tomadas y pre-decisiones 1-10 del tutor),
+docs/Decisiones_D26_Ficha_del_Cliente_en_la_Lista_Diaria.md (entero, con su
+revisión de la tarde), D25.9, la Adenda (secciones 5.5, 5.6 y 5.7), los dos
+planes modelo (docs/Plan_Endpoint_Aviso_Gate.txt para un endpoint de solo
+lectura y docs/Plan_Endpoint_Create_Followup_Task.txt para el paso B1
+"extraer a un módulo compartido sin cambios de comportamiento" y para las
+pruebas en negativo), el código y la base de datos real, comprobados el
+mismo día (sección 0).
+
+Nota sobre nombres: D26.x y D25.x son decisiones de Gabi (documentos ya en
+docs/). Las "pre-decisiones" son las 10 del tutor en el encargo. P-a, P-b y
+P-c son las tres preguntas de negocio y RGPD del encargo (sección 6).
+P1-P12 son las preguntas abiertas de ESTE plan (sección 11). K = hechos
+comprobados en el código, M = mediciones en la base de datos real, C =
+contradicciones y hallazgos (sección 1), R = riesgos, N = pruebas en
+negativo, S = comprobaciones del script de servicio, CASO = del script HTTP.
+Ninguna de estas letras tiene que ver con las de otros planes.
+
+
+================================================================
+0. COMPROBACIONES HECHAS ANTES DE ESCRIBIR ESTE PLAN (solo lectura)
+================================================================
+
+Leído:
+  - CLAUDE.md, entera ("Cómo trabajamos" con la regla de las conexiones de
+    prueba sin commit, regla de uso de la suite con su nota del 2026-10-03,
+    limitación P4, puertos, borrados y gotchas), y su diff de 1af758a a
+    8746db2 (notas del 2026-10-10 y resumen de D26).
+  - docs/Decisiones_D26_Ficha_del_Cliente_en_la_Lista_Diaria.md, ENTERO
+    (D26.1-D26.7, con las notas de la tarde y la sección 4).
+  - docs/Decisiones_D25_WF3_Seguimiento_y_Resultado_Llamadas.md, entero
+    (D25.9: un único concepto "resultado de la llamada", un endpoint de
+    ficha, un endpoint de registro, una tabla y un catálogo de motivos).
+  - Adenda: fila 7 y sección 5.6 (GET /gate-avisos), 5.5 (POST
+    /gate-decisions) y 5.7 (GET /llamadas-del-dia, con su nota del
+    2026-10-08).
+  - docs/Plan_Endpoint_Aviso_Gate.txt y docs/Plan_Endpoint_Create_Followup_Task.txt
+    (secciones 0, 3, 4, 5, 6.3 y 6.4).
+  - Código: app/services/aviso_gate_service.py, app/schemas/aviso_gate.py,
+    app/api/aviso_gate.py, app/services/listado_llamadas_service.py,
+    app/services/condicion_seguimiento.py, app/api/security.py,
+    app/db/connection.py, app/schemas/common.py (EstadoOportunidad),
+    app/schemas/listado_llamadas.py, y los servicios que escriben en logs:
+    estimate_service.py, visits_service.py, reglas_visita.py,
+    gate_decisions_service.py, followup_service.py, más leads_service.py
+    (alta de la oportunidad) y el manejador global de app/main.py.
+  - scripts/check_aviso_gate_http.py y scripts/check_aviso_gate_service.py.
+  - docs/schema_actual.sql: clientes, leads, oportunidades, presupuestos,
+    umbrales_gate, visitas, decisiones_gate y logs.
+  - git log --oneline -6 y git status -sb: HEAD = origin/feat/n0-ficha-oportunidad
+    = 8746db2, árbol limpio; origin/main = ff22450.
+
+Comprobado en el CÓDIGO:
+  - K1. obtener_aviso (aviso_gate_service.py) es UNA función de unas 200
+    líneas con dos consultas: la "puerta" (oportunidad, presupuesto y
+    requiere_aprobacion; 404 / 409 sin_presupuesto / 409 sin_gate) y el
+    caso (21 columnas: 17 de la solicitud y del presupuesto, 4 de la
+    decisión). Después construye ContactoAviso, ReformaAviso,
+    PresupuestoAviso (con deducir_sin_iva) y DecisionAviso.
+  - K2. Los scripts de gate-avisos importan de aviso_gate_service CINCO
+    nombres: EstadoNoPermiteAviso, OportunidadNoEncontrada, a_madrid,
+    deducir_sin_iva y obtener_aviso (check_aviso_gate_service.py, línea
+    53). Tras B1 los cinco tienen que seguir existiendo en ese módulo, o
+    los scripts dejan de funcionar SIN tocarlos (mismo problema que K4 del
+    plan de create-followup-task, resuelto igual: importarlos allí).
+  - K3. QUIÉN cambia oportunidades.estado y qué deja en logs (todas las
+    escrituras, en la MISMA transacción que su log):
+      leads_service.create_lead     INSERT con estado 'nueva' EXPLÍCITO.
+                                    NO escribe ningún log: el alta solo
+                                    queda en oportunidades.created_at.
+      estimate_service              UPDATE 'nueva' -> 'presupuesto_enviado'
+                                    (sin Gate) o 'pendiente_aprobacion'
+                                    (con Gate), con "AND estado = 'nueva'".
+                                    Log 'presupuesto_calculado' con
+                                    "estado": estado_final en el detalle
+                                    (desde 124ba1b, 2026-09-20, el primer
+                                    commit del endpoint).
+      visits_service                UPDATE a 'visita_agendada' desde
+                                    presupuesto_enviado, seguimiento_pendiente
+                                    o visita_agendada (sustitución). Log
+                                    'visita_solicitada' o, si sustituye a
+                                    otra, 'visita_sustituida'. Su detalle
+                                    guarda visita_id, fecha_propuesta y
+                                    TEXTO_CLIENTE (y en la sustitución
+                                    sustituye_a y fecha_anterior). Desde
+                                    6bf9c1d (2026-09-26).
+      gate_decisions_service        UPDATE a 'visita_agendada' (decision
+                                    visita_acordada) o 'perdida'
+                                    (descartar), con fecha_ultimo_contacto.
+                                    Log 'gate_decision_registrada' con
+                                    decision_id, decision, motivo, visita_id
+                                    y fecha_propuesta; el informe NO (P9 de
+                                    su plan). Desde 49a3572 (2026-09-30).
+      followup_service              UPDATE 'presupuesto_enviado' ->
+                                    'seguimiento_pendiente'. Log
+                                    'seguimiento_abierto' con motivo,
+                                    estado_anterior, horas y
+                                    fecha_presupuesto. Desde ce6f421
+                                    (2026-10-08).
+    Logs que NO son cambio de estado:
+      estimate_service              'presupuesto_requiere_revision'
+                                    (faltan tarifas; la oportunidad sigue
+                                    en 'nueva').
+      reglas_visita                 'visita_configuracion_incompleta' (503
+                                    de /visits y /gate-decisions; no cambia
+                                    nada).
+      app/main.py (manejador global) 'error_no_controlado', con entity_type
+                                    'sistema' y entity_id 0 (centinela).
+    Nadie escribe 'cualificada' ni 'ganada': 'ganada' (y 'perdida' tras una
+    visita) se ponen A MANO en N0 (D21.2, Adenda 5.5 "decisión definitiva").
+  - K4. visitas.estado admite cuatro valores (CHECK visitas_estado_check:
+    solicitada, confirmada, completada, cancelada). En el código solo
+    existe un Enum con dos (EstadoVisitaListado, del listado). Nadie
+    escribe 'completada' en N0.
+  - K5. El patrón de solo lectura del listado: get_db_connection() (termina
+    con rollback) + PRIMERA orden "SET TRANSACTION ISOLATION LEVEL
+    REPEATABLE READ, READ ONLY;" (constante SQL_MODO_TRANSACCION de
+    listado_llamadas_service.py) + ningún FOR UPDATE.
+  - K6. verificar_gate_secret (security.py) y _no_autorizado: el 401
+    idéntico de todos los endpoints de administración.
+  - K7. leads.fotos_urls se devuelve hoy en GET /gate-avisos como "fotos"
+    (D1 y P2 de su plan): hay precedente para P-a.
+  - K8. El umbral que DECIDIÓ el Gate solo está en el detalle del log
+    'presupuesto_calculado' ("umbral_gate"); no hay columna (deuda técnica
+    P3 / R3 del plan de gate-avisos).
+
+Comprobado en la BASE DE DATOS REAL (2026-10-10, now() = 10:18:37 UTC =
+12:18 en Madrid; script en el scratchpad, fuera del repositorio; conexión
+directa cuya PRIMERA orden fue SET TRANSACTION ISOLATION LEVEL REPEATABLE
+READ, READ ONLY, confirmada con current_setting: 'on' y 'repeatable read';
+solo SELECT, termina en ROLLBACK; imprime solo recuentos e ids, nunca un
+nombre, email, teléfono o texto):
+  - M1. Oportunidades por estado: nueva 8, pendiente_aprobacion 1, perdida
+    5, presupuesto_enviado 12, visita_agendada 1. TOTAL 27 (cualificada,
+    seguimiento_pendiente y ganada: 0).
+        SELECT estado, count(*) FROM oportunidades GROUP BY estado;
+  - M2. Sin presupuesto 8; con presupuesto 19: con Gate 7 y sin Gate 12.
+        SELECT count(*) FILTER (WHERE p.id IS NULL), ...
+               count(*) FILTER (WHERE p.requiere_aprobacion), ...
+        FROM oportunidades o LEFT JOIN presupuestos p ON p.oportunidad_id = o.id;
+  - M3. Contacto: 10 oportunidades de leads CON la clave 'contacto', 17 SIN
+    ella (los leads anteriores al 2026-09-25, datos de prueba).
+        ... count(*) FILTER (WHERE l.datos_estructurados ? 'contacto') ...
+        FROM oportunidades o JOIN leads l ON l.id = o.lead_id;
+  - M4. Visitas: 1 en total, 'confirmada' (la de la visita acordada por el
+    Gate). Oportunidades con al menos una visita: 1; con dos o más: 0.
+  - M5. decisiones_gate: 6 (descartar 5, visita_acordada 1).
+  - M6. Fotos: 1 oportunidad cuyo lead tiene fotos_urls no vacío, con 1
+    ruta; de las rutas guardadas en TODOS los leads, 0 empiezan por
+    "http" (son rutas o nombres, no URLs).
+        ... count(*) FILTER (WHERE jsonb_array_length(COALESCE(l.fotos_urls,
+            '[]'::jsonb)) > 0) ...
+  - M7. Clientes: 19. Con una oportunidad 15; con MÁS de una 4 (máximo 4
+    oportunidades por cliente). Relación: oportunidades -> leads.cliente_id.
+        SELECT count(*) FILTER (WHERE n > 1), max(n)
+        FROM (SELECT l.cliente_id, count(o.id) AS n FROM leads l
+              JOIN oportunidades o ON o.lead_id = l.id GROUP BY l.cliente_id) t;
+  - M8. logs: 25 filas, todas entity_type 'oportunidad':
+    presupuesto_calculado 19 y gate_decision_registrada 6. Ninguna de
+    visitas, seguimiento, error_no_controlado ni configuración incompleta
+    (los scripts borran los suyos).
+  - M9. Los 19 'presupuesto_calculado' tienen la clave "estado" en el
+    detalle (0 sin ella).
+  - M10. Logs de oportunidad huérfanos (entity_id sin oportunidad): 0.
+  - M11. HISTORIAL (punto 7 b del encargo), la medición pedida. Consulta:
+        WITH cambios AS (
+          SELECT g.entity_id AS op, g.id, g.created_at,
+                 CASE g.accion
+                   WHEN 'presupuesto_calculado'    THEN g.detalle ->> 'estado'
+                   WHEN 'visita_solicitada'        THEN 'visita_agendada'
+                   WHEN 'visita_sustituida'        THEN 'visita_agendada'
+                   WHEN 'gate_decision_registrada' THEN
+                     CASE g.detalle ->> 'decision'
+                       WHEN 'visita_acordada' THEN 'visita_agendada'
+                       WHEN 'descartar'       THEN 'perdida' END
+                   WHEN 'seguimiento_abierto'      THEN 'seguimiento_pendiente'
+                 END AS estado_log
+          FROM logs g
+          WHERE g.entity_type = 'oportunidad'
+            AND g.accion IN ('presupuesto_calculado', 'visita_solicitada',
+                             'visita_sustituida', 'gate_decision_registrada',
+                             'seguimiento_abierto')),
+        ultimo AS (SELECT DISTINCT ON (op) op, estado_log FROM cambios
+                   ORDER BY op, created_at DESC, id DESC)
+        SELECT count(*),
+               count(*) FILTER (WHERE COALESCE(u.estado_log, 'nueva') = o.estado),
+               count(*) FILTER (WHERE COALESCE(u.estado_log, 'nueva') <> o.estado),
+               count(*) FILTER (WHERE u.op IS NULL)
+        FROM oportunidades o LEFT JOIN ultimo u ON u.op = o.id;
+    Resultado: 27 oportunidades, 27 CUADRAN, 0 NO CUADRAN; 8 sin ningún
+    log de cambio (las 8 en 'nueva', sin presupuesto). La lista de ids que
+    no cuadran sale vacía.
+    "DISTINCT ON (op) ... ORDER BY op, created_at DESC, id DESC" se queda,
+    para cada oportunidad, con su ÚLTIMO cambio registrado; COALESCE(...,
+    'nueva') dice "sin ningún cambio, debería seguir en 'nueva'".
+    Que hoy cuadren todas NO quiere decir que siempre vaya a ser así (C5).
+  - M12. Logs de cambio con created_at ANTERIOR al alta de su oportunidad:
+    0. Pares de logs de cambio de una misma oportunidad cuyo orden por id
+    no coincide con su orden por fecha: 0.
+  - M13. decisiones_gate con su log 'gate_decision_registrada' (enlazado
+    por detalle ->> 'decision_id'): 6 de 6; y logs con su decisión: 6 de 6.
+  - M14. iva_pct_aplicado: 21.00 en los 19 presupuestos (no hay ninguno
+    real con 10, 4 o 0: las pruebas de esos IVA tienen que crear sus
+    propios presupuestos, 8.2 CASO 5).
+  - M15. Casos con Gate: 7; umbral de la foto del cálculo IGUAL al vigente
+    en 7 de 7; distinto 0; sin foto 0.
+  - M16. logs: 25 filas en total; como mucho 2 por oportunidad.
+  - M17. Índices de logs: solo logs_pkey (ninguno por entity_id).
+  - M18. Oportunidades en 'visita_agendada' sin visita activa: 0; con
+    visita activa en otro estado: 0.
+  - M19. Puerto 8026: nadie escucha (netstat) y ningún script lo menciona.
+    Puertos de los scripts: 8010, 8011, 8012, 8015, 8016, 8018, 8019, 8023,
+    8024 y 8025.
+
+
+================================================================
+1. CONTRADICCIONES Y HALLAZGOS DETECTADOS ANTES DE DISEÑAR
+================================================================
+
+  C1. D26.2 pide el "umbral aplicado"; el código no lo tiene. No hay
+      columna presupuestos.umbral_gate_aplicado (K8): el umbral que decidió
+      el Gate solo está en el JSONB del log 'presupuesto_calculado'. GET
+      /gate-avisos ya resolvió esto (su P3) devolviendo solo
+      umbral_gate_vigente y dejando la columna como deuda técnica. Hoy el
+      vigente coincide con el de la foto en los 7 casos con Gate (M15), así
+      que la diferencia no se ve en los datos, pero sí en el contrato. Ver
+      P2: se propone lo mismo que en gate-avisos, y se dice aquí para que
+      Gabi lo confirme, no se reinterpreta en silencio.
+  C2. El detalle del log 'visita_solicitada' guarda el TEXTO_CLIENTE (K3).
+      Devolver logs.detalle en bruto filtraría ese texto otra vez, y
+      cualquier clave que un servicio añada mañana a un detalle saldría en
+      la ficha sin pasar por el contrato. Confirma la regla del punto 7 del
+      encargo: la consulta del historial solo lee DOS claves concretas del
+      detalle (estado y decision), y el esquema no tiene ningún campo
+      "detalle".
+  C3. Pre-decisión 1 (ruta /oportunidades/...). El plan de gate-avisos
+      DESCARTÓ "GET /oportunidades/{id}/aviso-gate" porque abría un prefijo
+      /oportunidades del que futuros endpoints "heredarían la idea" de que
+      ahí viven importes y datos personales. Aquí ese argumento se da la
+      vuelta: la ficha ES la vista completa de la oportunidad. Se mantiene
+      la pre-decisión (sección 2.2) y se propone una defensa para lo que
+      preocupaba entonces (P8).
+  C4. Pre-decisión 2, "sin 'contacto' -> no_disponible": en gate-avisos
+      afectaba a 5 casos de prueba; aquí afecta a 17 de las 27
+      oportunidades reales (M3), entre ellas 4 de los 8 seguimientos de
+      D25.16. La regla no cambia (nunca la ficha de clientes), pero la
+      ficha de esos 17 casos no servirá para llamar. No es un defecto
+      nuevo: son datos de prueba anteriores al 2026-09-25 (Adenda 5.6).
+  C5. Historial y estados puestos a mano. En N0 'ganada' (y 'perdida' tras
+      la visita) se ponen A MANO (K3, D21.2): ningún log lo registra. Por
+      tanto, el historial NO cuadrará en cada oportunidad ganada, por
+      diseño, no por error. La ficha tiene que decirlo sin alarmar y sin
+      inventar el paso que falta (sección 5.3).
+  C6. "Alta" sin log. El primer elemento del historial ('nueva' en
+      oportunidades.created_at) no sale de logs sino de una invariante del
+      código: create_lead es el ÚNICO camino de alta y escribe 'nueva'
+      explícito (K3). Una oportunidad creada por SQL en otro estado (los
+      scripts lo hacen con las suyas) daría "alta: nueva" y un historial
+      que no cuadra: es lo correcto, porque eso es justo lo que no se puede
+      explicar con lo registrado.
+  C7. D26.2 dice "todas sus visitas: estado, fecha y texto del cliente".
+      D26.7 cambia el significado de texto_cliente (un resumen del Agente
+      2) y su límite (1.000 -> unos 300, con migración), en el bloque del
+      Agente 2. La ficha solo lo MUESTRA: no cambia nada aquí, y el campo
+      no lleva límite propio (lo que haya en la columna).
+  C8. Pre-decisión 5: hoy "llamadas anteriores" = decisiones_gate (una fila
+      como máximo, UNIQUE). En 4b la tabla se renombra (D26.6) y la
+      consulta de la ficha tendrá que cambiar de tabla. El CONTRATO no
+      cambia si se diseña ya como lista con un campo de tipo (sección 2.5 y
+      P4): 4b añade VALORES (tipos y resultados nuevos), no campos.
+  C9. Pre-decisión 2, "¿algún 503?": NO hace falta. La ficha no lee
+      reglas_negocio (el umbral vigente sale de umbrales_gate con LEFT
+      JOIN: si falta, null, igual que en gate-avisos) y no depende de
+      ninguna configuración para responder.
+
+
+================================================================
+2. CONTRATO
+================================================================
+
+2.1 Quién lo llama y para qué
+  Administración abre la ficha ANTES de llamar a un cliente, desde un
+  enlace (de la lista diaria de WF3 o del email de WF2), sea un caso con
+  Gate, un seguimiento de 48 h o una visita pedida desde el chat. La
+  muestra una página protegida de n8n (fuera de este bloque). Nunca un
+  agente de IA: devuelve email, importes e informes (D18.5). Solo REST, sin
+  tool MCP, de SOLO LECTURA.
+  GET /gate-avisos NO se toca (D26.6): sigue siendo el aviso de WF2 y la
+  consulta del formulario del Gate, mismo contrato y mismos recuentos.
+
+2.2 Ruta (pre-decisión 1), con su Regla de Tres
+  a) GET /oportunidades/{oportunidad_id}/ficha                [PROPUESTA]
+     A favor: nombra el recurso (la oportunidad) y vale para cualquiera,
+     con o sin Gate; "ficha" dice que es la vista completa para
+     administración, no una representación neutra del recurso. Deja sitio
+     a vistas más pequeñas en el futuro sin choques.
+     En contra: abre el prefijo /oportunidades (C3). Defensa propuesta en
+     P8: la llave se pone en el ROUTER, no solo en la ruta, para que
+     cualquier ruta futura de ese archivo la herede.
+  b) GET /fichas/{oportunidad_id}
+     A favor: corta. En contra: "fichas" no dice de qué (¿de cliente? D26.5
+     habla de una ficha por cliente buscada por email), y el id es de la
+     oportunidad.
+  c) GET /oportunidades/{oportunidad_id}
+     A favor: la más REST. En contra: hace de la vista con datos
+     personales, importes e informes la representación POR DEFECTO de una
+     oportunidad; cualquier uso futuro "inocente" de esa ruta recibiría
+     todo.
+  Recomendación: a), la pre-decisión. Ningún motivo fuerte para otra.
+
+2.3 Autenticación: X-Gate-Secret (decidida)
+  verificar_gate_secret, la misma de /gate-decisions, /gate-avisos,
+  /llamadas-del-dia y /create-followup-task. NO verificar_webhook_secret
+  (WEBHOOK_SECRET lo tiene la herramienta del Agente 2, D18.5). El valor de
+  WEBHOOK_SECRET da 401 en cualquiera de las dos cabeceras. El 401 sale de
+  _no_autorizado ({"detail": "No autorizado"}, WWW-Authenticate: APIKey) y
+  va ANTES que el 422 (FastAPI ejecuta la dependencia antes de validar el
+  parámetro de la ruta; verificado así en gate-avisos, se vuelve a probar).
+
+2.4 Entrada
+  Solo el parámetro de la ruta: oportunidad_id, Annotated[int,
+  Path(gt=0)]. Sin cuerpo y sin parámetros de consulta. "0", "-1", "abc" ->
+  422 de Pydantic. Lo envía n8n desde un enlace, no un LLM (1.1a de la
+  Adenda no aplica).
+
+2.5 Respuesta 200, campo a campo
+  Fechas: en hora de Madrid con su desfase (a_madrid). Importes y m2:
+  Decimal, que viaja en el JSON como TEXTO exacto (D4). Todos los modelos
+  con extra="forbid".
+  Los nombres y la forma de contacto, reforma, fotos y presupuesto son los
+  de GET /gate-avisos a propósito: la página de n8n y el email de WF2
+  pueden compartir cómo pintar esos bloques, y salen de las MISMAS
+  funciones (sección 4).
+
+  oportunidad_id          int. oportunidades.id. Nunca null.
+  estado_oportunidad      EstadoOportunidad (los 8 del CHECK).
+                          oportunidades.estado. Nunca null.
+  fecha_solicitud         datetime. leads.created_at. Nunca null.
+  contacto (objeto, siempre presente) — ContactoAviso, REUTILIZADO:
+    nombre, email, telefono   str | null. leads.datos_estructurados ->
+                              'contacto' ->> ... Los tres null si el lead
+                              no tiene la clave 'contacto'.
+    origen                    "solicitud" | "no_disponible" (P1 de
+                              gate-avisos). Nunca la ficha de clientes.
+  reforma (objeto, siempre presente) — ReformaAviso, REUTILIZADO:
+    tipo_reforma              TipoReforma | null. oportunidades.tipo_reforma
+                              (la columna admite NULL).
+    m2                        Decimal | null. (datos_estructurados ->>
+                              'm2')::numeric, extraído en SQL.
+    nivel_acabados            NivelAcabados | null. datos_estructurados.
+    incluye_cambios_estructurales  bool | null. datos_estructurados,
+                              ::boolean en SQL.
+  fotos                   list[str]. leads.fotos_urls tal cual (0 a 5); []
+                          si es NULL o está vacía. Sujeto a P-a (6.1).
+  presupuesto             PresupuestoFicha | null. NULL si la oportunidad
+                          no tiene presupuesto (pre-decisión 2). Si lo
+                          tiene, los OCHO campos de PresupuestoAviso
+                          (heredados, sin copiarlos) más uno:
+    fecha_presupuesto         datetime. presupuestos.created_at.
+    motivo_gate               MotivoGate | null. presupuestos.motivo_gate;
+                              null sin Gate.
+    iva_pct_aplicado          Decimal. presupuestos.iva_pct_aplicado.
+    importe_min_con_iva,
+    importe_max_con_iva       Decimal | null. Columnas tal cual.
+    importe_min_sin_iva,
+    importe_max_sin_iva       Decimal | null. DEDUCIDOS con deducir_sin_iva
+                              (la MISMA función, Adenda 5.6); null si su
+                              pareja con IVA es null.
+    umbral_gate_vigente       Decimal | null. umbrales_gate.umbral de la
+                              categoría, leído AHORA (C1, P2). También sin
+                              Gate: explica por qué NO saltó.
+    requiere_aprobacion       bool (NUEVO). presupuestos.requiere_aprobacion:
+                              "si hubo Gate" (D26.2). En gate-avisos no
+                              hacía falta (siempre true).
+  visitas                 list[VisitaFicha]. TODAS las de la oportunidad,
+                          también canceladas y completadas (pre-decisión
+                          6), lo más antiguo primero (ORDER BY created_at,
+                          id). [] si no hay ninguna.
+    estado_visita             EstadoVisita (NUEVO Enum con los 4 valores
+                              del CHECK visitas_estado_check, K4).
+                              visitas.estado.
+    fecha_visita              datetime. visitas.fecha_propuesta.
+    fecha_solicitud_visita    datetime. visitas.created_at.
+    texto_cliente             str. visitas.texto_cliente, tal cual (C7). En
+                              una visita acordada por el Gate es el texto
+                              fijo del sistema (P2 de /gate-decisions).
+    (Nombres de estado_visita, fecha_visita y fecha_solicitud_visita: los
+    mismos que los elementos de visitas de GET /llamadas-del-dia.)
+  llamadas                list[LlamadaFicha]. Resultados de llamadas ya
+                          registrados (pre-decisión 5), lo más antiguo
+                          primero (ORDER BY created_at, id). [] si no hay.
+                          Hoy salen de decisiones_gate (como mucho una).
+    tipo_llamada              TipoLlamada (NUEVO Enum). Hoy un único valor,
+                              "gate". En 4b se añadirán valores
+                              (seguimiento, confirmación de visita, D25.9):
+                              4b añade VALORES, no campos (C8, P4).
+    resultado                 DecisionGate ('visita_acordada' |
+                              'descartar'). decisiones_gate.decision. El
+                              nombre es el de D25.9 ("resultado de la
+                              llamada"), no "decision".
+    motivo                    MotivoDescarte | null. decisiones_gate.motivo
+                              (solo con descartar).
+    fecha_registro            datetime. decisiones_gate.created_at.
+    fecha_visita              datetime | null. visitas.fecha_propuesta de
+                              la visita enlazada (decisiones_gate.visita_id);
+                              null si se descartó.
+    informe                   str. decisiones_gate.informe, ENTERO (D26.2:
+                              "CON su informe"). Es la gran diferencia con
+                              GET /gate-avisos, que nunca lo devuelve.
+  historial               list[EventoHistorial]. Siempre al menos UN
+                          elemento (el alta). Lo más antiguo primero
+                          (created_at, id). Sección 5.
+    evento                    EventoEstado (NUEVO Enum): "alta",
+                              "presupuesto_calculado", "visita_solicitada",
+                              "gate_decision_registrada" o
+                              "seguimiento_abierto" (los nombres de
+                              logs.accion, para poder rastrearlos; el alta
+                              no tiene log, C6).
+    estado                    EstadoOportunidad. El estado en que dejó la
+                              oportunidad ese evento (tabla de 5.1).
+    fecha                     datetime. logs.created_at (el alta:
+                              oportunidades.created_at).
+  historial_cuadra        bool. true si el estado actual es el que dejó el
+                          último evento del historial (y todos los logs de
+                          cambio se pudieron interpretar); false si no
+                          (cambio a mano, como 'ganada' en N0, C5). Nunca
+                          se añade un evento inventado (5.3).
+  otras_oportunidades_mismo_email
+                          list[OtraOportunidad]. Sujeto a P-b (6.2): las
+                          OTRAS oportunidades cuyo lead cuelga del mismo
+                          cliente_id (la ficha de clientes es única por
+                          email, índice clientes_email_lower_key). Lo más
+                          antiguo primero. [] si no hay. Sin la propia.
+    oportunidad_id            int. Para abrir su propia ficha.
+    tipo_reforma              TipoReforma | null.
+    estado_oportunidad        EstadoOportunidad.
+    fecha_solicitud           datetime. leads.created_at de ESA solicitud.
+
+2.6 Lo que NO sale (minimización, RGPD)
+  lead_token, cliente_id, lead_id, presupuesto_id, visita_id, decision_id,
+  log_id, logs.detalle (ni entero ni ninguna clave suelta: C2), logs.accion
+  de los logs que no son cambio de estado, los datos de la ficha de
+  clientes (nombre, email y teléfono de clientes), canal, mensaje_original,
+  confianza_ia, prioridad, datos_completos, aprobado_por,
+  duracion_estimada_dias, updated_at, fecha_ultimo_contacto (P12) y los
+  logs del manejador global. Defensa doble: las consultas no los leen (salvo
+  l.cliente_id y p.id, que se leen para hacer la consulta 5 y para saber si
+  hay presupuesto, y no se devuelven), y extra="forbid" en todos los
+  modelos.
+
+2.7 Tabla de códigos
+  Formato de los errores de negocio: el de siempre, {"detail": {"motivo":
+  "<código>", "mensaje": "<texto>"}}.
+
+  | Código | motivo | Cuándo | Reintento en n8n |
+  |---|---|---|---|
+  | 200 | — | La oportunidad existe (con o sin presupuesto, con o sin Gate, en cualquier estado) | — |
+  | 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET en cualquiera de las dos cabeceras; antes que el 422 | NO |
+  | 422 | (Pydantic) | oportunidad_id no es un entero > 0 ("0", "-1", "abc") | NO |
+  | 404 | oportunidad_no_encontrada | No existe la oportunidad (también un id que no cabe en la columna, como 2147483648 o 99999999999999999999: 404, nunca 500) | NO |
+  | 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
+
+  No hay 409 (la ficha no depende del estado ni del Gate), ni 503 (C9), ni
+  201 (no crea nada).
+
+2.8 Orden de las comprobaciones
+  401 -> 422 -> 404 -> 200. Ninguna depende de datos de negocio: una vez
+  encontrada la oportunidad, siempre hay ficha.
+
+2.9 Solo lectura de verdad (pre-decisión 4), con tres barreras
+  1. get_db_connection() (termina con rollback; nunca hace commit).
+  2. La PRIMERA orden de la transacción es "SET TRANSACTION ISOLATION
+     LEVEL REPEATABLE READ, READ ONLY;": Postgres rechaza cualquier
+     escritura, y TODAS las consultas ven la MISMA foto de los datos.
+  3. Ningún FOR UPDATE: leer no impide a nadie escribir.
+  Por qué hace falta REPEATABLE READ aquí (y no solo en el listado): la
+  ficha junta piezas de cinco consultas. Con READ COMMITTED (lo de por
+  defecto), si POST /gate-decisions confirma entre la consulta 1 y la 4, la
+  ficha diría estado 'pendiente_aprobacion' (consulta 1) y, a la vez,
+  traería la decisión y el evento 'gate_decision_registrada' (consultas 3
+  y 4): una ficha que se contradice a sí misma, y historial_cuadra = false
+  sin que nadie haya tocado nada a mano. Con REPEATABLE READ la foto se
+  toma en la primera consulta y las cinco ven lo mismo. Se DEMUESTRA con la
+  S4 (8.1) y con la prueba en negativo N6.
+  No escribe nada, tampoco en logs (ver P-c, 6.3). Consecuencia: la base de
+  datos no registra quién ni cuándo abrió una ficha.
+
+
+================================================================
+3. CONSULTAS SQL (en el servicio, en UNA transacción de solo lectura)
+================================================================
+
+Valores SIEMPRE como parámetros; los textos SQL son fijos del programa.
+
+Orden 0, el modo (primera orden, K5):
+    SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;
+
+Consulta 1, la oportunidad (la "cabecera"; sin fila -> 404):
+    SELECT <COLUMNAS_CASO>,               -- las 17 compartidas con
+                                          -- gate-avisos (sección 4)
+           p.id, p.requiere_aprobacion,
+           o.created_at,                  -- el alta del historial
+           l.cliente_id                   -- solo para la consulta 5
+    FROM oportunidades o
+    JOIN leads l              ON l.id = o.lead_id
+    LEFT JOIN presupuestos p  ON p.oportunidad_id = o.id
+    LEFT JOIN umbrales_gate u ON u.tipo_reforma = o.tipo_reforma
+    WHERE o.id = %(oportunidad_id)s;
+  <COLUMNAS_CASO> son, en este orden, las 17 de la consulta 2 de
+  gate-avisos: o.estado, o.tipo_reforma, l.created_at, l.datos_estructurados
+  ? 'contacto', las tres de 'contacto' (nombre, email, telefono), m2
+  ::numeric, nivel_acabados, incluye_cambios_estructurales ::boolean,
+  l.fotos_urls, p.created_at, p.motivo_gate, p.iva_pct_aplicado,
+  p.importe_min_con_iva, p.importe_max_con_iva y u.umbral.
+  - JOIN normal con leads (leads.id es NOT NULL en oportunidades).
+  - LEFT JOIN con presupuestos (DIFERENCIA con gate-avisos, que usa JOIN
+    porque su puerta ya comprobó el presupuesto): sin presupuesto, p.* llega
+    NULL y presupuesto sale null. "p.id IS NULL" decide.
+  - Como mucho UNA fila (presupuestos.oportunidad_id es UNIQUE).
+  - Un id enorme se compara sin error con la columna INTEGER: 0 filas ->
+    404 (probado en gate-avisos y en create-followup-task).
+  - Sin JOIN con clientes: la ficha de clientes no se lee nunca.
+
+Consulta 2, las visitas:
+    SELECT v.estado, v.fecha_propuesta, v.created_at, v.texto_cliente
+    FROM visitas v
+    WHERE v.oportunidad_id = %(oportunidad_id)s
+    ORDER BY v.created_at, v.id;
+  - SIN filtro de estado: también canceladas y completadas (N8 lo vigila).
+  - No lee v.id.
+
+Consulta 3, las llamadas:
+    SELECT d.decision, d.motivo, d.informe, d.created_at, v.fecha_propuesta
+    FROM decisiones_gate d
+    LEFT JOIN visitas v ON v.id = d.visita_id
+    WHERE d.oportunidad_id = %(oportunidad_id)s
+    ORDER BY d.created_at, d.id;
+  - LEFT JOIN: un descarte no tiene visita.
+  - No lee d.id ni d.visita_id.
+
+Consulta 4, el historial (sección 5):
+    SELECT g.accion, g.created_at,
+           g.detalle ->> 'estado',
+           g.detalle ->> 'decision'
+    FROM logs g
+    WHERE g.entity_type = 'oportunidad'
+      AND g.entity_id = %(oportunidad_id)s
+      AND g.accion = ANY(%(acciones)s)
+    ORDER BY g.created_at, g.id;
+  - %(acciones)s = las CUATRO acciones de cambio de la tabla de 5.1
+    (presupuesto_calculado, visita_solicitada, gate_decision_registrada,
+    seguimiento_abierto). Doble filtro frente a los logs que no son cambio
+    de estado: entity_type (el manejador global escribe 'sistema') y la
+    lista cerrada de acciones (presupuesto_requiere_revision y
+    visita_configuracion_incompleta son de 'oportunidad').
+  - "->>" saca UNA clave como texto. Del detalle solo se leen estado y
+    decision (C2): ni texto_cliente, ni fechas, ni ids.
+  - Sin índice por entity_id (M17): con 25 filas, irrelevante (R4).
+
+Consulta 5, otras oportunidades con el mismo email (solo si se aprueba
+P-b, opción a):
+    SELECT o2.id, o2.tipo_reforma, o2.estado, l2.created_at
+    FROM oportunidades o2
+    JOIN leads l2 ON l2.id = o2.lead_id
+    WHERE l2.cliente_id = %(cliente_id)s
+      AND o2.id <> %(oportunidad_id)s
+    ORDER BY l2.created_at, o2.id;
+  - cliente_id sale de la consulta 1 y nunca se devuelve.
+  - No lee ningún dato personal de las otras solicitudes.
+
+Número de órdenes por petición:
+  - 200: SIETE si se cuentan todas: 1 SET + 5 SELECT, más el SELECT 1 de
+    validación del pool (connection.py, antes de entregar la conexión y
+    fuera de esta transacción; lo hacen todos los endpoints). Sin P-b, 1
+    SET + 4 SELECT.
+  - 404: el SET y la consulta 1 (más la validación del pool).
+  Por qué cinco consultas y no una o dos:
+  - Una sola consulta con json_agg para las listas: Postgres devolvería las
+    listas como JSON, y psycopg2 convierte los números de un JSON en FLOAT
+    (gotcha de CLAUDE.md: "m2 y cualquier número dentro de un JSONB llegan
+    a Python como float"); además mueve la construcción de la respuesta a
+    SQL, lejos de las funciones compartidas con gate-avisos. Descartada.
+  - Juntar visitas, llamadas e historial con JOIN: tienen cardinalidades
+    distintas (n visitas × m llamadas × k logs): el producto cartesiano
+    repite filas y obliga a desduplicar en Python. Descartada.
+  - Una consulta por bloque, en la misma foto (REPEATABLE READ), es lo más
+    simple de leer y de probar. Coste: unos 20-60 ms por viaje a través del
+    pooler; para una página que abre una persona, aceptable.
+
+
+================================================================
+4. EL CORTE DE aviso_gate_service (paso B1, pre-decisión 3)
+================================================================
+
+4.1 Qué se extrae y adónde
+  Módulo NUEVO app/services/datos_oportunidad.py (nombre en P11), con el
+  mismo patrón que condicion_seguimiento.py: lo común, escrito UNA vez.
+    a_madrid(instante)              MOVIDA tal cual (mismo cuerpo).
+    deducir_sin_iva(con_iva, iva)   MOVIDA tal cual (mismo cuerpo).
+    COLUMNAS_CASO                   tupla ORDENADA de pares (nombre,
+                                    expresión SQL) con las 17 columnas de
+                                    la consulta 2 de gate-avisos, en el
+                                    mismo orden. Como CRITERIOS_SEGUIMIENTO.
+    columnas_caso_sql()             las expresiones unidas por comas, para
+                                    el SELECT.
+    caso_desde_fila(valores)        empareja los 17 valores con sus nombres
+                                    (dict; zip(..., strict=True), así que un
+                                    número de columnas distinto es un error,
+                                    no un desplazamiento silencioso).
+    contacto_desde(caso)            -> ContactoAviso (la regla P1 de
+                                    gate-avisos).
+    reforma_desde(caso)             -> ReformaAviso.
+    fotos_desde(caso)               -> list[str] ([] si NULL).
+    campos_presupuesto(caso)        -> dict con los 8 campos de
+                                    PresupuestoAviso, con la deducción del
+                                    sin IVA. Un dict y no el objeto, para
+                                    que la ficha añada requiere_aprobacion
+                                    a su modelo heredado sin copiar nada.
+  NO importa fastapi ni fastmcp (regla de services/).
+
+4.2 Qué se queda en aviso_gate_service
+  Las excepciones (AvisoGateRechazado y sus dos hijas), la PUERTA (consulta
+  1 con sus 404 / 409 sin_presupuesto / 409 sin_gate), el FROM/JOIN de su
+  consulta 2 (con decisiones_gate y visitas), las 4 columnas de la
+  decisión y DecisionAviso. Su consulta 2 pasa a ser:
+      "SELECT " + columnas_caso_sql() + ", d.decision, d.created_at,
+       d.motivo, v.fecha_propuesta FROM ... (igual que hoy)"
+  y su respuesta se construye con contacto_desde, reforma_desde,
+  fotos_desde y PresupuestoAviso(**campos_presupuesto(caso)).
+  a_madrid y deducir_sin_iva se IMPORTAN en aviso_gate_service desde el
+  módulo nuevo: así los cinco nombres de K2 siguen existiendo en
+  aviso_gate_service y los scripts funcionan SIN tocarlos.
+  Dónde se corta obtener_aviso (sus ~200 líneas): se queda la puerta (líneas
+  127-170 de hoy, sin cambios), el execute de la consulta 2 (su texto
+  montado), el desempaquetado (17 valores -> caso_desde_fila, 4 de la
+  decisión aparte) y la construcción de AvisoGateResponse; salen la
+  construcción del contacto (líneas 257-269), del presupuesto (299-309), de
+  la reforma (290-295) y de las fotos (298). Resultado previsto: obtener_aviso
+  pasa de ~200 a ~120 líneas, comentarios incluidos.
+
+4.3 Cómo se demuestra "sin cambios de comportamiento" (antes del endpoint)
+  1. check_aviso_gate_http 75/75 y check_aviso_gate_service 18/18 ANTES de
+     B1 (sobre 8746db2 + este plan) y DESPUÉS, con los scripts SIN tocar:
+     "git diff --stat 8746db2 -- scripts/" vacío (se enseña la salida).
+  2. ast.parse de aviso_gate_service.py (regla de CLAUDE.md: depende de la
+     estructura): no define ninguna función a_madrid ni deducir_sin_iva;
+     las importa de app.services.datos_oportunidad; ninguna constante de
+     texto contiene los fragmentos de las columnas que se mudan:
+     "datos_estructurados", "importe_min_con_iva", "iva_pct_aplicado" ni
+     "u.umbral" ("umbrales_gate" NO se busca: el LEFT JOIN de su FROM se
+     queda en aviso_gate_service, y eso es correcto); y no hay ninguna
+     llamada a ContactoAviso( ni ReformaAviso(. Se enseña la salida.
+  3. ast.dump de a_madrid y deducir_sin_iva: el nodo de la función en
+     main (git show ff22450:app/services/aviso_gate_service.py, analizado
+     con ast) es IGUAL al del módulo nuevo ("sin cambios de lógica" en
+     esas dos). Se enseña la comparación (True / False).
+  4. El SQL que llega a Postgres es el mismo: el texto de la consulta 2 de
+     main (sacado con ast) y el texto montado tras B1, con los espacios
+     normalizados (" ".join(texto.split())), son IGUALES. Se enseña.
+  5. Respuestas iguales, byte a byte, sobre los DATOS REALES: un script de
+     solo lectura en el scratchpad llama a obtener_aviso para cada una de
+     las 7 oportunidades reales con Gate (M2) con el código de ANTES y con
+     el de DESPUÉS, y compara el SHA-256 de model_dump_json() de cada una
+     (imprime solo "7/7 iguales" y los hashes, nunca el contenido). Las 4
+     preguntas: (1) no escribe: obtener_aviso usa get_db_connection
+     (rollback) y no tiene ningún INSERT/UPDATE en ninguna de las dos
+     versiones (se comprueba con git grep antes de ejecutar); (2) las dos
+     versiones son la de main y la de B1, ninguna llama a commit (git
+     grep); (3) si se corta, no hay nada que deshacer; (4) no toca el 8000
+     ni escribe datos reales. Si en medio cambiara un dato real (n8n de
+     Gabi), se ve en updated_at de esa oportunidad y se repite.
+  6. Prueba en negativo de B1 (N13, 8.4): una copia de B1 con dos columnas
+     de COLUMNAS_CASO intercambiadas (nombre y email del contacto) tiene
+     que hacer fallar los scripts de gate-avisos: demuestra que las
+     comprobaciones 1-5 detectan una mudanza mal hecha.
+
+
+================================================================
+5. HISTORIAL DE ESTADOS (pre-decisión 7)
+================================================================
+
+5.1 (a) Tabla accion -> estado, leída del código (K3)
+  | Origen (logs.accion) | Servicio | Estado en que deja la oportunidad | ¿Sale en el historial? |
+  |---|---|---|---|
+  | (alta, sin log: oportunidades.created_at) | leads_service | 'nueva' (C6) | SÍ, siempre el primero |
+  | presupuesto_calculado | estimate_service | detalle ->> 'estado': 'presupuesto_enviado' o 'pendiente_aprobacion' | SÍ |
+  | visita_solicitada | visits_service | 'visita_agendada' | SÍ |
+  | visita_sustituida | visits_service | 'visita_agendada' (ya lo estaba: no es un cambio de estado) | NO (P3): la sustitución se ve en visitas (una cancelada y otra activa) |
+  | gate_decision_registrada | gate_decisions_service | detalle ->> 'decision': visita_acordada -> 'visita_agendada'; descartar -> 'perdida' | SÍ |
+  | seguimiento_abierto | followup_service | 'seguimiento_pendiente' | SÍ |
+  | presupuesto_requiere_revision | estimate_service | ninguno (sigue 'nueva') | NO |
+  | visita_configuracion_incompleta | reglas_visita | ninguno | NO |
+  | error_no_controlado (entity_type 'sistema') | app/main.py | ninguno | NO (ni siquiera es de la oportunidad) |
+  La tabla vive en el servicio de la ficha como una constante (accion ->
+  estado fijo, o "leer del detalle"), con una función pura
+  estado_tras(accion, estado_detalle, decision_detalle) que la S1 prueba
+  caso por caso.
+
+5.2 (b) Medición con datos reales: M11 (sección 0). 27 de 27 cuadran hoy;
+  8 sin ningún log de cambio, todas en 'nueva'. La consulta está copiada
+  entera en M11.
+
+5.3 (c) Cuando el historial no cuadra, con su Regla de Tres
+  a) Campo historial_cuadra (bool) y el historial SOLO con lo registrado.
+                                                              [PROPUESTA]
+     Si el estado actual no es el del último evento, la ficha lo dice
+     (false) y no añade nada. Si un log de cambio no se puede interpretar
+     (detalle sin la clave, solo posible editando logs a mano: M9 y M13
+     dicen 0 hoy), ese log NO sale y historial_cuadra = false. La página de
+     n8n puede mostrar "el estado actual no sale de ningún cambio
+     registrado (p. ej., puesto a mano)".
+     A favor: nunca inventa un paso, y lo que no cuadra queda a la vista.
+     En contra: con C5, 'ganada' saldrá SIEMPRE como "no cuadra" en N0;
+     el texto de la página tiene que ser neutro.
+  b) Añadir un evento final sintético "cambio_no_registrado" con el estado
+     actual y fecha = updated_at. Inventa un paso: updated_at cambia con
+     CUALQUIER escritura (también la de una visita o una decisión), así que
+     esa fecha mentiría. Descartada.
+  c) Responder error (409 o 500) o no devolver historial cuando no cuadra:
+     deja a administración sin ficha justo en los casos raros. Descartada.
+  RECOMENDACIÓN: a).
+  Nunca se devuelve logs.detalle ni ninguna clave suya (C2). Los logs de
+  error del manejador global no son cambios de estado (doble filtro de la
+  consulta 4).
+
+
+================================================================
+6. LAS TRES PREGUNTAS DE NEGOCIO Y RGPD (P-a, P-b, P-c), con Regla de Tres
+================================================================
+
+6.1 P-a. Fotos de la solicitud (leads.fotos_urls)
+  a) Devolver las rutas tal como se guardaron, en "fotos".   [PROPUESTA]
+     A favor: es lo que ya devuelve GET /gate-avisos con la MISMA llave a
+     la MISMA audiencia (D1 de Gabi en ese plan): si la ficha diera menos
+     que el aviso, la página de n8n mostraría menos que el email de WF2
+     para el mismo caso. Sale de fotos_desde, compartida (4.1).
+     En contra: hoy hay 1 ruta real y no es una URL (M6): la página no
+     podrá abrirla hasta que exista un almacenamiento de fotos (fuera de
+     alcance). Una foto del interior de una vivienda puede contener datos
+     personales; la ruta no es la foto, pero apunta a ella.
+  b) Solo cuántas hay (fotos_total). A favor: mínimo. En contra:
+     incoherente con gate-avisos, y el día que las rutas sean URLs habría
+     que cambiar el contrato.
+  c) Nada. En contra: administración no sabría que el cliente mandó fotos.
+  RECOMENDACIÓN: a). Decisión de negocio: P5.
+
+6.2 P-b. Otras oportunidades del mismo cliente
+  a) Lista mínima "otras_oportunidades_mismo_email": oportunidad_id,
+     tipo_reforma, estado_oportunidad y fecha_solicitud.      [PROPUESTA]
+     A favor: reconocer a un cliente que repite (valor de negocio del
+     encargo); con el id, administración abre cada ficha. No añade datos
+     personales: cada elemento es de la misma persona según el sistema y
+     no lleva contacto. Hoy 4 de 19 clientes tienen más de una oportunidad
+     (M7). El NOMBRE dice el criterio real: es el mismo EMAIL (único en
+     clientes), escrito por quien pidió presupuesto y no verificado (D2 de
+     leads). Si alguien escribió el email de otra persona, la lista lo deja
+     a la vista en vez de esconderlo, y cada ficha trae SU contacto.
+     En contra: una consulta más (la 5); y con un email ajeno, la ficha
+     de una persona enseña que existe la solicitud de otra (tipo, estado y
+     fecha, sin contacto). Lo ve solo quien tiene la llave de
+     administración, que ya puede abrir cualquier ficha.
+  b) Solo un recuento (otras_oportunidades: 2). A favor: aún menos datos.
+     En contra: sabe que repite pero no puede abrir las otras sin buscar a
+     mano en la base de datos (no hay búsqueda hasta D26.5).
+  c) Nada (hasta D26.5). En contra: se pierde el valor de negocio ahora,
+     y D26.5 no tiene fecha (N1 o final de N0).
+  RECOMENDACIÓN: a). Decisión de negocio: P6.
+
+6.3 P-c. Auditoría de lecturas
+  Hoy: GET /gate-avisos (datos personales e importes de casos con Gate) y
+  GET /llamadas-del-dia (nombres y teléfonos de todos los pendientes) NO
+  dejan nada en logs: son de solo lectura de verdad (Adenda 5.6 y 5.7). La
+  única traza es la línea de acceso del uvicorn en su salida ("GET
+  /oportunidades/123/ficha 200"), que no se guarda en la base de datos.
+  a) Cada lectura deja una línea en logs ("ficha_consultada").
+     A favor: rastro de quién... salvo que N0 NO sabe quién: la llave es
+     compartida y no identifica al operador (Adenda 5.5, "operador no
+     identificado"). La línea diría "alguien con la llave de administración
+     abrió la ficha 123 a tal hora".
+     En contra: un GET con efectos; rompe la barrera 2 (READ ONLY): habría
+     que escribir en OTRA transacción, después de leer; un reintento o un
+     refresco de la página de n8n multiplica las líneas; los scripts de
+     "no escribe nada" cambian; y la consulta 4 tendría que excluir esa
+     acción (otra cosa que puede fallar). Mucho coste para un rastro sin
+     autor.
+  b) Nada en N0, sin más. A favor: coherente con gate-avisos y el listado.
+     En contra: no deja escrito cuándo debe hacerse.
+  c) Nada en N0, y se deja para la app de búsqueda de D26.5, que ya lo
+     prevé ("cada consulta de la ficha debería dejar una línea en logs"),
+     junto con la identificación del operador (N1).        [PROPUESTA]
+     A favor: la auditoría tiene sentido cuando sabe QUIÉN lee; hasta
+     entonces, la protección es la llave propia de administración y la
+     minimización. Se documenta como LIMITACIÓN en la Adenda (Bloque D).
+     En contra: durante N0 no hay rastro persistente de lecturas de datos
+     personales completos.
+  RECOMENDACIÓN: c). Decisión de negocio y RGPD: P7.
+
+
+================================================================
+7. ARCHIVOS
+================================================================
+
+  Paso B1 (extracción sin cambios de comportamiento). Nuevo:
+    app/services/datos_oportunidad.py   sección 4.1.
+  Cambia:
+    app/services/aviso_gate_service.py  sección 4.2 (importa a_madrid y
+                                        deducir_sin_iva; usa las funciones
+                                        compartidas).
+  NO cambian: app/schemas/aviso_gate.py, app/api/aviso_gate.py, ningún
+  script.
+
+  Paso B2 (el endpoint). Nuevos:
+    app/schemas/ficha_oportunidad.py    FichaOportunidadResponse y sus
+                                        piezas (PresupuestoFicha heredando
+                                        de PresupuestoAviso, VisitaFicha,
+                                        LlamadaFicha, EventoHistorial,
+                                        OtraOportunidad, TipoLlamada,
+                                        EventoEstado), extra="forbid".
+                                        Reutiliza ContactoAviso y
+                                        ReformaAviso tal cual.
+    app/services/ficha_oportunidad_service.py
+                                        obtener_ficha(oportunidad_id) (la
+                                        conexión y el SET),
+                                        leer_ficha(cursor, oportunidad_id)
+                                        (las cinco consultas, como
+                                        leer_listado), la tabla de 5.1,
+                                        estado_tras y construir_historial
+                                        (puras), y OportunidadNoEncontrada
+                                        (404) heredando de RechazoNegocio.
+                                        SQL_MODO_TRANSACCION importada de
+                                        listado_llamadas_service (P9). NO
+                                        importa fastapi.
+    app/api/ficha_oportunidad.py        el router: GET
+                                        /oportunidades/{oportunidad_id}/ficha,
+                                        verificar_gate_secret (P8),
+                                        Path(gt=0) y CODIGO_HTTP.
+  Cambian:
+    app/schemas/common.py               EstadoVisita (NUEVO, los 4 valores
+                                        del CHECK visitas_estado_check, como
+                                        EstadoOportunidad). Solo se añade:
+                                        nada de lo que ya existe cambia
+                                        (P10).
+    app/main.py                         octavo include_router.
+  Sin migración: el esquema no cambia; docs/schema_actual.sql no se
+  regenera.
+
+  Bloque C: scripts/check_ficha_oportunidad_service.py (sin servidor) y
+  scripts/check_ficha_oportunidad_http.py (HTTP real, puerto 8026).
+  Bloque D: Adenda (fila 9 y sección 5.9; nota fechada en 5.6 sobre la
+  mudanza de B1), CLAUDE.md, D26 sección 4 (nota con el estado) y este
+  plan.
+  Ningún secreto se imprime: los scripts solo usan los valores en las
+  cabeceras.
+
+
+================================================================
+8. PRUEBAS
+================================================================
+
+8.1 Bloque C: scripts/check_ficha_oportunidad_service.py (sin servidor)
+  Marca propia: emails svc-ficha-<8 caracteres>@example.com.
+  S0. Autoprueba de ConexionSinCommit: commit() tiene que lanzar
+      CommitProhibido; rama else -> FALLO "la excepción se ha tragado".
+  S1. estado_tras (pura): cada acción de 5.1 con su estado; descartar ->
+      'perdida'; visita_acordada -> 'visita_agendada'; una acción que no
+      es de cambio, una decisión desconocida y un estado de detalle ausente
+      -> None.
+  S2. construir_historial y historial_cuadra (puras): sin logs y estado
+      'nueva' -> [alta] y true; sin logs y estado 'ganada' -> [alta] y
+      false, SIN evento añadido; un log que no se puede interpretar -> no
+      sale y false; orden por fecha y, a igual fecha, por id.
+  S3. Reutilización sin copia (ast.parse, se enseña la salida):
+      ficha_oportunidad_service.py y aviso_gate_service.py no definen
+      a_madrid ni deducir_sin_iva, y los importan de datos_oportunidad;
+      ninguna constante de texto del servicio de la ficha contiene
+      "detalle" sin "->>" detrás (no se lee el detalle entero, C2);
+      ninguno de los tres importa fastapi.
+  S4. REPEATABLE READ de verdad (pre-decisión 4), con los datos propios:
+      obtener_ficha con get_db_connection SUSTITUIDA en memoria (en el
+      módulo del servicio) por una que entrega una conexión propia con
+      connection_factory=ConexionSinCommit y un cursor con "gancho"
+      (subclase de cursor que, justo después de la PRIMERA consulta tras el
+      SET, hace dos cosas): (a) por ese mismo cursor, lee
+      current_setting('transaction_isolation') y
+      current_setting('transaction_read_only') -> 'repeatable read' y 'on';
+      (b) por OTRA conexión propia, cambia y CONFIRMA la oportunidad propia
+      (estado -> 'seguimiento_pendiente' + log 'seguimiento_abierto'). La
+      ficha devuelta tiene que traer el estado y el historial de ANTES y
+      historial_cuadra = true. Y la primera orden enviada por el servicio
+      tiene que ser el texto exacto de SQL_MODO_TRANSACCION (el gancho
+      anota las órdenes).
+      Las 4 preguntas: (1) escribe en tablas reales, SOLO filas propias
+      (cliente, lead, oportunidad, presupuesto y logs con la marca), y lo
+      confirma la conexión de la PRUEBA, no la del código; (2) el código
+      recibe una ConexionSinCommit: si cualquier versión (también las rotas)
+      llama a commit(), sale CommitProhibido como FALLO contado; no puede
+      cerrarla (el "with" falso la devuelve al script) y no la reutiliza
+      fuera; get_transactional_connection NO se sustituye: si una versión
+      rota (N9b) escribe por el pool, escribe un log de una oportunidad
+      PROPIA (la única que se pide), que la limpieza borra por la marca y
+      la comprobación "no escribe nada" detecta; (3) si se corta a mitad,
+      quedan filas propias con la marca: limpiar() al empezar la siguiente
+      ejecución las borra y la última comprobación cuenta 0 restos; la
+      transacción de la conexión del código muere con ella; (4) no toca el
+      8000 ni ninguna fila ajena (solo pide ids propios).
+  S5. 404 desde el servicio: id inexistente (máximo + 1.000.000) ->
+      OportunidadNoEncontrada; rama else -> FALLO "la excepción se ha
+      tragado".
+  Pasada sobre los DATOS REALES (fuera del script, una sola vez en el
+  Bloque C, con el código bueno y NUNCA con las copias rotas): obtener_ficha
+  para las 27 oportunidades reales (o las que haya), contando 200 sin error
+  y, solo como [INFO], cuántas cuadran (nunca se exige "0 no cuadran": es
+  el estado de un momento, la lección de
+  check_migracion_iva_y_seguimiento en CLAUDE.md). No imprime ningún dato
+  personal. Las 4 preguntas: (1) no escribe (READ ONLY + rollback); (2) una
+  sola versión, la buena, revisada sin commit (git grep); (3) si se corta,
+  nada que deshacer; (4) ni el 8000 ni escrituras.
+
+8.2 Bloque C: scripts/check_ficha_oportunidad_http.py (HTTP real, 8026)
+  Mismo esquema que check_aviso_gate_http: uvicorn.Server en un hilo, SIN
+  --reload, puerto 8026 (si está ocupado, se para y avisa; nunca el 8000).
+  Marca propia: emails http-ficha-<8 caracteres>@example.com y tokens uuid4.
+  Datos creados como lo hará n8n cuando se puede (POST /leads,
+  /calculate-estimate, /visits, /gate-decisions, /create-followup-task) y
+  por SQL, con la misma marca, cuando no (lead sin 'contacto', IVA 10/4/0,
+  fechas fijas a los dos lados del cambio de hora, cambio a mano, logs que
+  no son cambio de estado). Foto de lo ajeno (id_base) al empezar y al
+  terminar; limpieza solo de lo propio en el orden de las claves foráneas.
+  CASO 1  Llave: sin cabecera 401; X-Gate-Secret incorrecto 401; valor de
+          WEBHOOK_SECRET en X-Gate-Secret 401; valor de WEBHOOK_SECRET en
+          X-Webhook-Secret 401; cuerpo y WWW-Authenticate idénticos a los de
+          GET /gate-avisos; 401 antes que el 422 (sin cabecera y "abc").
+  CASO 2  Forma: "0", "-1", "abc" -> 422 que nombra oportunidad_id.
+  CASO 3  404 oportunidad_no_encontrada: máximo + 1.000.000, 2147483648 y
+          99999999999999999999; nunca 500.
+  CASO 4  200 en CADA tipo de oportunidad, con su contenido:
+    T1 sin presupuesto (solo POST /leads): presupuesto null, visitas [],
+       llamadas [], historial [alta/nueva], cuadra true.
+    T2 sin Gate (/leads + /calculate-estimate): 'presupuesto_enviado',
+       requiere_aprobacion false, motivo_gate null, historial [alta,
+       presupuesto_calculado/presupuesto_enviado].
+    T3 con Gate sin decidir: 'pendiente_aprobacion', requiere_aprobacion
+       true, motivo_gate, llamadas [].
+    T4 con Gate decidido con informe (POST /gate-decisions visita_acordada):
+       llamadas = 1 elemento con tipo_llamada 'gate', resultado, fecha_visita
+       y el INFORME EXACTO enviado; visitas = 1 'confirmada' con el texto fijo;
+       historial termina en gate_decision_registrada/visita_agendada.
+    T4b con Gate descartado: motivo, fecha_visita null, 'perdida'.
+    T5 seguimiento abierto (/leads + /calculate-estimate, created_at del
+       presupuesto PROPIO movido a hace 49 h por SQL, y POST
+       /create-followup-task): historial [alta, presupuesto_calculado,
+       seguimiento_abierto/seguimiento_pendiente].
+    T6 visita solicitada (POST /visits, fecha futura calculada con zoneinfo
+       como el CASO 8 de gate-avisos): visitas = 1 'solicitada' con su
+       texto_cliente; historial con visita_solicitada.
+    T7 visita cancelada y otra activa (dos POST /visits con fechas
+       distintas): visitas = [cancelada, solicitada], en ese orden, con sus
+       textos; en el historial UN solo visita_solicitada (la sustitución no
+       es un cambio, P3).
+    T8 sin 'contacto' (lead por SQL): contacto con tres null y
+       "no_disponible"; ni el nombre ni el teléfono de su ficha de clientes
+       aparecen en el texto de la respuesta.
+    T9 cambio a mano (UPDATE por SQL de la oportunidad PROPIA a 'ganada'):
+       estado_oportunidad 'ganada', historial IGUAL que antes del cambio
+       (nada inventado) y historial_cuadra false.
+    T10 logs que no son cambio de estado (por SQL, en una oportunidad
+       propia: 'presupuesto_requiere_revision', 'visita_configuracion_incompleta'
+       y uno con entity_type 'sistema' y entity_id = esa oportunidad): no
+       salen en el historial. (El de 'sistema' no lo cubre la condición
+       PROPIO de logs: se borra por su id exacto, anotado al crearlo.)
+  CASO 5  Importes exactos: IVA 21 por /calculate-estimate (sin IVA igual
+          al de la foto del cálculo en logs, como el CASO 9 de gate-avisos);
+          IVA 10, 4 y 0 con presupuestos PROPIOS por SQL (sin IVA elegido,
+          con IVA = redondear(sin IVA × k)): el sin IVA devuelto es el
+          elegido, exacto; todos los importes, iva_pct_aplicado,
+          umbral_gate_vigente y m2 son TEXTO en el JSON ("8.7", no 8.69999).
+  CASO 6  Fechas en hora de Madrid a los dos lados del cambio de hora, con
+          instantes FIJOS insertados por SQL en filas propias (no caducan:
+          por SQL no se exige que la fecha sea futura): una visita
+          2026-10-23 06:30 UTC -> "2026-10-23T08:30:00+02:00" y otra
+          2026-10-26 07:30 UTC -> "2026-10-26T08:30:00+01:00"; un log de
+          cambio con created_at 2027-03-26 08:00 UTC -> "+01:00" y otro
+          2027-03-29 08:00 UTC -> "+02:00".
+  CASO 7  Claves EXACTAS en cada nivel (copiadas de este PLAN, no del
+          código): raíz, contacto, reforma, presupuesto, cada visita, cada
+          llamada, cada evento y cada otra oportunidad; ninguna clave
+          prohibida (2.6) en ningún nivel; estado_oportunidad entre los 8
+          del CHECK y estado_visita entre los 4 del CHECK, leídos de
+          docs/schema_actual.sql.
+  CASO 8  logs.detalle no sale: en T6/T7, cada texto_cliente aparece en la
+          respuesta EXACTAMENTE una vez (en su visita); ninguna clave del
+          detalle (sustituye_a, fecha_anterior, horas_seguimiento_presupuesto,
+          estado_anterior, problemas, faltan, decision_id, presupuesto_id,
+          precio_m2, margen_empresa_pct...) aparece en ningún nivel.
+  CASO 9  Otras oportunidades (si se aprueba P-b a): dos leads con el MISMO
+          email: la ficha de cada uno lista la otra (y no a sí misma), con
+          sus 4 claves; una tercera de otro email no sale; el contacto de
+          cada ficha es el de SU solicitud.
+  CASO 10 Solo lectura: antes y después de una tanda de 200, 404, 401 y
+          422, los recuentos de filas propias en las 7 tablas (logs de las
+          oportunidades propias incluidos) y updated_at y
+          fecha_ultimo_contacto de las oportunidades propias no cambian.
+  CASO 11 Repetición: dos peticiones seguidas a la misma ficha dan el mismo
+          cuerpo, byte a byte.
+  CASO 12 Coherencia con gate-avisos (las piezas compartidas): para T3,
+          contacto, reforma, fotos y los 8 campos de presupuesto de la ficha
+          son IGUALES a los de GET /gate-avisos; y GET /gate-avisos sigue
+          dando 409 sin_gate a T2 (no se ha tocado).
+  CASO 13 Ningún 500 en todas las peticiones a la ficha.
+  CASO 14 NO TOCA NADA AJENO: foto de lo ajeno igual al empezar y al
+          terminar.
+  Las 4 preguntas (para todo el script):
+    (1) Escribe en tablas reales: SOLO filas propias (clientes con la
+        marca, y lo que cuelga de ellos), por los endpoints y por SQL, con
+        commit; más un log 'sistema' de T10 (por id exacto). Nunca toca
+        reglas_negocio, tarifas_base ni umbrales_gate (los IVA distintos
+        de 21 se crean como presupuestos propios, no cambiando la regla).
+    (2) El código bajo prueba es el servidor: no recibe ninguna conexión
+        del script (usa su propio pool), así que no puede confirmar nada
+        del script. Una versión rota que escriba (N9b) solo puede escribir
+        para los ids que se le piden: propios (limpieza por la marca) o
+        inexistentes (CASO 3). Por eso, al terminar, el script lista los
+        logs con id > id_base cuya entidad no es propia, y los borra por
+        id exacto tras comprobar que son los esperados (los del manejador
+        global de un 500, con su ruta /oportunidades/.../ficha, o los de
+        N9b), regla de CLAUDE.md.
+    (3) Si se corta a mitad: quedan filas propias con la marca, que borra
+        limpiar() al empezar la siguiente ejecución (y la comprobación
+        final cuenta 0). Lo que no lleva marca (el log 'sistema' de T10, o
+        logs de un 500) se anota con su id en la salida al crearlo, para
+        borrarlo a mano por id exacto si el script no llega al final.
+    (4) No toca el uvicorn del 8000 (puerto 8026; si está ocupado, se
+        para). Datos reales: solo se leen para la foto de lo ajeno; nunca
+        se pide la ficha de una oportunidad ajena.
+
+8.3 Regresión (sin tocar ningún script; sus 4 preguntas ya están
+  respondidas en sus propios planes y no cambian)
+  - Tras B1: check_aviso_gate_http 75/75 y check_aviso_gate_service 18/18
+    (más 4.3).
+  - Tras B2: prueba mínima por HTTP real en el 8026 (200 de una propia,
+    404, 401 con el valor de WEBHOOK_SECRET y 422).
+  - Bloque C: los dos scripts nuevos, check_aviso_gate_http (75/75),
+    check_aviso_gate_service (18/18), check_gate_decisions_http (121/121),
+    check_visits_http (55/55), check_listado_llamadas_service (39/39) y
+    check_listado_llamadas_http (88/88), check_followup_tasks_http
+    (125/125) y check_lead_session_http (24/24); y la suite completa con
+    la regla de uso de CLAUDE.md (Docker/n8n y el navegador CERRADOS, que
+    se le pedirá a Gabi; enchufado, tapa abierta, hora de inicio y fin,
+    Kernel-Power 506/507 al terminar: si los hay, la pasada no vale).
+    Serán 41 scripts (39 + los dos nuevos). check_graceful_shutdown y
+    check_mcp_connection desde copias con otro puerto; uvicorn propio
+    detenido por su PID. La salida de los cinco scripts de P4 se revisa a
+    mano. Nunca "N/N" si no sale en una sola pasada.
+
+8.4 Pruebas en negativo (sobre COPIAS en el scratchpad, una por prueba y
+    DE UNA EN UNA, con su .env, borradas al terminar; el código real no
+    cambia: git diff vacío al terminar). Cada una da un resultado EXACTO
+    ("54/121") con la lista de lo que falla, que se escribe en este plan y
+    en el commit del Bloque C. Lo de abajo es la PREVISIÓN (qué debe
+    fallar, "al menos"), no el criterio de aceptación: los totales de los
+    scripts se conocerán al escribirlos.
+  N1.  Dependencia cambiada a verificar_webhook_secret (obligatoria): falla
+       "WEBHOOK_SECRET en X-Webhook-Secret -> 401" y, en cascada, todo lo
+       que pasa la llave del Gate (422, 404, cada 200). Al menos 1 + la
+       cascada.
+  N2.  409 sin_gate heredado: la ficha implementada llamando a
+       obtener_aviso (o con su puerta): fallan los 200 de T1, T2, T5, T6,
+       T7, T8 (y T9/T10 si no tienen Gate). Al menos 6.
+  N3.  Importe como float en la RESPUESTA (float(...) en un importe con IVA,
+       o el campo declarado float): el importe sale como número y no como
+       texto exacto -> falla el CASO 5 (al menos 1 por IVA). Nota: float
+       solo en la DEDUCCIÓN es un mutante equivalente (N6 de gate-avisos,
+       demostrado allí con 1.200.000 importes); no se repite aquí.
+  N4.  Desfase fijo +02:00 en a_madrid (que ahora es COMPARTIDA): falla el
+       CASO 6 en los dos "+01:00", Y fallan también check_aviso_gate_http y
+       check_aviso_gate_service (sus casos de invierno): demuestra que la
+       función es una sola. Al menos 2 en la ficha y los de gate-avisos.
+  N5.  logs.detalle en bruto: un campo "detalle" añadido a cada evento del
+       historial (en el esquema y en la consulta): fallan el CASO 7 (claves
+       del historial, clave prohibida) y el CASO 8 (texto_cliente aparece
+       dos veces; claves del detalle). Al menos 3.
+  N6.  Sin REPEATABLE READ ("SET TRANSACTION READ ONLY;" a secas): falla la
+       S4 (isolation = 'read committed'; la ficha trae el cambio confirmado
+       en medio; historial_cuadra false). Por HTTP no se ve (no hay
+       concurrencia en los casos). Variante N6b: sin ninguna orden SET
+       (tampoco READ ONLY): falla además "la primera orden es
+       SQL_MODO_TRANSACCION" y "read_only = on".
+  N7.  Informe ausente: la consulta 3 sin d.informe y el campo null o
+       vacío: falla T4 ("el informe es el enviado") y el CASO 7 (si se
+       quita la clave). Al menos 1.
+  N8.  Visitas sin las canceladas (WHERE v.estado <> 'cancelada'): falla
+       T7 (una sola visita) y el CASO 6 si la de fecha fija es la
+       cancelada. Al menos 1.
+  N9.  Escribe un log de lectura DENTRO de la transacción READ ONLY
+       (INSERT): Postgres lo rechaza (ReadOnlySqlTransaction) -> 500 en
+       todas las fichas: fallan los 200 y el CASO 13. Los logs del
+       manejador global de esos 500 se borran por id exacto tras
+       comprobarlos. Demuestra la barrera 2.
+  N9b. Escribe el log por OTRA conexión (get_transactional_connection) con
+       commit: la barrera 2 no lo ve; falla el CASO 10 ("no escribe nada").
+       Demuestra por qué el CASO 10 sigue haciendo falta.
+  N10. Historial que inventa el paso que falta (evento final con el estado
+       actual y updated_at cuando no cuadra): falla T9 (historial distinto
+       del de antes) y la S2. Al menos 2.
+  N11. Contacto leído de la ficha de clientes (en contacto_desde,
+       COMPARTIDA): falla T8 y el CASO 9 (contacto de cada solicitud), Y
+       fallan los casos de contacto de los scripts de gate-avisos (N3 de su
+       plan). Al menos 2 en la ficha.
+  N12. Sin el filtro de acciones en la consulta 4: los logs de T10 entran
+       en el historial (y estado_tras da None -> historial_cuadra false):
+       falla T10. Al menos 1.
+  N13. B1 mal hecho (dos columnas de COLUMNAS_CASO intercambiadas: nombre
+       y email): fallan los casos de contacto de check_aviso_gate_http y
+       check_aviso_gate_service, la comparación de SQL de 4.3 (4) y la de
+       respuestas de 4.3 (5), y el CASO 12. Demuestra que la demostración
+       de B1 detecta una mudanza mal hecha.
+  N14. Otras oportunidades incluyendo la propia (sin "o2.id <> ..."): falla
+       el CASO 9. Solo si se aprueba P-b a).
+
+
+================================================================
+9. RIESGOS
+================================================================
+
+  R1. B1 toca aviso_gate_service, que usan WF2 y el formulario del Gate
+      PUBLICADOS en n8n. Mitigación: paso propio con su [PARA], scripts sin
+      tocar, mismo SQL (4.3, 4) y respuestas idénticas sobre los 7 casos
+      reales (4.3, 5), antes de escribir el endpoint.
+  R2. El historial depende de logs, un registro de auditoría sin esquema
+      garantizado. Mitigación: solo dos claves, una lista cerrada de
+      acciones, historial_cuadra cuando algo no encaja, y M9/M11/M13 (hoy
+      todo encaja).
+  R3. La llave X-Gate-Secret abre ahora la ficha COMPLETA de CUALQUIER
+      cliente (también casos sin Gate, con informes). Es la misma llave y
+      la misma audiencia (administración); no dársela nunca al Agente 2.
+  R4. logs sin índice por entity_id (M17): la consulta 4 recorre la tabla.
+      Irrelevante con 25 filas; anotado por si logs crece.
+  R5. El informe es texto libre escrito por administración: puede contener
+      datos personales. Sale entero en la ficha (D26.2). Una vez en la
+      página de n8n, ya no lo protege esta API.
+  R6. otras_oportunidades_mismo_email agrupa por un email no verificado
+      (6.2). El nombre del campo lo dice; cada ficha trae su contacto.
+  R7. 4b renombrará decisiones_gate: la consulta 3 cambiará de tabla. El
+      contrato no (C8, P4).
+  R8. Sin paginación: las listas son pequeñas (como mucho 2 logs por
+      oportunidad, 1 visita, 1 decisión hoy).
+  R9. historial_cuadra = false será lo normal en las oportunidades ganadas
+      (C5): si la página de n8n lo pinta como una alarma, administración
+      aprenderá a ignorarlo. El texto lo decide la página (fuera de
+      alcance); aquí solo se documenta.
+
+
+================================================================
+10. FUERA DE ALCANCE (pre-decisión 10 y otros)
+================================================================
+
+  - La página de n8n que muestra la ficha (protegida) y sus textos.
+  - El resumen en GET /llamadas-del-dia (4a-2, otra rama).
+  - WF3 en n8n (bloque 5).
+  - El renombrado y la ampliación del registro de llamadas (4b; D25.9-D25.11).
+  - D26.7: texto_cliente como resumen del Agente 2, su límite y su
+    migración.
+  - La tool MCP (D18.5).
+  - Reutilizar EstadoOportunidad (y ahora EstadoVisita) en los demás
+    servicios.
+  - La columna presupuestos.umbral_gate_aplicado (C1, deuda técnica).
+  - La auditoría de lecturas y la identificación del operador (P-c, D26.5,
+    N1).
+  - La búsqueda de clientes (D26.5).
+  - Validar o transformar las rutas de las fotos; un almacenamiento de
+    fotos.
+  - Aplicar ConexionSinCommit a la S5 de check_listado_llamadas_service
+    (pendiente anotado en CLAUDE.md, en su propia rama).
+
+
+================================================================
+11. PREGUNTAS ABIERTAS (con propuesta)
+================================================================
+
+  P1.  Ruta: GET /oportunidades/{oportunidad_id}/ficha (2.2, a).
+  P2.  Umbral (C1): solo umbral_gate_vigente, como en gate-avisos; el
+       "umbral aplicado" de D26.2 queda como deuda técnica (columna). ¿Lo
+       acepta Gabi, o se lee de la foto del cálculo en logs (con el
+       contrato dependiendo de un JSONB), o se hace la columna en otra rama
+       antes?
+  P3.  Historial: excluir visita_sustituida (no cambia el estado); los
+       nombres de evento = logs.accion; el campo historial_cuadra con la
+       opción a) de 5.3.
+  P4.  Llamadas como lista con tipo_llamada ('gate' hoy) y resultado, para
+       que 4b añada valores y no campos (C8).
+  P5.  P-a, fotos: opción a) (6.1).
+  P6.  P-b, otras oportunidades: opción a), con el nombre
+       otras_oportunidades_mismo_email (6.2).
+  P7.  P-c, auditoría: opción c), nada en N0 y con D26.5 (6.3).
+  P8.  La llave en el ROUTER (APIRouter(dependencies=[Depends(
+       verificar_gate_secret)])) además de, o en vez de, en la ruta, para
+       que cualquier ruta futura de /oportunidades/... la herede (C3). Los
+       demás routers la ponen en cada ruta; aquí se propone en el router
+       porque el prefijo es genérico.
+  P9.  SQL_MODO_TRANSACCION importada de listado_llamadas_service (un solo
+       texto) en vez de copiada. Alternativa: moverla a un módulo común,
+       lo que tocaría el listado (4a-2 lo tocará de todos modos).
+  P10. EstadoVisita nuevo en app/schemas/common.py (no reutilizar
+       EstadoVisitaListado, que solo tiene 2 valores a propósito).
+  P11. Nombre del módulo de B1: app/services/datos_oportunidad.py, y
+       COLUMNAS_CASO como tupla de pares (nombre, expresión).
+  P12. fecha_ultimo_contacto NO se devuelve (D26.2 no la pide; la fecha de
+       la última llamada ya está en llamadas). ¿Se quiere?
+
+
+================================================================
+12. BLOQUES
+================================================================
+
+  A.  Este plan (sin código). [PARA]
+  B1. datos_oportunidad.py y aviso_gate_service usándolo, SIN cambios de
+      comportamiento: 75/75 y 18/18 antes y después con los scripts sin
+      tocar, ast.parse, ast.dump de las dos funciones movidas, SQL igual y
+      respuestas iguales sobre los 7 casos reales (4.3). [PARA]
+  B2. El endpoint (esquemas, EstadoVisita, servicio, ruta, include_router),
+      con la prueba mínima por HTTP real en el 8026 (8.3). [PARA]
+  C.  Pruebas completas (8.1, 8.2), pruebas en negativo N1-N14 de una en
+      una con sus resultados EXACTOS en 8.4, la pasada sobre los datos
+      reales (8.1), regresión y suite completa con la regla de uso. [PARA]
+  D.  Documentación: fila 9 de la tabla de la Adenda y sección 5.9
+      (contrato, códigos, orden, solo lectura, minimización, historial,
+      limitaciones: auditoría, umbral vigente, 'ganada' sin registro); nota
+      fechada en la 5.6 (B1 movió a_madrid y deducir_sin_iva a
+      datos_oportunidad, sin cambio de comportamiento); CLAUDE.md ("Dos
+      puertas", lo hecho y verificado, la suite); nota fechada en la
+      sección 4 de D26 con el estado de 4a-1; este plan con los hashes.
+      [PARA]
+  Cada bloque, un commit con los recuentos reales en el mensaje y git push.
+  Todo el código, scripts incluidos, comentado línea a línea o en grupos de
+  2-4 líneas, con "# SQL" encima de cada execute. Nada de merge a main sin
+  la confirmación explícita de Gabi, después de la revisión del tutor, y
+  siempre con --ff-only.
