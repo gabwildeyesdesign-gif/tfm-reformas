@@ -826,6 +826,7 @@ listado 39/39 y 88/88. Contrato y limitaciones: fila 5 y secciones 2 y 5.8
 de la Adenda. Incidente de la N12 (2026-10-08): una versión rota dejó
 horas_seguimiento_presupuesto en 8761 en la tabla real; restaurada a 48 y
 regla nueva en "Cómo trabajamos" (conexiones de prueba sin commit).
+(Nota 2026-10-10: "pendiente de merge" ya no es cierto: integrado en main en 1af758a, comprobado en GitHub.)
 
 Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
@@ -874,6 +875,7 @@ bloque del Agente 2 (P12 del plan de create-followup-task): su router
 tendrá que tratar 'seguimiento_pendiente' como 'presupuesto_enviado'; el
 router de chat actual no se rompe, porque decide con existe y
 presupuesto.existe, no con el estado.)
+(Nota 2026-10-10: create-followup-task ya NO está pendiente de merge: integrado en main en 1af758a. Lo demás de la nota anterior sigue pendiente.)
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
