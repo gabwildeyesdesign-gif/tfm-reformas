@@ -213,12 +213,14 @@ print("S2. construir_historial: nada inventado y el orden recibido")
 # ======================================================================
 # Instantes fijos en UTC (octubre: Madrid +02:00).
 T0 = datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc)
+# Una y dos horas después del alta.
 T1 = T0 + timedelta(hours=1)
 T2 = T0 + timedelta(hours=2)
 
 
 def pares(eventos):
     """[(evento, estado)] de una lista de EventoHistorial, como textos."""
+    # .value: el texto de cada Enum ("alta", "nueva"...).
     return [(e.evento.value, e.estado.value) for e in eventos]
 
 
@@ -306,8 +308,10 @@ comprobar("ficha: ningún texto SQL lee 'detalle' sin '->>'", TEXTOS_SQL and not
           f"({len(TEXTOS_SQL)} textos SQL, {len(SUELTOS)} con el detalle entero)")
 # Ninguno de los tres importa fastapi ni fastmcp (regla de services/).
 for nombre, arbol in ARBOLES.items():
+    # Los módulos de "from X import ..." y de "import X", en cualquier nivel.
     modulos = {n.module for n in ast.walk(arbol) if isinstance(n, ast.ImportFrom) and n.module}
     modulos |= {a.name for n in ast.walk(arbol) if isinstance(n, ast.Import) for a in n.names}
+    # Los que empiezan por fastapi o fastmcp (split(".")[0]: el paquete).
     prohibidos = sorted(m for m in modulos if m.split(".")[0] in ("fastapi", "fastmcp"))
     comprobar(f"{nombre}: no importa fastapi ni fastmcp", not prohibidos, f"({prohibidos})")
 
@@ -395,8 +399,10 @@ try:
     def conexion_de_prueba():
         """Sustituye a get_db_connection: entrega la conexión de la prueba
         y, al salir, la deshace (como la real), sin cerrarla."""
+        # yield: el código bajo prueba usa conn_codigo dentro de su "with".
         try:
             yield conn_codigo
+        # Al salir, pase lo que pase, se deshace (nunca se confirma).
         finally:
             conn_codigo.rollback()
 
@@ -469,11 +475,14 @@ finally:
     db.close_pool()
     limpiar()
     comprobar("no queda ningún dato de prueba", contar("clientes") == 0 and contar("logs") == 0)
+    # Se cierra la conexión propia del script.
     cn.close()
 
 # Resultado y código de salida (0 solo si todo está bien).
 total = ok + len(fallos)
 print(f"\nRESULTADO: {ok}/{total} correctas")
+# La lista de lo que falla, si hay algo.
 if fallos:
     print("FALLAN:", fallos)
+# Código 0 solo sin fallos (el lanzador de la suite lo usa).
 sys.exit(0 if not fallos else 1)
