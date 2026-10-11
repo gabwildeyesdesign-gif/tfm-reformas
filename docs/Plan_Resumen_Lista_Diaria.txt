@@ -1025,6 +1025,109 @@ intervalo (lección del 2026-10-10).
   (No se propone una negativa "sin extra='forbid'": quitarlo no cambia
   nada observable mientras las consultas no lean más; lo cubren N2 y N3,
   que añaden el campo al esquema Y a la consulta.)
+  (Nota 2026-10-11, Bloque C, C-3: RESULTADOS EXACTOS de N1-N11, sobre
+  copias de app/, scripts/, docs/ y .env en el scratchpad, DE UNA EN UNA,
+  con Docker/n8n y el navegador cerrados y sin ningún Kernel-Power 506/507
+  entre 2026-10-10 23:58 y 2026-10-11 00:15 (N1-N11) ni entre 00:17 y 00:33
+  (repetición de la N8). Formato: servicio | HTTP. El lanzador rechaza
+  cualquier reemplazo que introduzca commit, INSERT, UPDATE o DELETE (todas
+  cambian solo lo que se LEE) y exige que cada texto original aparezca las
+  veces previstas. Copias borradas al terminar; git diff -- app/ vacío.)
+  Antes de lanzarlas, la S4b se protegió con try/except (sus dos primeras
+  llamadas): con la N10, el ValidationError habría roto el script sin
+  recuento. Con el código de la rama sigue 69/69 (23:59:38-23:59:44).
+  - N1 (m2 float): 61/69 | 101/109. Servicio: la S4b (12.35) y los 7
+    elementos con m2 de la S5. HTTP: CASO 10 (B2), los 5 apartados del CASO
+    18, "m2 viaja como texto" y OP_L del CASO 19.
+  - N2 (email en el resumen): 68/69 | 104/109. Servicio: solo la S9
+    (COLUMNAS_SOLICITUD_SQL distinta de las tres). HTTP: claves exactas de
+    solicitud, clave prohibida, email propio en el texto, email dentro de
+    solicitud y los tres null del CASO 19 (el objeto trae una cuarta clave).
+  - N3 (importe en el resumen): 69/69 | 104/109. HTTP: claves exactas de
+    solicitud, clave prohibida, importe propio en el texto, importe dentro
+    de solicitud y CASO 19.
+  - N4 (texto de la última visita en a, b, c): 69/69 | 105/109. HTTP: claves
+    exactas de a/b/c, "texto_cliente solo en d) y e)", textos cancelados
+    (CASO 21) y "ningún elemento de a), b) o c) tiene texto_cliente".
+  - N5 (expresiones copiadas): 65/69 | 109/109, MUTANTE EQUIVALENTE en
+    comportamiento, como se preveía. Solo la S9: "ningún texto del listado
+    escribe las expresiones" y las tres "en ningún otro archivo de app/".
+  - N6 (N+1): 67/69 | 109/109. Solo la S8: "exactamente 5 órdenes" y "las 5
+    son las dos consultas del listado". Mismos datos por HTTP.
+  - N7 (resumen del primer lead del cliente): 63/69 | 107/109. Servicio: los
+    5 elementos de los leads 2 y 3 (mismo cliente que el lead 1) y la S9.
+    HTTP: CASO 10 (B2 trae lo de B1) y b) del CASO 18.
+  - N8 (NOT en la expresión compartida de datos_oportunidad.py), los seis
+    scripts sobre la MISMA copia, de uno en uno (00:13:33-00:17:03):
+    listado 62/69 | 102/109 (los 7 elementos con cambios no nulos; CASO 10,
+    los 5 apartados del CASO 18 y OP_L). Ficha 40/40 | 69/69 y gate-avisos
+    18/18 | 75/75: NO lo ven. HALLAZGO C11: sus scripts comprueban las
+    CLAVES de "reforma" y el texto de m2, pero nunca el VALOR de
+    incluye_cambios_estructurales (ni el de nivel_acabados) frente a lo
+    enviado; y la ficha compara su "reforma" con la de gate-avisos, que sale
+    de la misma expresión rota. La N8 demuestra igualmente la fuente única
+    (el listado cambia con datos_oportunidad.py); el hueco de cobertura de
+    esos dos scripts (ya en main) queda pendiente en CLAUDE.md, en su
+    propia rama. La primera ejecución de la N8 (00:08:32-00:10:19) no vale
+    para la ficha ni gate-avisos HTTP: el lanzador no copiaba docs/ y los
+    dos se pararon al leer docs/schema_actual.sql (FileNotFoundError), sin
+    ninguna comprobación; se corrigió el lanzador y se repitió la N8 entera.
+  - N9 (texto de la visita más antigua): 69/69 | 106/109. HTTP: e) del CASO
+    18 (E-sustituida), textos cancelados y "cada texto activo sale una vez"
+    (CASO 21). El servicio no la ve: cada visita suya es la única de su
+    oportunidad.
+  - N10 (sin "| None"): 45/48 | 59/109. Servicio: la S4b (tres None), "la
+    S5 termina sin error" (ValidationError; las comprobaciones posteriores
+    de la S5 no llegan a ejecutarse, de ahí 48) y la S8 (sin medición).
+    HTTP: la lista ENTERA da 500 por un solo lead (C4 hecho visible): 50
+    fallos en cascada, incluido "ninguna respuesta 500". Los 6 logs del
+    manejador global (ids 6772-6777) eran exactamente las 6 respuestas 500
+    y el script los borró por id exacto; 0 restos.
+  - N11 ("m3" en NOMBRES_SOLICITUD): el script de servicio no llega a
+    ejecutarse (sin RESULTADO, código 1) y uvicorn en el 8027 tampoco
+    arranca (código 1, el puerto no llega a escuchar). Traza literal (la
+    misma en los dos):
+        File ".../copia_N11/app/services/listado_llamadas_service.py", line 123, in <module>
+          COLUMNAS_SOLICITUD_SQL = ", ".join(dict(COLUMNAS_CASO)[nombre] for nombre in NOMBRES_SOLICITUD)
+        File ".../copia_N11/app/services/listado_llamadas_service.py", line 123, in <genexpr>
+          COLUMNAS_SOLICITUD_SQL = ", ".join(dict(COLUMNAS_CASO)[nombre] for nombre in NOMBRES_SOLICITUD)
+        KeyError: 'm3'
+    (en uvicorn, a través de "from app.services.listado_llamadas_service
+    import SQL_MODO_TRANSACCION" de la ficha): ruidoso AL ARRANCAR.
+  - Archivos rotos (SHA-256): N1 428ac617...0155, N2 1fcc43ca...e43a y
+    be4742ec...0c9c, N3 9ec30a23...5657 y 4b7ca160...33dd, N4
+    c23d4837...2008 y e50e9f7e...82e1d, N5 45f64875...eaab0, N6
+    088bf61c...30547, N7 eaa2b87a...2c433, N8 bd4f74aa...25102, N9
+    7d5855ec...4ae, N10 1cbda75f...0130, N11 aee55a7f...b627 (completos en
+    la salida del lanzador y en el commit del Bloque C).
+  (Nota 2026-10-11, Bloque C, C-4: regresión y suite.)
+  - Regresión (00:18:39-00:22:09): check_ficha_oportunidad_service 40/40,
+    check_ficha_oportunidad_http 69/69, check_aviso_gate_service 18/18,
+    check_aviso_gate_http 75/75, check_followup_service 34/34 y
+    check_followup_tasks_http 125/125, todos con código 0.
+  - Suite completa: 41/41 con código 0 en UNA pasada válida, de 00:22:18 a
+    00:31:37, sin ningún Kernel-Power 506/507 entre 00:17 y 00:33. Los dos
+    del listado, 109/109 y 69/69. check_graceful_shutdown desde una copia en
+    el 8030 y check_mcp_connection desde una copia en el 8031 contra un
+    uvicorn propio. Salida de los cinco scripts de P4 revisada a mano: sin
+    fallos.
+  - Uvicorn del 8031: el ejecutor solo lo detiene si coinciden el PID
+    lanzado, el del log y el de netstat. No coincidieron (lanzado 29852;
+    log y netstat 28768) y NO detuvo nada. Causa comprobada con
+    Win32_Process: el python.exe del venv es un LANZADOR que arranca el
+    intérprete real como hijo (28768, hijo de 29852, con --port 8031). Se
+    detuvo 28768 a mano, por su PID (el del log, igual al de netstat):
+    8031 libre, 29852 terminó con él, el 8000 de Gabi intacto. Lección para
+    los ejecutores: en Windows, el PID de Popen sobre el python del venv no
+    es el del servidor; vale el del log comprobado con netstat.
+  - Scratchpad (SHA-256): negativos_c.py de la primera tanda
+    1e7606fda5273c3a12d069ddde159b41c7cba5794284ff4afc0164e6bc83c43d
+    (reconstruido quitando la copia de docs/), el de la repetición de la N8
+    95a8c9ecce76a42fce9f93b288d18a9ea4d20ee285ea1e57c02a80727e4cfd81,
+    suite_c.py 83a4b5079f380313fa906320e2e023e38eb2635800034307a1b00c992c5b4dfa
+    y medir_comentarios.py
+    b09ae9d1c8ea7daca133ed389429f8fbbc6f86fb8f1fcc82b8cc47353b6bc14f.
+    Comentarios: 0/274 (script de servicio), 0/115, 0/90 y 0/59.
 
 
 ================================================================

@@ -255,15 +255,23 @@ comprobar("sin 'contacto' -> None, None y origen 'no_disponible'",
 print("\nS4b. solicitud_desde (el resumen de la solicitud)")
 # ======================================================================
 # Valores normales: salen los tres tal cual, y m2 sigue siendo Decimal
-# (nunca float: con float, 12.35 no sería exacto).
-s = servicio.solicitud_desde(Decimal("12.35"), "alto", True)
-comprobar("(12.35, 'alto', True) -> los tres valores, m2 Decimal",
-          (s.m2, s.nivel_acabados, s.incluye_cambios_estructurales) == (Decimal("12.35"), "alto", True)
-          and isinstance(s.m2, Decimal), f"({s.m2!r}, {s.nivel_acabados!r}, {s.incluye_cambios_estructurales!r})")
-# Las tres claves ausentes en el JSONB: tres None, sin ningún error.
-s = servicio.solicitud_desde(None, None, None)
-comprobar("(None, None, None) -> tres None sin excepción",
-          (s.m2, s.nivel_acabados, s.incluye_cambios_estructurales) == (None, None, None))
+# (nunca float: con float, 12.35 no sería exacto). try/except: si una
+# versión rota lanzara un error aquí, cuenta como FALLO y el script sigue.
+try:
+    s = servicio.solicitud_desde(Decimal("12.35"), "alto", True)
+    comprobar("(12.35, 'alto', True) -> los tres valores, m2 Decimal",
+              (s.m2, s.nivel_acabados, s.incluye_cambios_estructurales) == (Decimal("12.35"), "alto", True)
+              and isinstance(s.m2, Decimal), f"({s.m2!r}, {s.nivel_acabados!r}, {s.incluye_cambios_estructurales!r})")
+except Exception as error:
+    comprobar("(12.35, 'alto', True) -> los tres valores, m2 Decimal", False, f"(salió {type(error).__name__})")
+# Las tres claves ausentes en el JSONB: tres None, sin ningún error (con un
+# esquema que no admitiera null, aquí saldría ValidationError: FALLO contado).
+try:
+    s = servicio.solicitud_desde(None, None, None)
+    comprobar("(None, None, None) -> tres None sin excepción",
+              (s.m2, s.nivel_acabados, s.incluye_cambios_estructurales) == (None, None, None))
+except Exception as error:
+    comprobar("(None, None, None) -> tres None sin excepción", False, f"(salió {type(error).__name__})")
 # Un nivel fuera del Enum ('basico', 'medio', 'alto'): Pydantic lo rechaza.
 # Es R1 del plan hecho visible: un dato mal formado no se cuela (en la
 # lista entera, sería un 500). try/except/else: sin la excepción, FALLO.
