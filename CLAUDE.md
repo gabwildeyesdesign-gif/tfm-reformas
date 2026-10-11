@@ -212,6 +212,12 @@ claude.ai; se copia a docs/ con la rama de exportación de n8n). Desde el
 GET /llamadas-del-dia lleva en cada elemento el resumen de la solicitud
 (objeto "solicitud") y, en las visitas, texto_cliente (D26.1, 4a-2): mismo
 router y misma ruta, contrato ampliado; sigue sin email ni importes.)
+(Nota 2026-10-11, tutor: 4a-2 ya NO está pendiente de merge: integrado en
+main en c1ba356 (fast-forward de feat/n0-resumen-lista-diaria, confirmado
+por Gabi y comprobado en GitHub; la rama ya no existe). D26.8 (sección 5 de
+docs/Decisiones_D26_...md) y D27 (docs/Decisiones_D27_...md) ya están en
+docs/, y los JSON saneados de los flujos de n8n en n8n/ (D27.5). No hay
+ningún bloque de backend abierto; el siguiente es 4b (D26.6).)
 Lo que sigue es la especificación completa, no el estado actual.
 
 calculate-estimate tiene las dos (MCP en producción, REST para
@@ -957,6 +963,8 @@ KeyError al importar (ni el script ni uvicorn arrancan). Contrato y
 limitaciones (R1: un lead mal formado tumba la lista entera; R2:
 texto_cliente sin filtro hasta D26.7): fila 8 y nota del 2026-10-11 de la
 sección 5.7 de la Adenda. Suite completa 41/41 en UNA pasada válida.
+(Nota 2026-10-11: "pendiente de merge" ya no es cierto: integrado en main en
+c1ba356, comprobado en GitHub.)
 
 Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
@@ -1097,6 +1105,12 @@ rápida, no sustituye esa documentación. Contiene:
   de la solicitud en la lista diaria, ficha para cualquier oportunidad,
   visitas en un solo bloque del email de WF3, nuevo orden de bloques
   (revisa D25.12) y búsqueda de clientes como mejora posterior.
+  (Nota 2026-10-11: desde esta fecha incluye también la sección 5, D26.8,
+  página de la ficha en n8n.)
+- Decisiones_D27_WF4_Avisos_Tecnicos_y_Pagina_Ficha.md — D27: WF4 (avisos
+  técnicos por Telegram y email), su conexión con WF2, errores de la página
+  de la ficha y exportación saneada de los flujos a n8n/ (D27.1-D27.7;
+  copiado del Proyecto de claude.ai el 2026-10-11).
 - Plan_Endpoint_Ficha_Oportunidad.txt — plan de GET
   /oportunidades/{oportunidad_id}/ficha (D26.2, 4a-1): P1-P12 decididas,
   el corte de aviso_gate_service (B1), pruebas en negativo N1-N14 con sus

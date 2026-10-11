@@ -2,7 +2,7 @@
 ## D26 — Ficha del cliente en la lista diaria, visitas en un solo bloque y nuevo orden de bloques
 
 **Sesión:** 2026-10-10. **Cerrado el 2026-10-10** (decisión de Gabi, opción C). **Revisado el 2026-10-10 (tarde):
-D26.6 y D26.7, sección 4.**
+D26.6 y D26.7, sección 4. Ampliado el 2026-10-10 (noche): D26.8, sección 5.**
 **Base:** D25.9 (un endpoint de ficha para los tres tipos de llamada), D25.12 (orden de bloques),
 plan de `GET /llamadas-del-dia` (`docs/Plan_Endpoint_Listado_WF3.txt`, pre-decisión 6 y sección 1.5),
 `GET /gate-avisos/{oportunidad_id}` (Adenda 5.6).
@@ -143,3 +143,26 @@ filtro hasta D26.7 (R2). Hallazgos: `estimate_service.py` tiene su propia copia 
 `124ba1b` (C10, deuda técnica) y los scripts de la ficha y de gate-avisos no comparan el valor de los cambios
 estructurales ni del nivel (C11, pendiente). Verificación: 69/69 y 109/109, once pruebas en negativo y suite completa
 41/41. Siguiente: 4b (registro del resultado de todas las llamadas, D26.6).
+
+**[Nota 2026-10-11, tutor]** 4a-2 ya NO está pendiente de merge: integrado en `main` en `c1ba356` (fast-forward,
+confirmado por Gabi; la rama `feat/n0-resumen-lista-diaria` ya no existe).
+
+## 5. Ampliación (2026-10-10, noche; aceptada por Gabi)
+
+- **D26.8 — La ficha se ve en una página de n8n servida por un Webhook (opción B).** Hueco detectado por el tutor
+  (error suyo): D26.2 decía "vista en una página protegida de n8n", pero ningún bloque de D26.4/D26.6 la construía;
+  sin ella, los enlaces de WF2 y WF3 no llevarían a ningún sitio legible (el backend devuelve JSON).
+  - A. Formulario de n8n con el número prerrellenado: mismo patrón que el Gate, pero un clic de más y un formulario
+    usado para algo que no lo es.
+  - **B. Webhook GET + autenticación básica (la misma credencial que el formulario) + *Respond to Webhook* con
+    HTML** construido en un nodo Code (diseño del email de WF2, todo dato por `esc()`). Un clic desde el email, 0 RAM
+    extra, todo en n8n. **Elegida.**
+  - C. Página servida por FastAPI: más Python, otra autenticación de navegador y la parte visual fuera de n8n.
+  Comprobado en n8n 2.16.1 (documentación oficial y pruebas 46–54): desde n8n 1.103 la respuesta HTML de un webhook se
+  muestra en un marco aislado (*sandbox*); el HTML estático se ve bien, los enlaces con `target="_blank"` funcionan y
+  las direcciones relativas no (por eso los enlaces a otras fichas son absolutos).
+  Dirección: `https://<dominio-ngrok>/webhook/ficha?oportunidad_id=<n>`. Errores y avisos técnicos: D27.6.
+  Deuda técnica: el dominio de ngrok está escrito en el nodo `construir_pagina_ficha` (`FICHA_BASE`); si cambia el
+  dominio hay que editarlo (como el enlace al formulario en WF2).
+  Siguiente uso: el enlace a la ficha se añade al email y al Telegram de WF2 y a cada elemento de WF3.
+  JSON saneado del flujo: `n8n/WF_ficha_oportunidad.json` (D27.5).
