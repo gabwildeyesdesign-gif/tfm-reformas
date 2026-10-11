@@ -6,6 +6,10 @@ seguimiento y confirmación de una visita pedida desde el chat)
 Documento de plan · Nivel N0 · 2026-10-11 · Rama feat/n0-resultado-llamadas
 (desde main = origin/main = 9153532)
 Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+[Actualizado 2026-10-11: Bloque A APROBADO por el tutor sobre 5f7d4df,
+P1-P16 decididas (respuestas en la nota de la sección 11). Cambia P7: motivo
+nuevo 'sin_decision' (D29.3). Nota nueva en 5.3 (D29.1 y D29.2). Bloque B1 en
+curso.]
 
 Fuentes: el encargo del Bloque A del 2026-10-11 (decisiones ya tomadas y
 pre-decisiones 1-11 del tutor), docs/Decisiones_D25_..., D26 y D27 (enteros),
@@ -389,6 +393,13 @@ ruta de Windows).
   Las combinaciones prohibidas dan 422 de Pydantic antes de tocar la base
   de datos. Que el resultado corresponda al TIPO (que solo se sabe con la
   base de datos) es un 409 de negocio, resultado_no_admitido.
+  (Nota 2026-10-11, P7 decidida por Gabi, D29.3: el catálogo de motivos
+  gana UN valor, 'sin_decision' (el cliente sigue sin decidirse en la
+  última llamada). Válido en descartar (gate y seguimiento); PROHIBIDO en
+  cliente_cancela, igual que 'no_contesta' (quien cancela, ha decidido): 422
+  de Pydantic. SOLO por la ruta nueva: el Enum MotivoDescarte del alias NO lo
+  acepta, así que por POST /gate-decisions da 422 (el contrato antiguo no
+  cambia).)
 
 2.4 Efectos, en UNA transacción (READ COMMITTED, FOR UPDATE OF o, como hoy)
   Comunes a todos los 201: una fila en decisiones_gate (con tipo_llamada,
@@ -462,6 +473,9 @@ ruta de Windows).
 | 409 | visita_cambiada | confirmar_hora con una fecha distinta de la pedida (C11) |
 | 422 | misma_hora_pedida | otra_hora con la misma fecha y hora que la pedida (debería ser confirmar_hora) |
 | 500 | — | Error no controlado |
+  (Nota 2026-10-11, P7: la fila 422 de Pydantic incluye también
+  'sin_decision' con cliente_cancela por la ruta nueva, y 'sin_decision' en
+  cualquier caso por el alias /gate-decisions.)
 
 2.8 Orden de las comprobaciones
   401 -> 422 de forma -> 404 (tras el FOR UPDATE) -> 409 sin_presupuesto
@@ -538,6 +552,14 @@ ruta de Windows).
        si P3 = b).
   El UNIQUE (oportunidad_id) NO cambia (opción A de 5.3), ni el CHECK de
   motivo (salvo P7), ni RLS, ni la clave doble de visita_id.
+  (Nota 2026-10-11, P7 = 'sin_decision', P11 = columna: paso12 incluye
+  también el paso 8: chk_decisiones_gate_motivo ampliado con
+  'sin_decision' (DROP + ADD con el mismo nombre, en la misma transacción).
+  Solo AÑADE un valor: main, que nunca lo escribe, no cambia. Que
+  'sin_decision' no acompañe a cliente_cancela lo dice Pydantic y, en la
+  base de datos, el CHECK de coherencia (cliente_cancela -> motivo NOT IN
+  ('no_contesta', 'sin_decision')). El paso 6 (visita_cancelada_id con
+  clave foránea doble) va SIEMPRE.)
   Por qué main no se rompe: main inserta (oportunidad_id, visita_id,
   decision, motivo, informe) con 'visita_acordada' o 'descartar' -> el
   DEFAULT pone 'gate' y los CHECK ampliados lo aceptan; gate-avisos y la
@@ -574,6 +596,12 @@ ruta de Windows).
     tipo confirmacion_visita, cliente_cancela sin visita o sin motivo,
     otra_hora sin visita, un tipo inventado, y DOS filas para la misma
     oportunidad (el UNIQUE sigue).
+    (Nota 2026-10-11, P7: aceptado 'sin_decision' en descartar (gate y
+    seguimiento); rechazados 'sin_decision' y 'no_contesta' con
+    cliente_cancela y un motivo inventado; con --quitar
+    chk_decisiones_gate_motivo, el motivo inventado debe pasar ("la
+    excepción se ha tragado"). Y main contra la base migrada (scripts de
+    main, más abajo) demuestra que el CHECK ampliado no le afecta.)
   Compatibilidad con main, por ejecución real: desde una copia de main
   (git worktree en el scratchpad, con su .env), contra la base de datos YA
   migrada, check_gate_decisions_http 121/121, check_aviso_gate_http 75/75 y
@@ -715,6 +743,21 @@ ruta de Windows).
   confirmación de visitas y sigue valiendo. Coste aceptado (limitación de
   N0): un seguimiento "me lo pienso" sale cada día en c) hasta un resultado
   definitivo; la salida está en D24.4.
+  (Nota 2026-10-11, decisiones de Gabi D29.1 y D29.2; las opciones A, B y C
+  de arriba se conservan tal cual.) Se evaluó además un resultado 'aplazar'
+  ("me lo pienso": un aplazamiento único y volver a llamar a las 48 h) y se
+  APLAZA a N1, junto con el registro de intentos de llamada de D24.4
+  (D29.1). Motivo: es el mismo mecanismo (una llamada no definitiva),
+  exigiría retirar el UNIQUE y tocar la lista diaria y GET /gate-avisos, y
+  hacerlo ahora sería construirlo dos veces. Queda como limitación de N0
+  (R5) y como trabajo futuro con ese diseño.
+  En su lugar (D29.2): un aviso de "última llamada" por regla de negocio.
+  GET /llamadas-del-dia marcará los elementos de a) y c) que lleven más de
+  horas_ultima_llamada (regla NUEVA en reglas_negocio, propuesta 168) desde
+  presupuestos.created_at; administración hace una última llamada y, si no
+  hay decisión, registra descartar con motivo 'sin_decision'. El sistema
+  nunca cancela solo. Eso NO entra en esta rama (bloque 4c, su propia rama
+  después de 4b): aquí solo entra el motivo 'sin_decision' (P7).
 
 5.4 Pre-decisión 4: coherencia con la lista diaria. VALIDADA con el matiz
   de C1; la matriz está en 8.3.
@@ -777,6 +820,9 @@ ruta de Windows).
   cancelación valen 'precio', 'plazo', 'proyecto_no_viable' y 'otro' (con
   el informe); 'no_contesta' no (C6). Si Gabi quiere distinguir "cambio de
   planes / ya no lo necesita", sería un valor nuevo del CHECK (P7).
+  (Nota 2026-10-11: superado por P7 = 'sin_decision', D29.3. El catálogo
+  pasa a seis motivos; 'sin_decision' y 'no_contesta' no valen en
+  cliente_cancela. Para la cancelación no se añade ninguno más.)
 
 5.10 Pre-decisión 10: puertos. VALIDADA: 8028 para el script HTTP nuevo
   (libre, K11); check_gate_decisions_http sigue en 8019/8020 (prueba el
@@ -900,6 +946,11 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
   resultado e informe; historial_cuadra = true; el último evento deja el
   estado actual.
   "Ningún 500" en todas las respuestas de la ejecución.
+  (Nota 2026-10-11, P7: 'sin_decision' aceptado en descartar por la ruta
+  nueva (Gate y seguimiento, guardado en la fila); 422 con cliente_cancela
+  por la ruta nueva; 422 por el alias /gate-decisions (descartar con
+  'sin_decision'), sin escribir nada. P9: llamada_registrable de la ficha
+  igual al tipo deducido por el endpoint en los casos de la matriz.)
 
 8.3 La matriz lista <-> registro (pre-decisión 4, con C1)
   Con datos propios en los cinco apartados (y casos que NO salen), se pide
@@ -954,6 +1005,11 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
   N13. Un commit() dentro de registrar_resultado_con_cursor: la S lo cuenta
        como FALLO (CommitProhibido) y el ROLLBACK lo deshace todo. Al menos
        1 | 0.
+  (Nota 2026-10-11, P7.) N14. 'sin_decision' añadido al Enum del ALIAS
+       (el contrato antiguo cambiaría): el 422 del alias sale 201. Al menos
+       0 | 1. N15. 'sin_decision' admitido en cliente_cancela (sin el
+       validador): el 422 sale 201 (la coherencia de paso12 lo frenaría con
+       un 500). Al menos 0 | 1.
   Cada N lleva sus 4 preguntas: escriben solo filas propias; las versiones
   rotas que puedan confirmar (N13) solo se ejecutan con ConexionSinCommit o
   por HTTP sobre datos propios; un corte lo limpia la siguiente ejecución;
@@ -982,6 +1038,9 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
       no era. Mitigación: resultado_no_admitido y visita_cambiada (C11).
   R5. "Me lo pienso" en c) se repite cada día (5.3, A): limitación de N0
       hasta D24.4.
+      (Nota 2026-10-11: mitigación prevista, D29.2: el aviso de "última
+      llamada" del bloque 4c y el cierre con descartar + 'sin_decision'.
+      'aplazar' queda para N1, D29.1.)
   R6. La página de la ficha de n8n no traduce el evento nuevo
       llamada_registrada hasta que Gabi lo añada (K10): saldría el nombre
       técnico. Anotado para la ampliación del formulario.
@@ -1007,6 +1066,11 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
     /gate-decisions), cambiar una visita ya confirmada, y lo posterior a la
     visita ('ganada' / 'perdida' tras la visita, D21.2).
   - D3 (estados de visita en reglas_visita.py): se IMPORTAN de donde están.
+  - (Nota 2026-10-11.) El resultado 'aplazar' y el registro de intentos de
+    llamada: N1 (D29.1). El aviso de "última llamada" en GET
+    /llamadas-del-dia con la regla nueva horas_ultima_llamada (D29.2):
+    bloque 4c, su propia rama después de 4b. Aquí solo el motivo
+    'sin_decision' (D29.3).
 
 
 ================================================================
@@ -1054,6 +1118,33 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
   P16. Bloque B1 antes que la migración (B2-M), como se propone, para que
        el renombrado se demuestre sobre la base de datos de hoy.
 
+  (Nota 2026-10-11: decisiones del tutor y de Gabi sobre 5f7d4df. Plan
+  APROBADO con estas decisiones.)
+  - P1: sí, POST /resultados-llamada.
+  - P2: sí, alias con el contrato ANTIGUO, solo Gate, a la misma función
+    (solo_gate=True).
+  - P3: b). Solo el contrato público; la tabla sigue siendo decisiones_gate,
+    con COMMENT ON TABLE en paso12.
+  - P4: L-b.
+  - P5: sí, los cinco nombres, sin ampliar la columna.
+  - P6: A, con la nota fechada de 5.3 (D29.1, D29.2).
+  - P7: CAMBIA: motivo nuevo 'sin_decision' (D29.3), en descartar (gate y
+    seguimiento), prohibido en cliente_cancela, solo por la ruta nueva (el
+    Enum MotivoDescarte del alias no lo acepta). En paso12 (4.1).
+  - P8: sí. P9: sí, llamada_registrable en la ficha, en B2, con nota en la
+    Adenda 5.9.
+  - P10: sí, app/services/tipo_llamada.py. P11: columna visita_cancelada_id
+    con clave foránea doble. P12: sí. P13: sí, paso12b en su propia rama
+    después del merge.
+  - P14: sección nueva 5.10 de la Adenda; notas fechadas en la fila 3 y en
+    5.5.
+  - P15: documento aparte, docs/Contrato_Formulario_Llamadas.md (tipo ->
+    resultados -> campos obligatorios y prohibidos -> mensaje de cada 409 y
+    422), para construir el formulario sin leer el código; la 5.10 remite a
+    él.
+  - P16: sí.
+  - C7: de acuerdo, nota fechada en el Bloque D.
+
 
 ================================================================
 12. BLOQUES
@@ -1083,3 +1174,13 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
   de más de 4 sin comentario y se pone en el mensaje. Nada de merge a main
   sin la confirmación explícita de Gabi, después de la revisión del tutor,
   y siempre con --ff-only (lo hace Gabi).
+  (Nota 2026-10-11, con P1-P16 decididas.) B1 = opción b) de 5.1, antes de
+  B2-M (P16); su demostración: ast de los textos SQL del servicio nuevo
+  idénticos a los del viejo, ast.dump de las funciones movidas igual al de
+  main (módulo los nombres cambiados), respuestas de la ruta nueva y del
+  alias iguales una vez traducidos los nombres, check_gate_decisions_http
+  121/121 SIN tocar (git diff 9153532 vacío), check_gate_decisions_service
+  14/14 (solo sus 2 imports) y suite 41/41 en una pasada válida. B2-M no
+  empieza hasta que el tutor revise B1. paso12 incluye 'sin_decision' (P7)
+  y visita_cancelada_id (P11). D añade docs/Contrato_Formulario_Llamadas.md
+  (P15).
