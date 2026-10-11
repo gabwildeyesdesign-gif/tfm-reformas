@@ -44,7 +44,12 @@ from app.schemas.common import (
     NivelAcabados,
     TipoReforma,
 )
-from app.schemas.gate_decisions import DecisionGate, MotivoDescarte
+from app.schemas.gate_decisions import DecisionGate
+# (Nota 2026-10-11, Bloque B2 de docs/Plan_Resultado_Llamadas.txt: el motivo
+# usa el catálogo nuevo, MotivoResultado, que añade 'sin_decision' (D29.3).
+# Un Gate descartado con ese motivo por POST /resultados-llamada daría, con
+# MotivoDescarte, un 500 aquí. Solo admite un VALOR más: ningún campo nuevo.)
+from app.schemas.resultados_llamada import MotivoResultado
 
 
 class OrigenContacto(str, Enum):
@@ -134,8 +139,9 @@ class DecisionAviso(BaseModel):
     decision: DecisionGate
     # decisiones_gate.created_at, en hora de Madrid.
     fecha_decision: datetime
-    # Solo con descartar; null con visita_acordada.
-    motivo: MotivoDescarte | None
+    # Solo con descartar; null con visita_acordada. Desde B2 admite también
+    # 'sin_decision' (ver la nota de los imports).
+    motivo: MotivoResultado | None
     # Inicio de la visita acordada, en hora de Madrid; null si se descartó.
     fecha_visita: datetime | None
 

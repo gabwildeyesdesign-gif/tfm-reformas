@@ -1,35 +1,31 @@
 """
 Lógica de negocio del resultado de las llamadas de administración: POST
 /resultados-llamada y su alias POST /gate-decisions (plan:
-docs/Plan_Resultado_Llamadas.txt; la lógica del Gate es la de
-docs/Plan_Endpoint_Gate_Decisions.txt, secciones 1.4, 1.6, 1.9 y 2.2).
+docs/Plan_Resultado_Llamadas.txt, secciones 2.2-2.9 con sus notas fechadas;
+la lógica del Gate es la de docs/Plan_Endpoint_Gate_Decisions.txt).
 
-Bloque B1 (2026-10-11): este archivo se llamaba gate_decisions_service.py y
-se MOVIÓ aquí sin cambiar ningún comportamiento. Solo cambian los nombres
-(registrar_decision -> registrar_resultado, los esquemas y las
-excepciones). Los textos SQL, los motivos, los mensajes y el log son los
-mismos. Hoy (B1) solo registra llamadas del Gate; la ampliación a
-seguimientos y confirmación de visitas es el Bloque B2.
+Historia: en el Bloque B1 (2026-10-11) este archivo se llamaba
+gate_decisions_service.py y se movió aquí sin cambiar nada. En el Bloque B2
+(el mismo día) se amplía a los tres tipos de llamada:
+  gate                 visita_acordada | descartar          (como antes)
+  seguimiento          visita_acordada | descartar          (D25.10)
+  confirmacion_visita  confirmar_hora | otra_hora | cliente_cancela (D25.11)
+El tipo NO lo envía el formulario: lo deduce app/services/tipo_llamada.py.
 
-La función registrar_decision, al final, es la entrada con el contrato
-ANTIGUO (la usa el alias POST /gate-decisions): traduce los nombres y llama
-a registrar_resultado, la misma función que la ruta nueva.
+El alias (registrar_decision, al final) llama a la MISMA función con
+solo_gate=True: solo casos con Gate, y los motivos, mensajes y el orden de
+POST /gate-decisions (Adenda 5.5), para que el formulario publicado no note
+nada.
 
-Dos decisiones posibles:
-  - visita_acordada: se crea una visita YA confirmada (la acordó
-    administración por teléfono) y la oportunidad pasa a 'visita_agendada'.
-  - descartar: la oportunidad pasa a 'perdida', con un motivo.
-En los dos casos queda una fila en decisiones_gate con el informe de la
-llamada (auditoría anual) y una fila en logs.
-
-Las reglas de fecha de la visita son EXACTAMENTE las de POST /visits: se
-usan desde app/services/reglas_visita.py, sin copiarlas.
+Todo ocurre en UNA transacción (READ COMMITTED), con la fila de la
+oportunidad bloqueada (FOR UPDATE): POST /visits y POST /create-followup-task
+bloquean la misma fila, así que las operaciones sobre una oportunidad se
+ponen en fila.
 
 Como todo services/, este archivo NO importa fastapi ni fastmcp. Cuando un
 resultado no se puede registrar, lanza una excepción con un "motivo" (código
-estable) y un "mensaje" (texto para administración); los adaptadores
-app/api/resultados_llamada.py y app/api/gate_decisions.py (el alias) deciden
-el código HTTP de cada una.
+estable) y un "mensaje"; los adaptadores app/api/resultados_llamada.py y
+app/api/gate_decisions.py deciden el código HTTP.
 """
 
 # Json: le dice a psycopg2 que un diccionario de Python va a una columna
@@ -39,75 +35,102 @@ from psycopg2.extras import Json
 # La conexión de escritura del pool: commit al salir del "with" si todo va
 # bien, rollback si se lanza una excepción dentro.
 from app.db.connection import get_transactional_connection
-# El Enum de los resultados del Gate (sigue en el módulo de esquemas
-# antiguo, que también usan GET /gate-avisos y la ficha) y los esquemas
-# ANTIGUOS de entrada y de salida, que solo usa registrar_decision (alias).
-from app.schemas.gate_decisions import (
-    DecisionGate,
-    GateDecisionCreate,
-    GateDecisionResponse,
+# Los esquemas ANTIGUOS (los del alias, sin cambios).
+from app.schemas.gate_decisions import GateDecisionCreate, GateDecisionResponse
+# Los esquemas NUEVOS y las reglas de qué acompaña a cada resultado.
+from app.schemas.resultados_llamada import (
+    CON_FECHA,
+    ResultadoLlamada,
+    ResultadoLlamadaCreate,
+    ResultadoLlamadaResponse,
+    TipoLlamada,
 )
-# Los esquemas NUEVOS de entrada y de salida (POST /resultados-llamada).
-from app.schemas.resultados_llamada import ResultadoLlamadaCreate, ResultadoLlamadaResponse
 
-# Reglas de fecha y de configuración COMPARTIDAS con POST /visits (plan,
-# 2.3). FechaNoValida no se importa porque aquí no se lanza a mano: la
-# lanza validar_fecha, y el adaptador la captura como RechazoNegocio.
+# Reglas de fecha y de configuración COMPARTIDAS con POST /visits.
 from app.services.reglas_visita import (
     ZONA_MADRID,
     ConfiguracionIncompleta,
+    FechaNoValida,
     RechazoNegocio,
     combinar_fecha_hora_madrid,
     leer_reglas_visita,
     registrar_configuracion_incompleta,
     validar_fecha,
 )
+# La deducción del tipo de llamada (la misma que usa la ficha) y los
+# resultados que admite cada tipo.
+from app.services.tipo_llamada import ESTADO_GATE, deducir_tipo_llamada, resultados_de
 
-# Estados de visita y de oportunidad que ya define POST /visits. Se importan
-# en vez de copiarse (decisión D3 del Bloque C2): si un día cambia el nombre
-# de un estado, se cambia en un solo sitio.
-#   ESTADOS_VISITA_ACTIVA          ('solicitada', 'confirmada'): las que
-#                                  cuentan para el índice único parcial.
-#   VISITA_CONFIRMADA              'confirmada'.
-#   ESTADO_OPORTUNIDAD_CON_VISITA  'visita_agendada'.
+# Estados de visita y de oportunidad que ya define POST /visits (se importan,
+# no se copian: D3).
 from app.services.visits_service import (
     ESTADO_OPORTUNIDAD_CON_VISITA,
     ESTADOS_VISITA_ACTIVA,
+    VISITA_CANCELADA,
     VISITA_CONFIRMADA,
+    VISITA_SOLICITADA,
 )
 
-# Origen con el que este endpoint firma el log de configuración incompleta
-# (plan, 2.3: /visits firma "visits").
+# ======================================================================
+# Constantes
+# ======================================================================
+
+# Origen del log de configuración incompleta (P12): el alias firma como
+# antes; la ruta nueva, con su nombre.
 ORIGEN_LOG = "gate_decisions"
+ORIGEN_LOG_NUEVO = "resultados_llamada"
 
-# El ÚNICO estado de la oportunidad desde el que se puede decidir un Gate
-# por primera vez (409 estado_no_permitido en cualquier otro).
-ESTADO_PENDIENTE_APROBACION = "pendiente_aprobacion"
-
-# Estado al que pasa la oportunidad al descartar.
+# Estado al que pasa la oportunidad al perderse (descartar, cliente_cancela).
 ESTADO_PERDIDA = "perdida"
+# El estado del Gate (el alias de antes lo llamaba así).
+ESTADO_PENDIENTE_APROBACION = ESTADO_GATE
 
-# visitas.texto_cliente es NOT NULL, pero en una visita acordada por
-# teléfono el cliente no ha escrito nada. Decisión P2: este texto fijo. El
-# informe completo de la llamada queda en decisiones_gate, enlazado por
-# visita_id.
+# Textos fijos de las visitas que confirma administración por teléfono
+# (visitas.texto_cliente es NOT NULL). El del Gate es el de siempre (P2 de
+# /gate-decisions); los otros dos, P8 de este plan. otra_hora NO copia el
+# texto del cliente (se quedaría duplicado; plan, sección 7).
 TEXTO_VISITA_ACORDADA = "Visita acordada por teléfono por administración tras la revisión del Gate."
+TEXTO_VISITA_SEGUIMIENTO = "Visita acordada por teléfono por administración en la llamada de seguimiento."
+TEXTO_OTRA_HORA = ("Visita confirmada por teléfono por administración a otra hora; "
+                   "la pedida desde el chat queda cancelada.")
 
-# Registro en logs, con el mismo criterio que /visits y calculate-estimate:
-# la historia de una oportunidad se consulta en un solo sitio.
+# Registro en logs (L-b, P4): el Gate conserva su acción de siempre; los
+# otros dos tipos escriben una nueva. Las dos llevan la clave 'estado' (la
+# lee la ficha para el historial).
 LOG_ENTITY_TYPE_OPORTUNIDAD = "oportunidad"
 ACCION_DECISION_REGISTRADA = "gate_decision_registrada"
+ACCION_LLAMADA_REGISTRADA = "llamada_registrada"
+
+# Mensajes del alias, IGUALES a los de POST /gate-decisions (Adenda 5.5).
+MENSAJE_ALIAS_SIN_PRESUPUESTO = (
+    "La oportunidad todavía no tiene presupuesto calculado, así que no hay ningún Gate que decidir.")
+MENSAJE_ALIAS_SIN_GATE = ("El presupuesto de esta oportunidad no requiere aprobación (no tiene Gate): "
+                          "no hay ninguna decisión que registrar.")
+# Mensajes de la ruta nueva.
+MENSAJE_SIN_PRESUPUESTO = "La oportunidad todavía no tiene presupuesto: no hay ninguna llamada que registrar."
+# El 503 de las visitas (el mismo texto de siempre).
+MENSAJE_CONFIG_VISITAS = ("No se puede registrar la visita por un problema de configuración de las visitas "
+                          "(reglas_negocio). Revisa las claves indicadas en 'faltan'.")
+# El 503 de la regla de 48 h (como create-followup-task: sin log).
+MENSAJE_CONFIG_SEGUIMIENTO = ("No se puede saber si la oportunidad está en el seguimiento: falta o no es válida "
+                              "la regla de plazo de reglas_negocio (ver 'faltan'). No se ha escrito nada.")
+# Mensaje de cada 409 de un criterio de b) (los mismos códigos que
+# create-followup-task).
+MENSAJES_CRITERIO = {
+    "sin_presupuesto": MENSAJE_SIN_PRESUPUESTO,
+    "con_gate": "El presupuesto de esta oportunidad tiene Gate y su estado no es 'pendiente_aprobacion'.",
+    "contacto_registrado": "Ya hay un contacto registrado con el cliente: no está en el seguimiento por abrir.",
+    "visita_existente": "La oportunidad tiene una visita que no está cancelada: no está en el seguimiento por abrir.",
+    "plazo_no_cumplido": "El presupuesto aún no ha superado el plazo de seguimiento: no sale todavía en la lista.",
+}
 
 
 # ======================================================================
 # Excepciones: una clase por FAMILIA de rechazo
 # ======================================================================
-# ResultadoRechazado es la base de los rechazos PROPIOS de este endpoint
-# (antes DecisionGateRechazada) y hereda de RechazoNegocio
-# (reglas_visita.py), la base común con /visits. Los rechazos COMPARTIDOS,
-# FechaNoValida (422) y ConfiguracionIncompleta (503), vienen de
-# reglas_visita.py. Los adaptadores capturan RechazoNegocio, que incluye a
-# todos.
+# ResultadoRechazado es la base de los rechazos PROPIOS y hereda de
+# RechazoNegocio (reglas_visita.py). FechaNoValida (422) y
+# ConfiguracionIncompleta (503) son las compartidas con /visits.
 
 
 class ResultadoRechazado(RechazoNegocio):
@@ -120,11 +143,12 @@ class OportunidadNoEncontrada(ResultadoRechazado):
 
 class EstadoNoPermiteResultado(ResultadoRechazado):
     """
-    La oportunidad no admite ESTE resultado (-> 409; antes
-    EstadoNoPermiteDecision). Motivos: sin_presupuesto, sin_gate,
-    decision_ya_registrada, estado_no_permitido y visita_activa_existente
-    (los mismos códigos de hoy; B2 renombra decision_ya_registrada en la
-    ruta nueva).
+    La oportunidad no admite ESTE resultado (-> 409). Motivos de la ruta
+    nueva: sin_presupuesto, resultado_ya_registrado, estado_no_permitido,
+    con_gate, contacto_registrado, visita_existente, plazo_no_cumplido,
+    resultado_no_admitido, visita_cambiada y visita_activa_existente. Del
+    alias, los de siempre: sin_presupuesto, sin_gate, decision_ya_registrada,
+    estado_no_permitido y visita_activa_existente.
     """
 
 
@@ -133,340 +157,395 @@ class EstadoNoPermiteResultado(ResultadoRechazado):
 # ======================================================================
 
 
-def registrar_resultado(data: ResultadoLlamadaCreate) -> ResultadoLlamadaResponse:
+def registrar_resultado(data: ResultadoLlamadaCreate, solo_gate: bool = False) -> ResultadoLlamadaResponse:
     """
-    Registra el resultado de la llamada de administración (hoy, B1, solo la
-    del Gate de una oportunidad). Antes se llamaba registrar_decision.
+    Registra el resultado de la llamada, en UNA transacción: o se aplican
+    todos los cambios (visitas, resultado, estado y log) o ninguno.
 
-    Todo ocurre en UNA transacción (get_transactional_connection): o se
-    aplican todos los cambios (visita, decisión, estado y log) o ninguno.
-
-    Las comprobaciones siguen el orden de la sección 1.9 del plan:
-      404 oportunidad_no_encontrada
-      409 sin_presupuesto
-      409 sin_gate
-      ¿ya hay decisión?  igual -> 200 (creado=False, sin escribir nada)
-                         distinta -> 409 decision_ya_registrada
-      409 estado_no_permitido
-      solo visita_acordada: 503 configuracion_incompleta,
-                            422 fecha_pasada / fin_de_semana / fuera_de_franja,
-                            409 visita_activa_existente
+    solo_gate=True: el camino del alias (ver registrar_decision).
+    El rechazo diferido (503 con su log) se lanza DESPUÉS del commit, para
+    que el log se conserve (mismo mecanismo que /visits).
     """
-    # El instante pedido (fecha + hora en Madrid), solo si hay visita. Se
-    # calcula antes de abrir la transacción porque no necesita la base de
-    # datos, y hace falta tanto para la repetición (paso 4) como para las
-    # reglas de fecha (paso 6).
-    if data.resultado == DecisionGate.VISITA_ACORDADA:
-        inicio = combinar_fecha_hora_madrid(data.fecha, data.hora)
-    else:
-        inicio = None
-
-    # Texto de la decisión y del motivo, tal como se guardan en la base de
-    # datos. .value saca el texto de un Enum ("descartar"); se pasa así a
-    # psycopg2 para no depender de cómo trata un Enum.
-    decision_texto = data.resultado.value
-    motivo_texto = data.motivo.value if data.motivo is not None else None
-
-    # rechazo_diferido: mismo mecanismo que /visits. El log de configuración
-    # incompleta tiene que QUEDARSE; si la excepción se lanzara dentro del
-    # "with", get_transactional_connection haría rollback y el log se
-    # perdería. Se guarda aquí y se lanza después del commit.
-    rechazo_diferido = None
-
     # Desde aquí hasta el final del "with", todo es UNA transacción.
     with get_transactional_connection() as conn:
-        # El cursor envía las consultas y lee sus resultados.
-        cursor = conn.cursor()
+        # El cursor se cierra SIEMPRE al salir de este bloque.
+        with conn.cursor() as cursor:
+            # El trabajo; devuelve la respuesta o un rechazo diferido.
+            respuesta, rechazo_diferido = registrar_resultado_con_cursor(cursor, data, solo_gate)
+    # Fuera del "with": la transacción ya se ha confirmado (con el log del
+    # 503 dentro, si lo hubo). El 503 se lanza ahora.
+    if rechazo_diferido is not None:
+        raise rechazo_diferido
+    # Si no, el resultado se escribió y confirmó.
+    return respuesta
 
-        # --------------------------------------------------------------
-        # 1. Encontrar la oportunidad y BLOQUEARLA
-        # --------------------------------------------------------------
-        # FOR UPDATE OF o: bloquea SOLO la fila de la oportunidad hasta el
-        # final de la transacción. Si llegan dos peticiones a la vez para
-        # la misma oportunidad (un reintento de n8n, o dos personas de
-        # administración), la segunda espera aquí a que la primera
-        # termine, y después ve la decisión que la primera escribió. Es la
-        # primera barrera contra decisiones duplicadas; la segunda es el
-        # UNIQUE de decisiones_gate.oportunidad_id.
-        #
-        # oportunidades va en el FROM (el lado obligatorio) y presupuestos
-        # con LEFT JOIN, porque puede no existir. Postgres no permite FOR
-        # UPDATE sobre el lado opcional de un LEFT JOIN; por eso el "OF o".
-        #
-        # now(): la hora de la base de datos, referencia para "en el
-        # futuro". Dentro de una transacción no cambia.
-        #
-        # NO se lee ningún importe (plan, 1.5).
-        cursor.execute(
-            """
-            SELECT o.id, o.estado, p.id, p.requiere_aprobacion, now()
-            FROM oportunidades o
-            LEFT JOIN presupuestos p ON p.oportunidad_id = o.id
-            WHERE o.id = %s
-            FOR UPDATE OF o;
-            """,
-            (data.oportunidad_id,),
+
+def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_gate: bool = False):
+    """
+    Todo el trabajo, con el cursor de quien llama y DENTRO de su
+    transacción (no hace commit ni rollback: así las pruebas lo ejecutan con
+    ConexionSinCommit y ROLLBACK).
+
+    Devuelve (respuesta, rechazo_diferido): uno de los dos es None.
+
+    Orden (plan 2.8; el del alias, Adenda 5.5):
+      404 -> 409 sin_presupuesto -> [alias: 409 sin_gate] -> ¿hay resultado?
+      (igual: 200; distinto: 409) -> tipo (409 estado_no_permitido o el
+      criterio de b); 503 de la regla de 48 h) -> 409 resultado_no_admitido
+      -> con visita: 503 -> 409 visita_cambiada / 422 misma_hora_pedida ->
+      422 de fecha -> 409 visita_activa_existente -> escritura.
+    """
+    # El instante pedido (fecha + hora en Madrid), solo si el resultado
+    # lleva visita; se calcula sin base de datos.
+    inicio = combinar_fecha_hora_madrid(data.fecha, data.hora) if data.resultado in CON_FECHA else None
+    # Los textos tal como se guardan (.value saca el texto de un Enum).
+    resultado_texto = data.resultado.value
+    motivo_texto = data.motivo.value if data.motivo is not None else None
+
+    # ------------------------------------------------------------------
+    # 1. Encontrar la oportunidad y BLOQUEARLA (404)
+    # ------------------------------------------------------------------
+    # SQL: id, estado, presupuesto y Gate de la oportunidad, y now(). FOR
+    # UPDATE OF o: bloquea SOLO su fila hasta el final de la transacción
+    # (Postgres no permite FOR UPDATE sobre el lado opcional de un LEFT
+    # JOIN). Ningún importe.
+    cursor.execute(
+        """
+        SELECT o.id, o.estado, p.id, p.requiere_aprobacion, now()
+        FROM oportunidades o
+        LEFT JOIN presupuestos p ON p.oportunidad_id = o.id
+        WHERE o.id = %s
+        FOR UPDATE OF o;
+        """,
+        (data.oportunidad_id,),
+    )
+    # La única fila, o None si no existe: 404.
+    fila = cursor.fetchone()
+    if fila is None:
+        raise OportunidadNoEncontrada(
+            "oportunidad_no_encontrada",
+            f"No existe ninguna oportunidad con id {data.oportunidad_id}.",
         )
-        # fetchone(): la única fila del resultado, o None si no hay ninguna.
-        fila = cursor.fetchone()
-        # Sin fila no existe la oportunidad: 404. Al lanzar dentro del
-        # "with", se hace rollback (y se suelta el bloqueo).
-        if fila is None:
-            raise OportunidadNoEncontrada(
-                "oportunidad_no_encontrada",
-                f"No existe ninguna oportunidad con id {data.oportunidad_id}.",
-            )
-        # Desempaquetado: cada variable recibe una columna del SELECT, en
-        # el mismo orden.
-        oportunidad_id, estado, presupuesto_id, requiere_aprobacion, ahora = fila
+    # Una variable por columna del SELECT.
+    oportunidad_id, estado, presupuesto_id, requiere_aprobacion, ahora = fila
 
-        # --------------------------------------------------------------
-        # 2. y 3. ¿Hay presupuesto, y tiene Gate? (409)
-        # --------------------------------------------------------------
-        # sin_gate va ANTES que la decisión previa: una oportunidad sin Gate
-        # nunca puede tener decisión, y el motivo útil es sin_gate (1.9).
-        # presupuesto_id None: el LEFT JOIN no encontró presupuesto.
-        if presupuesto_id is None:
-            raise EstadoNoPermiteResultado(
-                "sin_presupuesto",
-                "La oportunidad todavía no tiene presupuesto calculado, así que no hay ningún Gate que decidir.",
-            )
-        # requiere_aprobacion False: el presupuesto no activó el Gate.
-        if not requiere_aprobacion:
-            raise EstadoNoPermiteResultado(
-                "sin_gate",
-                "El presupuesto de esta oportunidad no requiere aprobación (no tiene Gate): "
-                "no hay ninguna decisión que registrar.",
-            )
+    # ------------------------------------------------------------------
+    # 2. Presupuesto y, solo en el alias, Gate (409)
+    # ------------------------------------------------------------------
+    # Sin presupuesto no hay ninguna llamada que registrar.
+    if presupuesto_id is None:
+        raise EstadoNoPermiteResultado(
+            "sin_presupuesto", MENSAJE_ALIAS_SIN_PRESUPUESTO if solo_gate else MENSAJE_SIN_PRESUPUESTO)
+    # El alias es solo para casos con Gate, y lo dice antes que lo demás (su
+    # orden de siempre). La ruta nueva no tiene sin_gate: un seguimiento no
+    # tiene Gate.
+    if solo_gate and not requiere_aprobacion:
+        raise EstadoNoPermiteResultado("sin_gate", MENSAJE_ALIAS_SIN_GATE)
 
-        # --------------------------------------------------------------
-        # 4. ¿Ya hay una decisión registrada?
-        # --------------------------------------------------------------
-        # Como mucho una (UNIQUE en decisiones_gate.oportunidad_id). El LEFT
-        # JOIN con visitas trae la fecha de la visita acordada, para saber
-        # si la petición es una repetición exacta; en un descarte no hay
-        # visita y v.fecha_propuesta llega como None.
-        #
-        # Va ANTES que el estado (paso 5): tras la primera decisión el
-        # estado ya no es pendiente_aprobacion, y un reintento legítimo de
-        # n8n daría 409 estado_no_permitido en vez de 200 (plan, 1.9).
-        cursor.execute(
-            """
-            SELECT d.id, d.decision, d.motivo, d.visita_id, v.fecha_propuesta
-            FROM decisiones_gate d
-            LEFT JOIN visitas v ON v.id = d.visita_id
-            WHERE d.oportunidad_id = %s;
-            """,
-            (oportunidad_id,),
-        )
-        # La decisión previa, o None si todavía no hay ninguna.
-        previa = cursor.fetchone()
+    # ------------------------------------------------------------------
+    # 3. ¿Ya hay un resultado registrado? (200 o 409)
+    # ------------------------------------------------------------------
+    # Va ANTES que el tipo: tras el 201 el estado ya cambió, y un reintento
+    # legítimo de n8n daría 409 en vez de 200.
+    previa = _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gate)
+    # Repetición exacta: se devuelve lo que ya estaba, sin escribir nada.
+    if previa is not None:
+        return previa, None
 
-        # Solo hay algo que comprobar si ya existe una decisión.
-        if previa is not None:
-            # Desempaquetado: una variable por columna del SELECT.
-            previa_id, previa_decision, previa_motivo, previa_visita_id, previa_fecha = previa
-
-            # ¿Es la MISMA decisión? (plan, 1.6)
-            #   visita_acordada: misma decisión y misma fecha y hora. La
-            #     fecha llega de Postgres en UTC; comparar dos datetime con
-            #     zona compara el instante real, así que coincide con
-            #     inicio aunque este esté en hora de Madrid.
-            #   descartar: misma decisión y mismo motivo (P3).
-            if previa_decision == decision_texto:
-                # Misma decisión: falta comparar la fecha (visita) o el
-                # motivo (descarte). Cada comparación da True o False.
-                if data.resultado == DecisionGate.VISITA_ACORDADA:
-                    es_repeticion = previa_fecha == inicio
-                else:
-                    es_repeticion = previa_motivo == motivo_texto
-            # Decisión distinta: nunca es una repetición.
-            else:
-                es_repeticion = False
-
-            if es_repeticion:
-                # Repetición: se devuelve lo que ya estaba, SIN escribir
-                # nada (tampoco fecha_ultimo_contacto). El informe de esta
-                # petición se ignora y se conserva el original.
-                #
-                # "return" dentro de un "with": Python sale del bloque con
-                # normalidad, así que get_transactional_connection hace
-                # commit (de nada) y devuelve la conexión al pool.
-                return ResultadoLlamadaResponse(
-                    llamada_id=previa_id,
-                    oportunidad_id=oportunidad_id,
-                    resultado=previa_decision,
-                    motivo=previa_motivo,
-                    estado_oportunidad=estado,
-                    visita_id=previa_visita_id,
-                    # Expresión condicional "A if condición else B": se
-                    # pasa a hora de Madrid solo si hay fecha.
-                    fecha_visita=previa_fecha.astimezone(ZONA_MADRID) if previa_fecha is not None else None,
-                    creado=False,
-                )
-
-            # Otra decisión, otra fecha u otro motivo: la decisión es
-            # definitiva (R2), se registra una sola vez por oportunidad.
-            raise EstadoNoPermiteResultado(
-                "decision_ya_registrada",
-                f"Esta oportunidad ya tiene registrada otra decisión ({previa_decision}, id {previa_id}). "
-                "La decisión es definitiva: si fue un error, hay que corregirla a mano en la base de datos.",
-            )
-
-        # --------------------------------------------------------------
-        # 5. ¿El estado permite decidir? (409)
-        # --------------------------------------------------------------
-        # Solo desde 'pendiente_aprobacion'; cualquier otro estado, 409.
+    # ------------------------------------------------------------------
+    # 4. El tipo de llamada (409 o 503)
+    # ------------------------------------------------------------------
+    # El alias conserva su regla de siempre: solo desde 'pendiente_aprobacion'
+    # (sin mirar visitas: así un caso con Gate con una visita hecha a mano
+    # sigue dando el 409 visita_activa_existente de siempre).
+    if solo_gate:
+        # Otro estado: 409 estado_no_permitido, con el mensaje de siempre.
         if estado != ESTADO_PENDIENTE_APROBACION:
             raise EstadoNoPermiteResultado(
                 "estado_no_permitido",
                 f"La oportunidad está en estado '{estado}', y solo se puede registrar una decisión "
                 f"del Gate en '{ESTADO_PENDIENTE_APROBACION}'.",
             )
+        tipo, solicitada_id, fecha_pedida = TipoLlamada.GATE, None, None
+    else:
+        # La deducción compartida con la ficha.
+        deducido = deducir_tipo_llamada(cursor, oportunidad_id, estado, ahora)
+        # La regla de 48 h está rota: 503, sin log (como create-followup-task).
+        if deducido.motivo_no == "configuracion_incompleta":
+            raise ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIG_SEGUIMIENTO, deducido.faltan)
+        # No corresponde ninguna llamada: 409 con su motivo.
+        if deducido.tipo is None:
+            raise EstadoNoPermiteResultado(
+                deducido.motivo_no,
+                MENSAJES_CRITERIO.get(deducido.motivo_no,
+                                      f"La oportunidad está en estado '{estado}': no tiene ninguna llamada pendiente."),
+            )
+        tipo, solicitada_id, fecha_pedida = deducido.tipo, deducido.visita_id, deducido.fecha_pedida
 
-        # --------------------------------------------------------------
-        # 6. Preparar la decisión
-        # --------------------------------------------------------------
-        # Rama de la visita acordada (la del descarte es el "else" de abajo).
-        if data.resultado == DecisionGate.VISITA_ACORDADA:
-            # Reglas de visita, las MISMAS de /visits (503 si faltan).
-            reglas, problemas = leer_reglas_visita(cursor)
-            # Una lista vacía cuenta como False: solo entra si hay problemas.
-            if problemas:
-                # Rastro para administración, firmado con el origen
-                # "gate_decisions", y excepción DIFERIDA (ver arriba).
-                registrar_configuracion_incompleta(cursor, oportunidad_id, problemas, ORIGEN_LOG)
-                rechazo_diferido = ConfiguracionIncompleta(
-                    "configuracion_incompleta",
-                    "No se puede registrar la visita por un problema de configuración de las visitas "
-                    "(reglas_negocio). Revisa las claves indicadas en 'faltan'.",
-                    problemas,
-                )
-            else:
-                # Reglas de la fecha: futura, de lunes a viernes y dentro
-                # de una franja. Si falla, validar_fecha lanza FechaNoValida
-                # (422), y el "with" hace rollback de todo.
-                validar_fecha(inicio, ahora, reglas)
+    # ------------------------------------------------------------------
+    # 5. ¿El resultado es de ESE tipo? (409)
+    # ------------------------------------------------------------------
+    # Un formulario desfasado (por ejemplo, el cliente pidió visita entre la
+    # lista y la llamada) da un 409 que dice el tipo actual.
+    if data.resultado not in resultados_de(tipo):
+        raise EstadoNoPermiteResultado(
+            "resultado_no_admitido",
+            f"La llamada de esta oportunidad es de tipo '{tipo.value}' y admite "
+            f"{', '.join(r.value for r in resultados_de(tipo))}, no '{resultado_texto}'. "
+            "Vuelve a abrir la ficha: su situación ha cambiado.",
+        )
 
-                # P1: ¿ya hay una visita activa? No debería (/visits
-                # rechaza los casos con Gate), pero sin esta comprobación el
-                # índice único parcial de visitas lo rechazaría con un 500.
-                # SQL: busca una visita de esta oportunidad cuyo estado sea
-                # uno de los activos ('solicitada' o 'confirmada').
-                cursor.execute(
-                    "SELECT id FROM visitas WHERE oportunidad_id = %s AND estado = ANY(%s);",
-                    (oportunidad_id, list(ESTADOS_VISITA_ACTIVA)),
+    # ------------------------------------------------------------------
+    # 6. Lo que necesita una visita (503, 409, 422)
+    # ------------------------------------------------------------------
+    if data.resultado in CON_FECHA:
+        # Reglas de visita, las MISMAS de /visits (503 con log si faltan).
+        reglas, problemas = leer_reglas_visita(cursor)
+        # Con problemas: rastro para administración y 503 DIFERIDO (el log
+        # se confirma con el commit de quien llama).
+        if problemas:
+            registrar_configuracion_incompleta(cursor, oportunidad_id, problemas,
+                                               ORIGEN_LOG if solo_gate else ORIGEN_LOG_NUEVO)
+            return None, ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIG_VISITAS, problemas)
+        # confirmar_hora: tiene que ser la hora que administración leyó al
+        # cliente (C11): si el cliente la cambió desde el chat, 409.
+        if data.resultado == ResultadoLlamada.CONFIRMAR_HORA and inicio != fecha_pedida:
+            raise EstadoNoPermiteResultado(
+                "visita_cambiada",
+                f"La visita pedida es el {fecha_pedida.astimezone(ZONA_MADRID):%d/%m/%Y a las %H:%M}, no la hora "
+                "enviada: el cliente puede haberla cambiado. Vuelve a abrir la ficha.",
+            )
+        # otra_hora: tiene que ser OTRA (si es la misma, era confirmar_hora).
+        if data.resultado == ResultadoLlamada.OTRA_HORA and inicio == fecha_pedida:
+            raise FechaNoValida(
+                "misma_hora_pedida",
+                "La hora enviada es la misma que pidió el cliente: el resultado es confirmar_hora, no otra_hora.",
+            )
+        # Las reglas de la fecha (futura, laborable, dentro de una franja),
+        # también para la hora pedida (C12: puede haber pasado). 422.
+        validar_fecha(inicio, ahora, reglas)
+        # visita_acordada: ninguna visita activa (P1 de /gate-decisions).
+        if data.resultado == ResultadoLlamada.VISITA_ACORDADA:
+            # SQL: una visita activa ('solicitada' o 'confirmada') de la oportunidad.
+            cursor.execute(
+                "SELECT id FROM visitas WHERE oportunidad_id = %s AND estado = ANY(%s);",
+                (oportunidad_id, list(ESTADOS_VISITA_ACTIVA)),
+            )
+            # Si la hay, 409 (sin esto, el índice parcial daría un 500).
+            activa = cursor.fetchone()
+            if activa is not None:
+                raise EstadoNoPermiteResultado(
+                    "visita_activa_existente",
+                    f"La oportunidad ya tiene una visita activa (id {activa[0]}); no se puede acordar otra.",
                 )
-                # La visita activa, o None si no hay; si la hay, 409.
-                activa = cursor.fetchone()
-                if activa is not None:
-                    raise EstadoNoPermiteResultado(
-                        "visita_activa_existente",
-                        f"La oportunidad ya tiene una visita activa (id {activa[0]}); no se puede acordar otra.",
-                    )
 
-                # La visita nace 'confirmada': la ha confirmado
-                # administración por teléfono. psycopg2 envía inicio con su
-                # desfase (+02:00 o +01:00) y Postgres lo guarda como un
-                # instante (TIMESTAMPTZ). RETURNING devuelve el id asignado
-                # y la fecha tal como quedó guardada.
-                cursor.execute(
-                    """
-                    INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente)
-                    VALUES (%s, %s, %s, %s)
-                    RETURNING id, fecha_propuesta;
-                    """,
-                    (oportunidad_id, inicio, VISITA_CONFIRMADA, TEXTO_VISITA_ACORDADA),
-                )
-                # Las dos columnas del RETURNING, desempaquetadas.
-                visita_id, fecha_guardada = cursor.fetchone()
-                # Postgres la devuelve en UTC; astimezone la expresa en hora
-                # de Madrid (mismo instante) para la respuesta y el log.
-                fecha_madrid = fecha_guardada.astimezone(ZONA_MADRID)
-                # Estado al que pasará la oportunidad en el paso 7.
-                nuevo_estado = ESTADO_OPORTUNIDAD_CON_VISITA
+    # ------------------------------------------------------------------
+    # 7. Escritura
+    # ------------------------------------------------------------------
+    return _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id, fecha_pedida), None
+
+
+def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gate):
+    """
+    Si ya hay un resultado: la respuesta de la repetición (si es la MISMA
+    petición) o un 409 (si es otra). Si no hay ninguno, None.
+    """
+    # SQL: el resultado previo (como mucho uno: UNIQUE (oportunidad_id)) y la
+    # fecha de su visita confirmada (LEFT JOIN: puede no tener).
+    cursor.execute(
+        """
+        SELECT d.id, d.tipo_llamada, d.decision, d.motivo, d.visita_id, v.fecha_propuesta, d.visita_cancelada_id
+        FROM decisiones_gate d
+        LEFT JOIN visitas v ON v.id = d.visita_id
+        WHERE d.oportunidad_id = %s;
+        """,
+        (oportunidad_id,),
+    )
+    # La fila, o None si todavía no hay ninguna.
+    previa = cursor.fetchone()
+    if previa is None:
+        return None
+    # Una variable por columna.
+    previa_id, previa_tipo, previa_resultado, previa_motivo, previa_visita, previa_fecha, previa_cancelada = previa
+    # ¿La MISMA petición? Mismo resultado y, con visita, la misma fecha y
+    # hora (dos datetime con zona se comparan por el instante); sin visita,
+    # el mismo motivo.
+    if previa_resultado == data.resultado.value:
+        # Con visita: la misma fecha y hora.
+        if data.resultado in CON_FECHA:
+            es_repeticion = previa_fecha == inicio
+        # Sin visita: el mismo motivo.
         else:
-            # Descartar: no hay visita.
-            visita_id = None
-            fecha_madrid = None
-            nuevo_estado = ESTADO_PERDIDA
+            es_repeticion = previa_motivo == (data.motivo.value if data.motivo is not None else None)
+    # Otro resultado: nunca es repetición.
+    else:
+        es_repeticion = False
+    # Repetición: lo que ya estaba, sin escribir nada (el informe nuevo se
+    # ignora y se conserva el original).
+    if es_repeticion:
+        return ResultadoLlamadaResponse(
+            llamada_id=previa_id,
+            oportunidad_id=oportunidad_id,
+            tipo_llamada=previa_tipo,
+            resultado=previa_resultado,
+            motivo=previa_motivo,
+            estado_oportunidad=estado,
+            visita_id=previa_visita,
+            # En hora de Madrid, solo si hay fecha.
+            fecha_visita=previa_fecha.astimezone(ZONA_MADRID) if previa_fecha is not None else None,
+            visita_cancelada_id=previa_cancelada,
+            creado=False,
+        )
+    # Otro resultado: definitivo (R2). El alias, con su código y su mensaje.
+    if solo_gate:
+        raise EstadoNoPermiteResultado(
+            "decision_ya_registrada",
+            f"Esta oportunidad ya tiene registrada otra decisión ({previa_resultado}, id {previa_id}). "
+            "La decisión es definitiva: si fue un error, hay que corregirla a mano en la base de datos.",
+        )
+    raise EstadoNoPermiteResultado(
+        "resultado_ya_registrado",
+        f"Esta oportunidad ya tiene registrado otro resultado ({previa_resultado}, id {previa_id}). "
+        "El resultado es definitivo: si fue un error, hay que corregirlo a mano en la base de datos.",
+    )
 
-        # --------------------------------------------------------------
-        # 7. Escritura (solo si no hay un 503 pendiente)
-        # --------------------------------------------------------------
-        # Si hay un 503 pendiente no se escribe nada más; solo queda el log
-        # de configuración incompleta, que se confirma al salir del "with".
-        if rechazo_diferido is None:
-            # La decisión. visita_id es None al descartar; al acordar, la
-            # clave foránea doble (visita_id, oportunidad_id) garantiza que
-            # la visita es de ESTA oportunidad. data.informe ya llega
-            # recortado del esquema, como exige el CHECK.
-            cursor.execute(
-                """
-                INSERT INTO decisiones_gate (oportunidad_id, visita_id, decision, motivo, informe)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id;
-                """,
-                (oportunidad_id, visita_id, decision_texto, motivo_texto, data.informe),
-            )
-            # fetchone() devuelve una tupla de una columna, (id,); [0] saca
-            # el valor.
-            decision_id = cursor.fetchone()[0]
 
-            # La oportunidad cambia de estado. fecha_ultimo_contacto = now()
-            # en las dos decisiones (P5): administración acaba de hablar
-            # con el cliente. Al salir de 'pendiente_aprobacion', el
-            # recordatorio del Gate de WF3 deja de verla solo (P8).
-            #
-            # presupuestos NO se toca: requiere_aprobacion sigue true (el
-            # Gate es permanente) y aprobado_por sigue NULL (N0 no
-            # identifica al operador).
-            cursor.execute(
-                """
-                UPDATE oportunidades
-                SET estado = %s, fecha_ultimo_contacto = now(), updated_at = now()
-                WHERE id = %s;
-                """,
-                (nuevo_estado, oportunidad_id),
-            )
+def _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id, fecha_pedida):
+    """
+    Las escrituras de un resultado nuevo (plan 2.4), con segunda barrera en
+    cada UPDATE (rowcount = 1). Devuelve la respuesta (creado=True).
+    """
+    # Lo que se escribe, según el resultado (todo empieza vacío).
+    visita_id, fecha_visita, cancelada_id = None, None, None
+    r = data.resultado
 
-            # Log. El informe NO se copia (P9): vive en decisiones_gate,
-            # fuente única, y el log guarda decision_id para enlazarlo. La
-            # fecha va como texto ISO porque JSON no tiene tipo fecha.
-            detalle = {
-                "decision_id": decision_id,
-                "decision": decision_texto,
-                "motivo": motivo_texto,
-                "visita_id": visita_id,
-                "fecha_propuesta": fecha_madrid.isoformat() if fecha_madrid is not None else None,
-            }
-            # SQL: inserta UNA fila en logs, asociada a la oportunidad, con
-            # la acción "gate_decision_registrada" y el detalle como JSONB.
-            cursor.execute(
-                "INSERT INTO logs (entity_type, entity_id, accion, detalle) VALUES (%s, %s, %s, %s);",
-                (LOG_ENTITY_TYPE_OPORTUNIDAD, oportunidad_id, ACCION_DECISION_REGISTRADA, Json(detalle)),
-            )
+    # visita_acordada: una visita nueva, ya confirmada, con el texto fijo de
+    # su tipo; la oportunidad pasa a 'visita_agendada'.
+    if r == ResultadoLlamada.VISITA_ACORDADA:
+        texto = TEXTO_VISITA_ACORDADA if tipo == TipoLlamada.GATE else TEXTO_VISITA_SEGUIMIENTO
+        visita_id, fecha_visita = _insertar_visita_confirmada(cursor, oportunidad_id, inicio, texto)
+        nuevo_estado = ESTADO_OPORTUNIDAD_CON_VISITA
+    # confirmar_hora: la visita pedida pasa a 'confirmada'.
+    elif r == ResultadoLlamada.CONFIRMAR_HORA:
+        _cambiar_solicitada(cursor, solicitada_id, VISITA_CONFIRMADA)
+        visita_id, fecha_visita = solicitada_id, fecha_pedida.astimezone(ZONA_MADRID)
+        nuevo_estado = ESTADO_OPORTUNIDAD_CON_VISITA
+    # otra_hora: la pedida se cancela PRIMERO (índice parcial de una visita
+    # activa) y después se crea la confirmada.
+    elif r == ResultadoLlamada.OTRA_HORA:
+        _cambiar_solicitada(cursor, solicitada_id, VISITA_CANCELADA)
+        # La nueva, confirmada a la hora acordada.
+        visita_id, fecha_visita = _insertar_visita_confirmada(cursor, oportunidad_id, inicio, TEXTO_OTRA_HORA)
+        # Y la pedida, como cancelada en la fila del resultado.
+        cancelada_id = solicitada_id
+        nuevo_estado = ESTADO_OPORTUNIDAD_CON_VISITA
+    # cliente_cancela: la pedida se cancela y la oportunidad se pierde (D25.11).
+    elif r == ResultadoLlamada.CLIENTE_CANCELA:
+        _cambiar_solicitada(cursor, solicitada_id, VISITA_CANCELADA)
+        cancelada_id = solicitada_id
+        nuevo_estado = ESTADO_PERDIDA
+    # descartar: sin visita; la oportunidad se pierde.
+    else:
+        nuevo_estado = ESTADO_PERDIDA
 
-            # La respuesta de una decisión NUEVA (creado=True -> 201). Se
-            # construye aquí y se devuelve fuera del "with", tras el commit.
-            respuesta = ResultadoLlamadaResponse(
-                llamada_id=decision_id,
-                oportunidad_id=oportunidad_id,
-                resultado=data.resultado,
-                motivo=data.motivo,
-                estado_oportunidad=nuevo_estado,
-                visita_id=visita_id,
-                fecha_visita=fecha_madrid,
-                creado=True,
-            )
+    # SQL: la fila del resultado, con su tipo y sus dos visitas (las claves
+    # foráneas dobles garantizan que son de ESTA oportunidad). El informe ya
+    # llega recortado del esquema, como exige el CHECK.
+    cursor.execute(
+        """
+        INSERT INTO decisiones_gate
+            (oportunidad_id, visita_id, visita_cancelada_id, tipo_llamada, decision, motivo, informe)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id;
+        """,
+        (oportunidad_id, visita_id, cancelada_id, tipo.value, r.value,
+         data.motivo.value if data.motivo is not None else None, data.informe),
+    )
+    # fetchone() da (id,); [0] saca el valor.
+    llamada_id = cursor.fetchone()[0]
 
-    # Fuera del "with": la transacción ya se ha confirmado (con el log del
-    # 503 dentro, si lo hubo).
-    # Si quedó un 503 pendiente, se lanza ahora, con el log ya guardado.
-    if rechazo_diferido is not None:
-        raise rechazo_diferido
-    # Si no, la decisión se escribió y confirmó: se devuelve la respuesta.
-    return respuesta
+    # SQL: la oportunidad cambia de estado; fecha_ultimo_contacto = now() en
+    # todo resultado (pre-decisión 7). Segunda barrera: solo si SIGUE en el
+    # estado leído (con el FOR UPDATE tiene que ser siempre así).
+    cursor.execute(
+        """
+        UPDATE oportunidades
+        SET estado = %s, fecha_ultimo_contacto = now(), updated_at = now()
+        WHERE id = %s AND estado = %s;
+        """,
+        (nuevo_estado, oportunidad_id, estado),
+    )
+    # Si no cambió exactamente una fila, algo se saltó el bloqueo: 500 y
+    # rollback, en vez de dejar un resultado de algo que no ocurrió.
+    if cursor.rowcount != 1:
+        raise RuntimeError(f"Segunda barrera: el UPDATE de la oportunidad {oportunidad_id} cambió "
+                           f"{cursor.rowcount} filas (se esperaba 1).")
+
+    # El log (L-b). El informe NO se copia (P9 de /gate-decisions). La fecha
+    # va como texto ISO (JSON no tiene tipo fecha).
+    fecha_iso = fecha_visita.isoformat() if fecha_visita is not None else None
+    if tipo == TipoLlamada.GATE:
+        # Gate: su acción de siempre y sus claves de siempre, más dos nuevas.
+        accion = ACCION_DECISION_REGISTRADA
+        detalle = {"decision_id": llamada_id, "decision": r.value, "motivo": data.motivo.value if data.motivo else None,
+                   "visita_id": visita_id, "fecha_propuesta": fecha_iso,
+                   "tipo_llamada": tipo.value, "estado": nuevo_estado}
+    else:
+        # Seguimiento y confirmación: la acción nueva, con 'estado' (la ficha).
+        accion = ACCION_LLAMADA_REGISTRADA
+        detalle = {"llamada_id": llamada_id, "tipo_llamada": tipo.value, "resultado": r.value,
+                   "motivo": data.motivo.value if data.motivo else None, "visita_id": visita_id,
+                   "visita_cancelada_id": cancelada_id, "fecha_visita": fecha_iso, "estado": nuevo_estado}
+    # SQL: UNA fila en logs, asociada a la oportunidad, con el detalle JSONB.
+    cursor.execute(
+        "INSERT INTO logs (entity_type, entity_id, accion, detalle) VALUES (%s, %s, %s, %s);",
+        (LOG_ENTITY_TYPE_OPORTUNIDAD, oportunidad_id, accion, Json(detalle)),
+    )
+
+    # La respuesta de un resultado NUEVO (creado=True -> 201).
+    return ResultadoLlamadaResponse(
+        llamada_id=llamada_id,
+        oportunidad_id=oportunidad_id,
+        tipo_llamada=tipo,
+        resultado=r,
+        motivo=data.motivo,
+        estado_oportunidad=nuevo_estado,
+        visita_id=visita_id,
+        fecha_visita=fecha_visita,
+        visita_cancelada_id=cancelada_id,
+        creado=True,
+    )
+
+
+def _insertar_visita_confirmada(cursor, oportunidad_id, inicio, texto):
+    """Crea una visita 'confirmada' en ese instante. Devuelve (id, fecha en Madrid)."""
+    # SQL: la visita nueva; psycopg2 envía el instante con su desfase y
+    # RETURNING devuelve el id y la fecha guardada.
+    cursor.execute(
+        """
+        INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, fecha_propuesta;
+        """,
+        (oportunidad_id, inicio, VISITA_CONFIRMADA, texto),
+    )
+    # El id y la fecha, que Postgres devuelve en UTC: en hora de Madrid.
+    visita_id, guardada = cursor.fetchone()
+    return visita_id, guardada.astimezone(ZONA_MADRID)
+
+
+def _cambiar_solicitada(cursor, visita_id, estado_nuevo):
+    """Pasa la visita 'solicitada' a estado_nuevo, con segunda barrera."""
+    # SQL: solo si SIGUE en 'solicitada' (con el bloqueo de la oportunidad,
+    # siempre; si no, algo se lo ha saltado).
+    cursor.execute(
+        "UPDATE visitas SET estado = %s, updated_at = now() WHERE id = %s AND estado = %s;",
+        (estado_nuevo, visita_id, VISITA_SOLICITADA),
+    )
+    # Exactamente una fila, o se para todo (500 y rollback).
+    if cursor.rowcount != 1:
+        raise RuntimeError(f"Segunda barrera: el UPDATE de la visita {visita_id} cambió "
+                           f"{cursor.rowcount} filas (se esperaba 1).")
 
 
 # ======================================================================
@@ -481,31 +560,31 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
     esos nombres hasta que se actualice (D26.6, P2 del plan).
 
     No tiene lógica propia: traduce la entrada antigua a la nueva, llama a
-    registrar_resultado (la MISMA función que la ruta nueva) y traduce la
-    respuesta. Las excepciones salen tal cual, con los mismos motivos.
+    registrar_resultado (la MISMA función que la ruta nueva) con
+    solo_gate=True y traduce la respuesta. Las excepciones salen tal cual,
+    con los motivos y mensajes de siempre.
     """
     # La entrada nueva, campo a campo. decision -> resultado. La fecha y la
     # hora ya validadas se vuelven a escribir como TEXTO ("2026-10-23" y
-    # "08:30"), porque los validadores compartidos solo aceptan texto; así
-    # la segunda validación es exactamente la primera. "A if B else None":
-    # solo si vienen.
+    # "08:30"), porque los validadores compartidos solo aceptan texto. Los
+    # Enum antiguos se pasan por su valor (los nuevos son un superconjunto).
     nuevo = ResultadoLlamadaCreate(
         oportunidad_id=data.oportunidad_id,
-        resultado=data.decision,
+        resultado=data.decision.value,
         fecha=data.fecha.isoformat() if data.fecha is not None else None,
         hora=data.hora.strftime("%H:%M") if data.hora is not None else None,
-        motivo=data.motivo,
+        motivo=data.motivo.value if data.motivo is not None else None,
         informe=data.informe,
     )
-    # La operación real, la misma de la ruta nueva.
-    resultado = registrar_resultado(nuevo)
-    # La respuesta antigua, con sus nombres: llamada_id -> decision_id,
-    # resultado -> decision y fecha_visita -> fecha_propuesta.
+    # La operación real, la misma de la ruta nueva, solo para el Gate.
+    resultado = registrar_resultado(nuevo, solo_gate=True)
+    # La respuesta antigua, con sus nombres (llamada_id -> decision_id,
+    # resultado -> decision, fecha_visita -> fecha_propuesta) y por valor.
     return GateDecisionResponse(
         decision_id=resultado.llamada_id,
         oportunidad_id=resultado.oportunidad_id,
-        decision=resultado.resultado,
-        motivo=resultado.motivo,
+        decision=resultado.resultado.value,
+        motivo=resultado.motivo.value if resultado.motivo is not None else None,
         estado_oportunidad=resultado.estado_oportunidad,
         visita_id=resultado.visita_id,
         fecha_propuesta=resultado.fecha_visita,

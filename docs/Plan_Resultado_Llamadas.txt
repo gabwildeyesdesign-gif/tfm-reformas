@@ -1219,3 +1219,29 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
           check_gate_decisions_http 121/121, check_aviso_gate_http 75/75,
           check_ficha_oportunidad_http 69/69 (18:22:20-18:24:50).
           Ninguna Kernel-Power 506/507 en 18:13-18:16, 18:17-18:21 ni 18:20-18:26.
+  (Nota 2026-10-11, Bloque B2, ampliación; pendiente de revisión del tutor.)
+    Hallazgo C17: GET /gate-avisos (WF2 y el formulario, publicados) validaba
+    decision.motivo con MotivoDescarte. Un Gate descartado con 'sin_decision'
+    por la ruta nueva (D29.3 lo permite) le habría dado 500. Aplicado lo
+    mínimo (opción a): DecisionAviso.motivo pasa a MotivoResultado; su
+    contrato admite UN valor más, ningún campo nuevo. Alternativas
+    descartadas: prohibir 'sin_decision' en el Gate (contradice D29.3) o
+    dejar un 500 conocido. Pendiente de validar por el tutor; nota en la
+    Adenda 5.6 en el Bloque D.
+    Hallazgo C18: check_gate_decisions_http crea a mano una visita
+    'solicitada' en un caso con Gate (caso visita_activa_existente). Con la
+    deducción de 2.2 sería "confirmación de visita"; por eso el alias
+    (solo_gate=True) conserva su regla de siempre (solo
+    'pendiente_aprobacion', sin deducir), y da su 409 de siempre.
+    Limitación nueva: por la ruta nueva, ese mismo caso (solo posible a mano)
+    se trata como confirmación de visita.
+    Resultados (21:21-21:27, sin Kernel-Power 506/507): prueba_minima_b2
+    32/32 (primera pasada 29/31 por un error del script: otra_hora a las
+    16:00, fuera de la franja de tarde 17:00-20:00; el 422 fuera_de_franja
+    era correcto y queda como comprobación); check_gate_decisions_http
+    121/121 SIN tocar; check_gate_decisions_service 14/14;
+    check_aviso_gate_service 18/18 y _http 75/75;
+    check_ficha_oportunidad_service 40/40; check_ficha_oportunidad_http 68/69:
+    falla solo "claves exactas" por las dos claves nuevas
+    (llamada_registrable y fecha_visita_cancelada), que el Bloque C añade a
+    sus conjuntos de claves esperadas.

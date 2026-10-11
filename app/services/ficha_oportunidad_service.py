@@ -33,9 +33,9 @@ from app.schemas.ficha_oportunidad import (
     EventoHistorial,
     FichaOportunidadResponse,
     LlamadaFicha,
+    LlamadaRegistrable,
     OtraOportunidad,
     PresupuestoFicha,
-    TipoLlamada,
     VisitaFicha,
 )
 
@@ -64,7 +64,10 @@ from app.services.followup_service import ACCION_SEGUIMIENTO_ABIERTO
 # (Nota 2026-10-11: gate_decisions_service.py se renombró a
 # resultados_llamada_service.py en el Bloque B1 de
 # docs/Plan_Resultado_Llamadas.txt; la acción no cambia.)
-from app.services.resultados_llamada_service import ACCION_DECISION_REGISTRADA
+from app.services.resultados_llamada_service import ACCION_DECISION_REGISTRADA, ACCION_LLAMADA_REGISTRADA
+# La deducción del tipo de llamada, la MISMA que usa POST
+# /resultados-llamada (P9), y los resultados de cada tipo.
+from app.services.tipo_llamada import deducir_tipo_llamada, resultados_de
 from app.services.visits_service import ACCION_SOLICITADA
 
 # El modo de la transacción, el MISMO texto que usa GET /llamadas-del-dia
@@ -98,6 +101,8 @@ ACCIONES_HISTORIAL = (
     ACCION_SOLICITADA,
     ACCION_DECISION_REGISTRADA,
     ACCION_SEGUIMIENTO_ABIERTO,
+    # Desde B2: seguimiento y confirmación de visita (L-b).
+    ACCION_LLAMADA_REGISTRADA,
 )
 
 # Acciones que dejan SIEMPRE el mismo estado.
@@ -117,6 +122,13 @@ ESTADOS_TRAS_CALCULO = {
 ESTADO_POR_DECISION = {
     DecisionGate.VISITA_ACORDADA.value: EstadoOportunidad.VISITA_AGENDADA,
     DecisionGate.DESCARTAR.value: EstadoOportunidad.PERDIDA,
+}
+
+# llamada_registrada (B2): el estado se lee de detalle ->> 'estado', y solo
+# vale uno de estos dos (los que escribe resultados_llamada_service).
+ESTADOS_TRAS_LLAMADA = {
+    EstadoOportunidad.VISITA_AGENDADA.value: EstadoOportunidad.VISITA_AGENDADA,
+    EstadoOportunidad.PERDIDA.value: EstadoOportunidad.PERDIDA,
 }
 
 
@@ -143,6 +155,9 @@ def estado_tras(accion: str, estado_detalle: str | None, decision_detalle: str |
     # gate_decision_registrada: depende de la decisión de su detalle.
     if accion == ACCION_DECISION_REGISTRADA:
         return ESTADO_POR_DECISION.get(decision_detalle)
+    # llamada_registrada: lo dice su detalle ('estado'), como el cálculo.
+    if accion == ACCION_LLAMADA_REGISTRADA:
+        return ESTADOS_TRAS_LLAMADA.get(estado_detalle)
     # Las de estado fijo; cualquier otra acción, None.
     return ESTADO_FIJO.get(accion)
 
@@ -222,13 +237,15 @@ SQL_VISITAS = """
     ORDER BY v.created_at, v.id;
 """
 
-# Consulta 3, las llamadas registradas: hoy, decisiones_gate (como mucho
-# una). LEFT JOIN con visitas: un descarte no tiene visita. No lee d.id ni
-# d.visita_id.
+# Consulta 3, las llamadas registradas: decisiones_gate (como mucho una).
+# LEFT JOIN con visitas dos veces: v, la visita confirmada (visita_id), y
+# vc, la cancelada (visita_cancelada_id, paso12); las dos pueden faltar. No
+# lee d.id ni los ids de visita (desde B2 lee también d.tipo_llamada).
 SQL_LLAMADAS = """
-    SELECT d.decision, d.motivo, d.informe, d.created_at, v.fecha_propuesta
+    SELECT d.tipo_llamada, d.decision, d.motivo, d.informe, d.created_at, v.fecha_propuesta, vc.fecha_propuesta
     FROM decisiones_gate d
-    LEFT JOIN visitas v ON v.id = d.visita_id
+    LEFT JOIN visitas v  ON v.id = d.visita_id
+    LEFT JOIN visitas vc ON vc.id = d.visita_cancelada_id
     WHERE d.oportunidad_id = %(oportunidad_id)s
     ORDER BY d.created_at, d.id;
 """
@@ -307,18 +324,35 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
     # 3. Las llamadas registradas.
     # SQL: consulta 3 (SQL_LLAMADAS).
     cursor.execute(SQL_LLAMADAS, parametros)
-    # Hoy todas son del Gate (P4); el informe sale entero (D26.2).
+    # Cada una con su tipo (desde B2, de la columna); el informe sale entero
+    # (D26.2).
     llamadas = [
         LlamadaFicha(
-            tipo_llamada=TipoLlamada.GATE,
+            tipo_llamada=tipo,
             resultado=decision,
             motivo=motivo,
             fecha_registro=a_madrid(creada),
             fecha_visita=a_madrid(fecha_visita),
+            fecha_visita_cancelada=a_madrid(fecha_cancelada),
             informe=informe,
         )
-        for decision, motivo, informe, creada, fecha_visita in cursor.fetchall()
+        for tipo, decision, motivo, informe, creada, fecha_visita, fecha_cancelada in cursor.fetchall()
     ]
+
+    # 3b. La llamada que se puede registrar ahora (P9). Ninguna si ya hay un
+    # resultado (es definitivo) o si no hay presupuesto; si no, la MISMA
+    # deducción que POST /resultados-llamada, en esta misma foto.
+    llamada_registrable = None
+    if not llamadas and presupuesto_id is not None:
+        # SQL: el now() de esta transacción (el plazo del seguimiento).
+        cursor.execute("SELECT now();")
+        ahora = cursor.fetchone()[0]
+        # Solo lee (nada de FOR UPDATE ni escrituras): vale en READ ONLY.
+        deducido = deducir_tipo_llamada(cursor, oportunidad_id, caso["estado"], ahora)
+        # Con tipo: el tipo y sus resultados; sin tipo, se queda en null.
+        if deducido.tipo is not None:
+            llamada_registrable = LlamadaRegistrable(
+                tipo_llamada=deducido.tipo, resultados=list(resultados_de(deducido.tipo)))
 
     # 4. El historial. list(...): psycopg2 convierte la lista de Python en
     # un array de Postgres para el "= ANY".
@@ -360,6 +394,7 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
         ),
         visitas=visitas,
         llamadas=llamadas,
+        llamada_registrable=llamada_registrable,
         historial=historial,
         historial_cuadra=cuadra,
         otras_oportunidades_mismo_email=otras,

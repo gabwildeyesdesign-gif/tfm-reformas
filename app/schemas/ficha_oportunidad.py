@@ -36,19 +36,12 @@ from app.schemas.aviso_gate import ContactoAviso, PresupuestoAviso, ReformaAviso
 # visita (los de los CHECK), tipo de reforma y número máximo de fotos.
 from app.schemas.common import MAX_FOTOS_LEAD, EstadoOportunidad, EstadoVisita, TipoReforma
 
-# Resultado y motivo de una llamada del Gate (los de POST /gate-decisions).
-from app.schemas.gate_decisions import DecisionGate, MotivoDescarte
-
-
-class TipoLlamada(str, Enum):
-    """
-    De qué tipo fue una llamada ya registrada (P4 del plan). Hoy solo
-    existe "gate"; el bloque 4b añadirá VALORES (seguimiento, confirmación
-    de visita, D25.9), no campos.
-    """
-
-    # Llamada de administración a un cliente con Gate (decisiones_gate).
-    GATE = "gate"
+# Tipo, resultado y motivo de una llamada: los del contrato de POST
+# /resultados-llamada (Bloque B2 de docs/Plan_Resultado_Llamadas.txt). Antes
+# de B2, TipoLlamada se definía aquí con un solo valor ("gate") y el
+# resultado y el motivo eran los Enum del Gate; desde B2 se importan, sin
+# copiarlos, con los tres tipos, los cinco resultados y 'sin_decision'.
+from app.schemas.resultados_llamada import MotivoResultado, ResultadoLlamada, TipoLlamada
 
 
 class EventoEstado(str, Enum):
@@ -68,6 +61,9 @@ class EventoEstado(str, Enum):
     GATE_DECISION_REGISTRADA = "gate_decision_registrada"
     # POST /create-followup-task: 'seguimiento_pendiente'.
     SEGUIMIENTO_ABIERTO = "seguimiento_abierto"
+    # POST /resultados-llamada, seguimiento o confirmación de visita (B2,
+    # L-b): 'visita_agendada' o 'perdida', según detalle->>'estado'.
+    LLAMADA_REGISTRADA = "llamada_registrada"
 
 
 class PresupuestoFicha(PresupuestoAviso):
@@ -105,18 +101,41 @@ class LlamadaFicha(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Hoy siempre "gate" (P4).
+    # decisiones_gate.tipo_llamada (paso12): gate, seguimiento o
+    # confirmacion_visita.
     tipo_llamada: TipoLlamada
-    # decisiones_gate.decision: 'visita_acordada' o 'descartar'.
-    resultado: DecisionGate
-    # decisiones_gate.motivo: solo con descartar; null con visita_acordada.
-    motivo: MotivoDescarte | None
+    # decisiones_gate.decision: uno de los cinco resultados.
+    resultado: ResultadoLlamada
+    # decisiones_gate.motivo: con descartar y cliente_cancela; si no, null.
+    motivo: MotivoResultado | None
     # decisiones_gate.created_at, en hora de Madrid.
     fecha_registro: datetime
-    # Inicio de la visita acordada, en hora de Madrid; null si se descartó.
+    # Inicio de la visita que quedó CONFIRMADA, en hora de Madrid; null en
+    # descartar y cliente_cancela.
     fecha_visita: datetime | None
+    # Inicio de la visita pedida que se CANCELÓ (otra_hora y cliente_cancela;
+    # visita_cancelada_id de paso12), en hora de Madrid; null en los demás.
+    # Se da la fecha y no el id: la ficha no devuelve ids de visita.
+    fecha_visita_cancelada: datetime | None
     # decisiones_gate.informe, entero.
     informe: str
+
+
+class LlamadaRegistrable(BaseModel):
+    """
+    La llamada que se puede registrar AHORA para esta oportunidad (P9 del
+    plan de resultados de llamadas): su tipo, deducido por la MISMA función
+    que POST /resultados-llamada (app/services/tipo_llamada.py), y los
+    resultados que admite. Con ella, el formulario de n8n sabe qué páginas
+    enseñar sin copiar la deducción.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # gate, seguimiento o confirmacion_visita.
+    tipo_llamada: TipoLlamada
+    # Los resultados de ese tipo, en su orden.
+    resultados: list[ResultadoLlamada]
 
 
 class EventoHistorial(BaseModel):
@@ -174,6 +193,10 @@ class FichaOportunidadResponse(BaseModel):
     visitas: list[VisitaFicha]
     # Las llamadas ya registradas, lo más antiguo primero; [] si no hay.
     llamadas: list[LlamadaFicha]
+    # La llamada que se puede registrar ahora (P9), o null: si ya hay un
+    # resultado (es definitivo), si no hay presupuesto o si el estado no
+    # tiene ninguna llamada.
+    llamada_registrable: LlamadaRegistrable | None
     # Los cambios de estado registrados; siempre empieza por el alta.
     historial: list[EventoHistorial]
     # true si el estado actual es el que dejó el último evento; false si

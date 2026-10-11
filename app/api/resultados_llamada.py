@@ -8,7 +8,9 @@ resultado de una llamada, nunca un agente de IA: por eso lleva la llave de
 administración (X-Gate-Secret, que conserva su nombre, D25.9).
 
 Bloque B1 (2026-10-11): misma operación que POST /gate-decisions (que queda
-como alias en app/api/gate_decisions.py) con los nombres nuevos.
+como alias en app/api/gate_decisions.py) con los nombres nuevos. Bloque B2
+(el mismo día): los tres tipos de llamada (gate, seguimiento y confirmación
+de visita) y sus cinco resultados; el tipo lo deduce el backend.
 
 Como todo app/api/, es un ADAPTADOR: sin lógica de negocio ni SQL. Aquí
 vive también la traducción de un rechazo a HTTP, que comparte el alias.
@@ -87,9 +89,10 @@ def http_de_rechazo(error: RechazoNegocio) -> HTTPException:
 #   response: la respuesta HTTP, para poder cambiar su código.
 def post_resultados_llamada(data: ResultadoLlamadaCreate, response: Response) -> ResultadoLlamadaResponse:
     """
-    Registra el resultado de la llamada de administración. Hoy (B1), solo
-    los del Gate: visita_acordada (con fecha y hora) o descartar (con
-    motivo). Nunca devuelve importes.
+    Registra el resultado de la llamada de administración: visita_acordada
+    o descartar (Gate y seguimiento), y confirmar_hora, otra_hora o
+    cliente_cancela (confirmación de una visita pedida desde el chat). El
+    resultado es definitivo. Nunca devuelve importes.
     """
     # Todo el trabajo lo hace services/; un rechazo se traduce a HTTP.
     try:
