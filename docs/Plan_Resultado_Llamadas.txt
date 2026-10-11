@@ -1305,3 +1305,18 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
     falla solo "claves exactas" por las dos claves nuevas
     (llamada_registrable y fecha_visita_cancelada), que el Bloque C añade a
     sus conjuntos de claves esperadas.
+  (Nota 2026-10-11, Bloque C, tanda 3: regresión (8.4) y suite completa.)
+    La suite tiene 44 scripts, no 43 como decía el encargo: los 41 de antes,
+    check_migracion_resultado_llamadas (B2-M) y los dos de este bloque
+    (check_resultados_llamada_service y check_resultados_llamada_http).
+    44/44 con código 0 en UNA pasada válida, de 22:59:52 a 23:10:48, con la
+    regla de uso (Docker/n8n y navegador cerrados, wsl --shutdown,
+    enchufado y tapa abierta, confirmado por Gabi) y sin ninguna Kernel-Power
+    506/507 entre 22:58 y 23:12. La regresión de 8.4 está dentro: alias
+    121/121 y 14/14, gate-avisos 18/18 y 75/75, ficha 40/40 y 69/69, listado
+    69/69 y 109/109, followup 34/34 y 125/125, visitas 16/16 y 55/55; los
+    nuevos, 37/37, 160/160 y 50/50. check_graceful_shutdown y
+    check_mcp_connection desde copias en el 8030 y el 8031; uvicorn del 8031
+    detenido por su PID 28620 (log = netstat; lanzado 29800, que terminó con
+    él); el 8000 de Gabi intacto. Salida de los cinco de P4 revisada a mano:
+    sin fallos. Ningún log de la suite con [FALLO], Traceback ni HAY FALLOS.
