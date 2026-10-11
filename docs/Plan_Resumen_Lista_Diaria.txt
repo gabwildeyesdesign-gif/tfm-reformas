@@ -8,6 +8,8 @@ Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
 [Actualizado 2026-10-10: Bloque A APROBADO por el tutor sobre cc650c3,
 P1-P10 DECIDIDAS (nota en la sección 11). P1 = b): no hay Bloque B1
 (nota 4.3). Bloque B0 en curso.]
+[Actualizado 2026-10-11: bloques A, B0, B2, C y D CERRADOS; pendiente de
+merge (nota en la sección 12, con los hashes).]
 
 Fuentes: el encargo del Bloque A del 2026-10-10 (decisiones D26.1, D26.3 y
 D26.7 ya tomadas y pre-decisiones 1-8 del tutor),
@@ -1272,3 +1274,18 @@ intervalo (lección del 2026-10-10).
   sentencias en tramos de más de 4 sin comentario y se pone en el mensaje.
   Nada de merge a main sin la confirmación explícita de Gabi, después de la
   revisión del tutor, y siempre con --ff-only.
+  (Nota 2026-10-11: HASHES de la rama feat/n0-resumen-lista-diaria, desde
+  main = ea96f39.)
+    A    cc650c3  plan
+         601145f  decisiones de Gabi (P1-P10)
+    B0   584c075  ConexionSinCommit en la S5 (solo el script)
+    B2   3aa5496  cambio de contrato (esquema y servicio)
+    C    62c9a21  C-1 y C-2: los dos scripts del listado (69/69 y 109/109)
+         454f41b  C-3 y C-4: N1-N11, regresión y suite 41/41
+    D    (el commit de esta nota) Adenda (fila 8 y nota en 5.7), nota en la
+         1.5 del plan del listado, nota en la sección 4 de D26, CLAUDE.md
+         (estado de 4a-2, corrección de C1, WF_ficha_oportunidad, S5
+         resuelta, R1/P5, C10, C11, nota de la suite y gotcha del PID del
+         venv) y este plan.
+  Pendiente de merge: lo hace Gabi tras la revisión del tutor, con
+  --ff-only.

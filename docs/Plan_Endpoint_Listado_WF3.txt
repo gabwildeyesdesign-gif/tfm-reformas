@@ -288,6 +288,19 @@ dato personal; script en el scratchpad):
   clientes. Defensa doble, como en /gate-avisos: las consultas no los leen
   y todos los modelos de la respuesta tienen extra="forbid".
 
+  (Nota 2026-10-11, rama feat/n0-resumen-lista-diaria; D26.1 y C2 de
+  docs/Plan_Resumen_Lista_Diaria.txt. El texto de arriba se conserva como
+  registro.) D26.1 revierte parte de esta lista: m2, nivel_acabados y
+  texto_cliente de la visita YA SALEN. Cada elemento lleva el objeto
+  "solicitud" {m2, nivel_acabados, incluye_cambios_estructurales} y los de
+  visita, además, texto_cliente de ESA visita (contrato en la nota del
+  2026-10-11 de la sección 5.7 de la Adenda). La razón dada aquí para no
+  sacarlos (pre-decisión 6, "viaja por email") la corrige D26, sección
+  1.3: la razón válida es la ACUMULACIÓN (la lista junta a muchos clientes
+  en un solo mensaje), y por eso siguen sin salir el email, los importes y
+  el resto de esta lista: el resumen dice qué pidió cada cliente, no quién
+  es ni cuánto cuesta.
+
 1.6 Los cinco apartados (pre-decisión 4), con su condición exacta
   "Plazo" = presupuestos.created_at < now() - <horas de la regla>
   (ESTRICTO: "más de 24 h"; justo en el límite NO entra; ver 3.2).

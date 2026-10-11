@@ -129,3 +129,17 @@ visita guarda una copia de `texto_cliente` en `logs.detalle`, que no se limpia s
 texto (R10 del plan). Historial medido el 2026-10-10: las 27 oportunidades reales cuadran; las 'ganada' puestas a
 mano no cuadrarán, por diseño. Verificación: 40/40 y 69/69, catorce pruebas en negativo y suite completa 41/41.
 Siguiente: 4a-2 (resumen en la lista diaria, D26.1), en otra rama.
+
+**[Nota 2026-10-11, estado de 4a-2 y corrección de la nota anterior]** (1) La nota anterior dice que la ficha está
+"pendiente de merge": ya no es cierto. `GET /oportunidades/{oportunidad_id}/ficha` está **integrada en `main` desde
+`ea96f39`** y la rama `feat/n0-ficha-oportunidad` ya no existe en GitHub (C1 de `docs/Plan_Resumen_Lista_Diaria.txt`).
+(2) **4a-2** (D26.1) está implementado y verificado en la rama `feat/n0-resumen-lista-diaria`, **pendiente de merge**
+(plan `docs/Plan_Resumen_Lista_Diaria.txt`; contrato en la fila 8 y la nota del 2026-10-11 de la sección 5.7 de la
+Adenda). Cada elemento de `GET /llamadas-del-dia` lleva el objeto `solicitud` {m2, nivel_acabados,
+incluye_cambios_estructurales} y los de visita, `texto_cliente` de esa visita; siguen sin salir email e importes
+(la razón es la acumulación, sección 1.3). Las expresiones se toman de `COLUMNAS_CASO` sin copiarlas. Limitaciones
+documentadas: un lead mal formado tumbaría la lista entera (R1; tarea de dos CHECK en `leads`) y `texto_cliente` sin
+filtro hasta D26.7 (R2). Hallazgos: `estimate_service.py` tiene su propia copia de las tres expresiones desde
+`124ba1b` (C10, deuda técnica) y los scripts de la ficha y de gate-avisos no comparan el valor de los cambios
+estructurales ni del nivel (C11, pendiente). Verificación: 69/69 y 109/109, once pruebas en negativo y suite completa
+41/41. Siguiente: 4b (registro del resultado de todas las llamadas, D26.6).

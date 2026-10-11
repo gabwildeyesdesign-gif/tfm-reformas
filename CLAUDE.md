@@ -201,6 +201,17 @@ completa de cualquier oportunidad, con o sin Gate (D26.2). Solo REST, sin
 tool MCP, de SOLO LECTURA, octavo include_router, cabecera X-Gate-Secret
 puesta en el ROUTER (no en la ruta). No forma parte de los 5 endpoints
 originales.)
+(Nota 2026-10-11: corrige la nota anterior (C1 del plan
+docs/Plan_Resumen_Lista_Diaria.txt): GET /oportunidades/{oportunidad_id}/ficha
+ya NO está pendiente de merge: está integrada en main desde ea96f39, y la
+rama feat/n0-ficha-oportunidad ya no existe en GitHub. En n8n existe ya la
+página que la consume: WF_ficha_oportunidad, Webhook GET
+/webhook/ficha?oportunidad_id= (decisión D26.8, documento en el Proyecto de
+claude.ai; se copia a docs/ con la rama de exportación de n8n). Desde el
+2026-10-10, en la rama feat/n0-resumen-lista-diaria (pendiente de merge),
+GET /llamadas-del-dia lleva en cada elemento el resumen de la solicitud
+(objeto "solicitud") y, en las visitas, texto_cliente (D26.1, 4a-2): mismo
+router y misma ruta, contrato ampliado; sigue sin email ni importes.)
 Lo que sigue es la especificación completa, no el estado actual.
 
 calculate-estimate tiene las dos (MCP en producción, REST para
@@ -506,6 +517,18 @@ SOLO REST.
 > de la revisión del tutor, y siempre con `--ff-only`. El siguiente bloque
 > de backend es 4a-2 (resumen de la solicitud en cada elemento de GET
 > /llamadas-del-dia, D26.1), en su propia rama.
+>
+> **(Nota 2026-10-11: el párrafo anterior está superado.)** GET
+> /oportunidades/{oportunidad_id}/ficha está **integrada en `main` en
+> `ea96f39`** (la rama ya no existe en GitHub). **Bloque actual: 4a-2,
+> resumen de la solicitud en GET /llamadas-del-dia** (D26.1), implementado
+> y verificado en la rama `feat/n0-resumen-lista-diaria`, **pendiente de
+> merge** (bloques A, B0, B2, C y D cerrados; no hay B1 porque P1 = b; plan
+> docs/Plan_Resumen_Lista_Diaria.txt). Misma regla de siempre: no hacer
+> merge sin la confirmación explícita de Gabi, después de la revisión del
+> tutor, y siempre con `--ff-only`. El siguiente bloque de backend es 4b
+> (registro del resultado de todas las llamadas, D26.6), y después WF3 en
+> n8n (bloque 5).
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -836,6 +859,18 @@ pantalla a 30 min también suspende las pruebas en negativo; comprobar
 desde copias en el 8030 y el 8031; uvicorn del 8031 detenido por su PID
 (19892, el del log, igual al de netstat). Salida de los cinco scripts de
 P4 revisada a mano: sin fallos.)
+(Nota 2026-10-11, rama feat/n0-resumen-lista-diaria: siguen siendo 41
+scripts. 41/41 en UNA pasada válida, de 00:22:18 a 00:31:37, con la regla
+de uso (Docker/n8n y navegador cerrados, confirmado por Gabi) y sin ningún
+Kernel-Power 506/507 entre 00:17 y 00:33. check_graceful_shutdown y
+check_mcp_connection desde copias en el 8030 y el 8031. Salida de los
+cinco scripts de P4 revisada a mano: sin fallos. Gotcha encontrado: en
+Windows, el python.exe del venv es un LANZADOR que arranca el intérprete
+real como proceso HIJO. Un uvicorn lanzado con Popen sobre él tiene OTRO
+PID que el del servidor (lanzado 29852; log y netstat 28768, hijo de
+29852): el PID que vale es el del log comprobado con netstat, nunca el de
+Popen. El ejecutor no detuvo nada al ver que no coincidían; 28768 se
+detuvo después por su PID, y el lanzador terminó con él.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -895,6 +930,33 @@ N14 40/40 | 67/69. Pasada sobre los datos reales: 27/27 fichas sin error,
 y no el aplicado, 'ganada' sin registro, copia de texto_cliente en logs):
 fila 9 y sección 5.9 de la Adenda. Suite completa 41/41 en UNA pasada
 válida (ver "Suite de verificación").
+(Nota 2026-10-11: "pendiente de merge" ya no es cierto: integrada en main en
+ea96f39.)
+
+Resumen de la solicitud en GET /llamadas-del-dia (rama
+feat/n0-resumen-lista-diaria, 2026-10-10 a 2026-10-11, pendiente de merge;
+plan cc650c3 y 601145f, B0 584c075, B2 3aa5496, pruebas 62c9a21 y 454f41b,
+documentación en el commit del Bloque D): D26.1, bloque 4a-2. Cada elemento
+de los cinco apartados lleva el objeto "solicitud" {m2 (texto exacto o
+null), nivel_acabados, incluye_cambios_estructurales}, siempre presente
+(SolicitudLlamada, extra="forbid"), y los de visita (d y e), texto_cliente
+de ESA visita. Sigue sin email ni importes (la razón es la ACUMULACIÓN, D26
+sección 1.3). Las tres expresiones se toman por nombre de COLUMNAS_CASO
+(datos_oportunidad.py, sin tocarlo) en NOMBRES_SOLICITUD /
+COLUMNAS_SOLICITUD_SQL, a nivel de módulo: un nombre inexistente da
+KeyError al arrancar uvicorn. Las mismas cinco consultas (solo columnas
+más). B0: ConexionSinCommit en la S5 de check_listado_llamadas_service.
+check_listado_llamadas_service 69/69 (S4b, S5 con tres leads distintos, S8
+cinco órdenes, S9 con ast) y check_listado_llamadas_http 109/109 (puerto
+8024; CASOS 18-21). En negativo, sobre copias, de una en una (servicio |
+HTTP): N1 61/69 | 101/109; N2 68/69 | 104/109; N3 69/69 | 104/109; N4 69/69
+| 105/109; N5 65/69 | 109/109 (solo S9); N6 67/69 | 109/109 (solo S8); N7
+63/69 | 107/109; N8 62/69 | 102/109 (ficha y gate-avisos no lo ven, C11);
+N9 69/69 | 106/109; N10 45/48 | 59/109 (la lista entera en 500); N11
+KeyError al importar (ni el script ni uvicorn arrancan). Contrato y
+limitaciones (R1: un lead mal formado tumba la lista entera; R2:
+texto_cliente sin filtro hasta D26.7): fila 8 y nota del 2026-10-11 de la
+sección 5.7 de la Adenda. Suite completa 41/41 en UNA pasada válida.
 
 Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
@@ -944,6 +1006,28 @@ tendrá que tratar 'seguimiento_pendiente' como 'presupuesto_enviado'; el
 router de chat actual no se rompe, porque decide con existe y
 presupuesto.existe, no con el estado.)
 (Nota 2026-10-10: create-followup-task ya NO está pendiente de merge: integrado en main en 1af758a. Lo demás de la nota anterior sigue pendiente.)
+(Nota 2026-10-11, rama feat/n0-resumen-lista-diaria.) RESUELTO el
+pendiente de la S5 de scripts/check_listado_llamadas_service.py: abre su
+conexión con ConexionSinCommit desde el Bloque B0 (584c075), con su
+autoprueba S0 y un except que cuenta como FALLO un commit() del código.
+Pendientes nuevos, cada uno en su propia rama:
+  - R1 / P5 del plan del resumen: dos CHECK en leads, como
+    chk_leads_m2_rango, para nivel_acabados (solo 'basico', 'medio',
+    'alto') e incluye_cambios_estructurales (booleano). Hoy un solo lead mal
+    formado tumbaría GET /llamadas-del-dia ENTERA (500 a WF3). La migración
+    solo AÑADE (expand-contract no aplica); comprobar antes que ninguna
+    fila real la incumple (el 2026-10-10: 0 de 27).
+  - C10 (deuda técnica): app/services/estimate_service.py (POST
+    /calculate-estimate) tiene su propia copia de las tres expresiones del
+    resumen (m2, nivel_acabados, cambios) desde 124ba1b. Que las lea de
+    COLUMNAS_CASO, con su regresión completa (REST y tool MCP). La S9 de
+    check_listado_llamadas_service la TOLERA, esté o no.
+  - C11: check_ficha_oportunidad_* y check_aviso_gate_* comprueban las
+    claves de "reforma" y el texto de m2, pero nunca el VALOR de
+    incluye_cambios_estructurales ni de nivel_acabados frente a lo enviado
+    (la N8 del plan del resumen, una expresión compartida cambiada, les
+    pasó 40/40, 69/69, 18/18 y 75/75). Añadir esas comprobaciones, con
+    valores distintos por caso.
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
@@ -1017,6 +1101,10 @@ rápida, no sustituye esa documentación. Contiene:
   /oportunidades/{oportunidad_id}/ficha (D26.2, 4a-1): P1-P12 decididas,
   el corte de aviso_gate_service (B1), pruebas en negativo N1-N14 con sus
   resultados exactos y bloques A, B1, B2, C y D con sus hashes.
+- Plan_Resumen_Lista_Diaria.txt — plan del resumen de la solicitud en GET
+  /llamadas-del-dia (D26.1, 4a-2): P1-P10 decididas (P1 = b, sin B1),
+  hallazgos C1-C11, pruebas en negativo N1-N11 y N-B0 con sus resultados
+  exactos y bloques A, B0, B2, C y D con sus hashes.
 - Plan_Ejecutor_Suite.txt — lanzador de la suite que impide la suspensión
   de Windows. APLAZADO el 2026-10-03; lo sustituye la regla de uso de este
   archivo.
