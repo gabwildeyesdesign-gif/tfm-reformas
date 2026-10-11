@@ -60,8 +60,9 @@ from app.schemas.leads import LeadCreate
 from app.schemas.visits import VisitaCreate
 # Los servicios: crear lead, calcular, pedir visita y registrar decisión.
 from app.services.estimate_service import calculate_estimate
-# registrar_decision: la función del servicio de /gate-decisions que se prueba.
-from app.services.gate_decisions_service import registrar_decision
+# registrar_decision: la entrada del servicio que usa /gate-decisions (desde el
+# 2026-10-11 vive en resultados_llamada_service, Bloque B1).
+from app.services.resultados_llamada_service import registrar_decision
 # create_lead: la función que da de alta un lead (la usa lead_propio).
 from app.services.leads_service import create_lead
 # solicitar_visita: la función del servicio de /visits (caso 2).

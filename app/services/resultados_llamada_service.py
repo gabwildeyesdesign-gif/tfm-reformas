@@ -1,7 +1,19 @@
 """
-Lógica de negocio de POST /gate-decisions: el resultado de la llamada de
-administración a un cliente cuyo presupuesto activó el Gate (plan:
+Lógica de negocio del resultado de las llamadas de administración: POST
+/resultados-llamada y su alias POST /gate-decisions (plan:
+docs/Plan_Resultado_Llamadas.txt; la lógica del Gate es la de
 docs/Plan_Endpoint_Gate_Decisions.txt, secciones 1.4, 1.6, 1.9 y 2.2).
+
+Bloque B1 (2026-10-11): este archivo se llamaba gate_decisions_service.py y
+se MOVIÓ aquí sin cambiar ningún comportamiento. Solo cambian los nombres
+(registrar_decision -> registrar_resultado, los esquemas y las
+excepciones). Los textos SQL, los motivos, los mensajes y el log son los
+mismos. Hoy (B1) solo registra llamadas del Gate; la ampliación a
+seguimientos y confirmación de visitas es el Bloque B2.
+
+La función registrar_decision, al final, es la entrada con el contrato
+ANTIGUO (la usa el alias POST /gate-decisions): traduce los nombres y llama
+a registrar_resultado, la misma función que la ruta nueva.
 
 Dos decisiones posibles:
   - visita_acordada: se crea una visita YA confirmada (la acordó
@@ -13,10 +25,11 @@ llamada (auditoría anual) y una fila en logs.
 Las reglas de fecha de la visita son EXACTAMENTE las de POST /visits: se
 usan desde app/services/reglas_visita.py, sin copiarlas.
 
-Como todo services/, este archivo NO importa fastapi ni fastmcp. Cuando una
-decisión no se puede registrar, lanza una excepción con un "motivo" (código
-estable) y un "mensaje" (texto para administración); el adaptador
-app/api/gate_decisions.py decide el código HTTP de cada una.
+Como todo services/, este archivo NO importa fastapi ni fastmcp. Cuando un
+resultado no se puede registrar, lanza una excepción con un "motivo" (código
+estable) y un "mensaje" (texto para administración); los adaptadores
+app/api/resultados_llamada.py y app/api/gate_decisions.py (el alias) deciden
+el código HTTP de cada una.
 """
 
 # Json: le dice a psycopg2 que un diccionario de Python va a una columna
@@ -26,12 +39,16 @@ from psycopg2.extras import Json
 # La conexión de escritura del pool: commit al salir del "with" si todo va
 # bien, rollback si se lanza una excepción dentro.
 from app.db.connection import get_transactional_connection
-# El Enum de las decisiones y los esquemas de entrada y de salida.
+# El Enum de los resultados del Gate (sigue en el módulo de esquemas
+# antiguo, que también usan GET /gate-avisos y la ficha) y los esquemas
+# ANTIGUOS de entrada y de salida, que solo usa registrar_decision (alias).
 from app.schemas.gate_decisions import (
     DecisionGate,
     GateDecisionCreate,
     GateDecisionResponse,
 )
+# Los esquemas NUEVOS de entrada y de salida (POST /resultados-llamada).
+from app.schemas.resultados_llamada import ResultadoLlamadaCreate, ResultadoLlamadaResponse
 
 # Reglas de fecha y de configuración COMPARTIDAS con POST /visits (plan,
 # 2.3). FechaNoValida no se importa porque aquí no se lanza a mano: la
@@ -85,26 +102,29 @@ ACCION_DECISION_REGISTRADA = "gate_decision_registrada"
 # ======================================================================
 # Excepciones: una clase por FAMILIA de rechazo
 # ======================================================================
-# DecisionGateRechazada es la base de los rechazos PROPIOS de este
-# endpoint y hereda de RechazoNegocio (reglas_visita.py), la base común con
-# /visits. Los rechazos COMPARTIDOS, FechaNoValida (422) y
-# ConfiguracionIncompleta (503), vienen de reglas_visita.py. El adaptador
-# captura RechazoNegocio, que incluye a todos.
+# ResultadoRechazado es la base de los rechazos PROPIOS de este endpoint
+# (antes DecisionGateRechazada) y hereda de RechazoNegocio
+# (reglas_visita.py), la base común con /visits. Los rechazos COMPARTIDOS,
+# FechaNoValida (422) y ConfiguracionIncompleta (503), vienen de
+# reglas_visita.py. Los adaptadores capturan RechazoNegocio, que incluye a
+# todos.
 
 
-class DecisionGateRechazada(RechazoNegocio):
-    """Base de los rechazos propios de /gate-decisions (motivo y mensaje los guarda RechazoNegocio)."""
+class ResultadoRechazado(RechazoNegocio):
+    """Base de los rechazos propios del resultado de una llamada (motivo y mensaje los guarda RechazoNegocio)."""
 
 
-class OportunidadNoEncontrada(DecisionGateRechazada):
+class OportunidadNoEncontrada(ResultadoRechazado):
     """No existe ninguna oportunidad con ese id (-> 404)."""
 
 
-class EstadoNoPermiteDecision(DecisionGateRechazada):
+class EstadoNoPermiteResultado(ResultadoRechazado):
     """
-    La oportunidad no admite ESTA decisión (-> 409). Motivos:
-    sin_presupuesto, sin_gate, decision_ya_registrada, estado_no_permitido
-    y visita_activa_existente.
+    La oportunidad no admite ESTE resultado (-> 409; antes
+    EstadoNoPermiteDecision). Motivos: sin_presupuesto, sin_gate,
+    decision_ya_registrada, estado_no_permitido y visita_activa_existente
+    (los mismos códigos de hoy; B2 renombra decision_ya_registrada en la
+    ruta nueva).
     """
 
 
@@ -113,9 +133,10 @@ class EstadoNoPermiteDecision(DecisionGateRechazada):
 # ======================================================================
 
 
-def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
+def registrar_resultado(data: ResultadoLlamadaCreate) -> ResultadoLlamadaResponse:
     """
-    Registra la decisión de administración sobre el Gate de una oportunidad.
+    Registra el resultado de la llamada de administración (hoy, B1, solo la
+    del Gate de una oportunidad). Antes se llamaba registrar_decision.
 
     Todo ocurre en UNA transacción (get_transactional_connection): o se
     aplican todos los cambios (visita, decisión, estado y log) o ninguno.
@@ -135,7 +156,7 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
     # calcula antes de abrir la transacción porque no necesita la base de
     # datos, y hace falta tanto para la repetición (paso 4) como para las
     # reglas de fecha (paso 6).
-    if data.decision == DecisionGate.VISITA_ACORDADA:
+    if data.resultado == DecisionGate.VISITA_ACORDADA:
         inicio = combinar_fecha_hora_madrid(data.fecha, data.hora)
     else:
         inicio = None
@@ -143,7 +164,7 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
     # Texto de la decisión y del motivo, tal como se guardan en la base de
     # datos. .value saca el texto de un Enum ("descartar"); se pasa así a
     # psycopg2 para no depender de cómo trata un Enum.
-    decision_texto = data.decision.value
+    decision_texto = data.resultado.value
     motivo_texto = data.motivo.value if data.motivo is not None else None
 
     # rechazo_diferido: mismo mecanismo que /visits. El log de configuración
@@ -206,13 +227,13 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         # nunca puede tener decisión, y el motivo útil es sin_gate (1.9).
         # presupuesto_id None: el LEFT JOIN no encontró presupuesto.
         if presupuesto_id is None:
-            raise EstadoNoPermiteDecision(
+            raise EstadoNoPermiteResultado(
                 "sin_presupuesto",
                 "La oportunidad todavía no tiene presupuesto calculado, así que no hay ningún Gate que decidir.",
             )
         # requiere_aprobacion False: el presupuesto no activó el Gate.
         if not requiere_aprobacion:
-            raise EstadoNoPermiteDecision(
+            raise EstadoNoPermiteResultado(
                 "sin_gate",
                 "El presupuesto de esta oportunidad no requiere aprobación (no tiene Gate): "
                 "no hay ninguna decisión que registrar.",
@@ -255,7 +276,7 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
             if previa_decision == decision_texto:
                 # Misma decisión: falta comparar la fecha (visita) o el
                 # motivo (descarte). Cada comparación da True o False.
-                if data.decision == DecisionGate.VISITA_ACORDADA:
+                if data.resultado == DecisionGate.VISITA_ACORDADA:
                     es_repeticion = previa_fecha == inicio
                 else:
                     es_repeticion = previa_motivo == motivo_texto
@@ -271,22 +292,22 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
                 # "return" dentro de un "with": Python sale del bloque con
                 # normalidad, así que get_transactional_connection hace
                 # commit (de nada) y devuelve la conexión al pool.
-                return GateDecisionResponse(
-                    decision_id=previa_id,
+                return ResultadoLlamadaResponse(
+                    llamada_id=previa_id,
                     oportunidad_id=oportunidad_id,
-                    decision=previa_decision,
+                    resultado=previa_decision,
                     motivo=previa_motivo,
                     estado_oportunidad=estado,
                     visita_id=previa_visita_id,
                     # Expresión condicional "A if condición else B": se
                     # pasa a hora de Madrid solo si hay fecha.
-                    fecha_propuesta=previa_fecha.astimezone(ZONA_MADRID) if previa_fecha is not None else None,
+                    fecha_visita=previa_fecha.astimezone(ZONA_MADRID) if previa_fecha is not None else None,
                     creado=False,
                 )
 
             # Otra decisión, otra fecha u otro motivo: la decisión es
             # definitiva (R2), se registra una sola vez por oportunidad.
-            raise EstadoNoPermiteDecision(
+            raise EstadoNoPermiteResultado(
                 "decision_ya_registrada",
                 f"Esta oportunidad ya tiene registrada otra decisión ({previa_decision}, id {previa_id}). "
                 "La decisión es definitiva: si fue un error, hay que corregirla a mano en la base de datos.",
@@ -297,7 +318,7 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         # --------------------------------------------------------------
         # Solo desde 'pendiente_aprobacion'; cualquier otro estado, 409.
         if estado != ESTADO_PENDIENTE_APROBACION:
-            raise EstadoNoPermiteDecision(
+            raise EstadoNoPermiteResultado(
                 "estado_no_permitido",
                 f"La oportunidad está en estado '{estado}', y solo se puede registrar una decisión "
                 f"del Gate en '{ESTADO_PENDIENTE_APROBACION}'.",
@@ -307,7 +328,7 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         # 6. Preparar la decisión
         # --------------------------------------------------------------
         # Rama de la visita acordada (la del descarte es el "else" de abajo).
-        if data.decision == DecisionGate.VISITA_ACORDADA:
+        if data.resultado == DecisionGate.VISITA_ACORDADA:
             # Reglas de visita, las MISMAS de /visits (503 si faltan).
             reglas, problemas = leer_reglas_visita(cursor)
             # Una lista vacía cuenta como False: solo entra si hay problemas.
@@ -339,7 +360,7 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
                 # La visita activa, o None si no hay; si la hay, 409.
                 activa = cursor.fetchone()
                 if activa is not None:
-                    raise EstadoNoPermiteDecision(
+                    raise EstadoNoPermiteResultado(
                         "visita_activa_existente",
                         f"La oportunidad ya tiene una visita activa (id {activa[0]}); no se puede acordar otra.",
                     )
@@ -428,14 +449,14 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
 
             # La respuesta de una decisión NUEVA (creado=True -> 201). Se
             # construye aquí y se devuelve fuera del "with", tras el commit.
-            respuesta = GateDecisionResponse(
-                decision_id=decision_id,
+            respuesta = ResultadoLlamadaResponse(
+                llamada_id=decision_id,
                 oportunidad_id=oportunidad_id,
-                decision=data.decision,
+                resultado=data.resultado,
                 motivo=data.motivo,
                 estado_oportunidad=nuevo_estado,
                 visita_id=visita_id,
-                fecha_propuesta=fecha_madrid,
+                fecha_visita=fecha_madrid,
                 creado=True,
             )
 
@@ -446,3 +467,47 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         raise rechazo_diferido
     # Si no, la decisión se escribió y confirmó: se devuelve la respuesta.
     return respuesta
+
+
+# ======================================================================
+# Entrada con el contrato ANTIGUO (alias POST /gate-decisions, D26.6)
+# ======================================================================
+
+
+def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
+    """
+    La misma operación con los nombres de POST /gate-decisions (Adenda 5.5),
+    para el alias: el formulario de n8n publicado sigue enviando y leyendo
+    esos nombres hasta que se actualice (D26.6, P2 del plan).
+
+    No tiene lógica propia: traduce la entrada antigua a la nueva, llama a
+    registrar_resultado (la MISMA función que la ruta nueva) y traduce la
+    respuesta. Las excepciones salen tal cual, con los mismos motivos.
+    """
+    # La entrada nueva, campo a campo. decision -> resultado. La fecha y la
+    # hora ya validadas se vuelven a escribir como TEXTO ("2026-10-23" y
+    # "08:30"), porque los validadores compartidos solo aceptan texto; así
+    # la segunda validación es exactamente la primera. "A if B else None":
+    # solo si vienen.
+    nuevo = ResultadoLlamadaCreate(
+        oportunidad_id=data.oportunidad_id,
+        resultado=data.decision,
+        fecha=data.fecha.isoformat() if data.fecha is not None else None,
+        hora=data.hora.strftime("%H:%M") if data.hora is not None else None,
+        motivo=data.motivo,
+        informe=data.informe,
+    )
+    # La operación real, la misma de la ruta nueva.
+    resultado = registrar_resultado(nuevo)
+    # La respuesta antigua, con sus nombres: llamada_id -> decision_id,
+    # resultado -> decision y fecha_visita -> fecha_propuesta.
+    return GateDecisionResponse(
+        decision_id=resultado.llamada_id,
+        oportunidad_id=resultado.oportunidad_id,
+        decision=resultado.resultado,
+        motivo=resultado.motivo,
+        estado_oportunidad=resultado.estado_oportunidad,
+        visita_id=resultado.visita_id,
+        fecha_propuesta=resultado.fecha_visita,
+        creado=resultado.creado,
+    )

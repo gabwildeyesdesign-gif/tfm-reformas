@@ -5,7 +5,11 @@ dos endpoints (plan de /gate-decisions, sección 2.3):
                           pide el cliente desde el chat.
   - POST /gate-decisions  (app/services/gate_decisions_service.py, Bloque
                           C2): la visita que acuerda administración por
-                          teléfono en un caso de Gate.
+                          teléfono en un caso de Gate. (Nota 2026-10-11: el
+                          servicio se llama ahora
+                          resultados_llamada_service.py y la ruta nueva es
+                          POST /resultados-llamada; /gate-decisions es su
+                          alias.)
 
 Las dos tienen que cumplir EXACTAMENTE las mismas reglas (en el futuro, de
 lunes a viernes, visita completa dentro de una franja, con los valores de

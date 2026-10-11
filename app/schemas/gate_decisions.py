@@ -7,7 +7,10 @@ Aquí solo se comprueba la FORMA de los datos: tipos, valores permitidos,
 longitudes y qué campos acompañan a cada decisión. Las reglas que dependen
 de la base de datos (que la oportunidad exista, que tenga Gate, que la fecha
 sea futura y caiga en una franja...) viven en
-app/services/gate_decisions_service.py.
+app/services/gate_decisions_service.py (desde el 2026-10-11,
+app/services/resultados_llamada_service.py: este es ahora el contrato
+ANTIGUO del alias POST /gate-decisions; el nuevo está en
+app/schemas/resultados_llamada.py).
 """
 
 # Los tipos de fecha y hora de la librería estándar: date (un día), time

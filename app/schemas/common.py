@@ -119,7 +119,8 @@ class EstadoOportunidad(str, Enum):
     endpoint: tras la visita, un caso con Gate puede pasar A MANO a
     'ganada' (N0), y con una lista de tres el aviso fallaría. Los
     servicios que hoy escriben los estados como textos sueltos
-    (gate_decisions_service, visits_service, estimate_service) todavía no
+    (gate_decisions_service, desde el 2026-10-11 resultados_llamada_service;
+    visits_service y estimate_service) todavía no
     lo usan: queda para otra rama.
 
     (str, Enum): cada valor es también un texto normal, igual que

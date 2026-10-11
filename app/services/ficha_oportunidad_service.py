@@ -61,7 +61,10 @@ from app.services.datos_oportunidad import (
 # la ficha lo seguiría sin tocarla.
 from app.services.estimate_service import ACCION_CALCULADO
 from app.services.followup_service import ACCION_SEGUIMIENTO_ABIERTO
-from app.services.gate_decisions_service import ACCION_DECISION_REGISTRADA
+# (Nota 2026-10-11: gate_decisions_service.py se renombró a
+# resultados_llamada_service.py en el Bloque B1 de
+# docs/Plan_Resultado_Llamadas.txt; la acción no cambia.)
+from app.services.resultados_llamada_service import ACCION_DECISION_REGISTRADA
 from app.services.visits_service import ACCION_SOLICITADA
 
 # El modo de la transacción, el MISMO texto que usa GET /llamadas-del-dia
