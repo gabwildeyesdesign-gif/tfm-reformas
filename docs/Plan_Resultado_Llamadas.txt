@@ -1040,6 +1040,24 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
     3 fichas de seguimiento y confirmación (historial_cuadra false).
   - N5 (sin fecha_ultimo_contacto): - | 151/160 (check_gate_decisions_http
     118/121). Los 9 registros nuevos y los 3 del alias.
+  (Nota 2026-10-11, Bloque C, tanda 2b, 22:21-22:38, sin Kernel-Power
+  506/507 entre 22:20 y 22:39; git diff -- app/ vacío.)
+  - N6 (alias a una COPIA del servicio de main): 35/37 | 156/160
+    (check_gate_decisions_http 110/121). Servicio: la S6 (import del alias y
+    gate_decisions_service.py existe). HTTP: el log del alias sin
+    tipo_llamada/estado, dos 409 del alias y "ningún 500". Además, por un
+    camino que no se preveía: las excepciones del servicio viejo son OTRAS
+    clases y la tabla de códigos del alias da KeyError (13 respuestas 500 por
+    /gate-decisions y 2 por la ruta nueva; logs 8091-8116 y 8052, 8055,
+    borrados por id exacto por los scripts).
+  - N7 (otra_hora sin validar_fecha): - | 154/160 (acepta el sábado; en
+    cascada, el 201 válido de otra_hora ya no es el primero).
+  - N8 (confirmar_hora sin comparar): - | 158/160 (confirma una hora que el
+    cliente no pidió; en cascada, el 201 con la pedida).
+  - N9 (criterios copiados): 36/37 | 160/160, MUTANTE EQUIVALENTE en
+    comportamiento, como se preveía: solo la S2 (ast).
+  - N10 (repetición después del tipo): - | 146/160 (las 5 repeticiones, los
+    409 de resultado ya registrado y la concurrencia de 5 iguales).
   Cada N lleva sus 4 preguntas: escriben solo filas propias; las versiones
   rotas que puedan confirmar (N13) solo se ejecutan con ConexionSinCommit o
   por HTTP sobre datos propios; un corte lo limpia la siguiente ejecución;
