@@ -1022,6 +1022,24 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
        0 | 1. N15. 'sin_decision' admitido en cliente_cancela (sin el
        validador): el 422 sale 201 (la coherencia de paso12 lo frenaría con
        un 500). Al menos 0 | 1.
+  (Nota 2026-10-11, Bloque C, tanda 2a: RESULTADOS EXACTOS, sobre copias de
+  app/, scripts/, docs/ y .env, de una en una; Docker/n8n y navegador cerrados
+  y ninguna Kernel-Power 506/507 entre 21:50 y 22:08. Antes, con el código
+  bueno y la detección de la N6 ya añadida: servicio 37/37, HTTP 160/160.
+  Formato: servicio | HTTP (otros scripts entre paréntesis). git diff --
+  app/ vacío al terminar.)
+  - N1 (sin FOR UPDATE): - | 154/160. Las 5 de concurrencia y "ningún
+    500"; 5 respuestas 500 y sus 5 logs (7672, 7676, 7680, 7684, 7687),
+    borrados por id exacto por el script.
+  - N2 (sin resultado_no_admitido): - | 156/160. Los 3 resultado_no_admitido
+    y "ningún 500" (2, logs 7724 y 7725, borrados): sin el 409, el resultado
+    equivocado acaba en un 500 más adelante (índice parcial o segunda barrera).
+  - N3 (cliente_cancela sin 'perdida'): 36/37 | 156/160. Respuesta, estado,
+    log y ficha de cliente_cancela.
+  - N4 (log sin 'estado'): - | 150/160. Los 7 logs llamada_registrada y las
+    3 fichas de seguimiento y confirmación (historial_cuadra false).
+  - N5 (sin fecha_ultimo_contacto): - | 151/160 (check_gate_decisions_http
+    118/121). Los 9 registros nuevos y los 3 del alias.
   Cada N lleva sus 4 preguntas: escriben solo filas propias; las versiones
   rotas que puedan confirmar (N13) solo se ejecutan con ConexionSinCommit o
   por HTTP sobre datos propios; un corte lo limpia la siguiente ejecución;

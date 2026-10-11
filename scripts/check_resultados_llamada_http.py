@@ -602,6 +602,12 @@ try:
               r.status_code == 201 and set(cuerpo_de(r)) == {"decision_id", "oportunidad_id", "decision", "motivo",
                                                              "estado_oportunidad", "visita_id", "fecha_propuesta", "creado"}
               and (fila_resultado(g5) or ("",))[0] == "gate", f"({r.status_code} {r.text[:150]})")
+    # Y su log lo escribió el servicio NUEVO: la acción de siempre con las
+    # claves de B2 (tipo_llamada y estado). Una copia del servicio antiguo
+    # escribiría la misma fila (el DEFAULT pone 'gate') pero no estas claves (N6).
+    logs = logs_de(g5)
+    comprobar("alias: el log lleva tipo_llamada 'gate' y estado 'perdida' (lo escribe el servicio nuevo)",
+              len(logs) == 1 and logs[0][1].get("tipo_llamada") == "gate" and logs[0][1].get("estado") == "perdida", f"({logs})")
     # Cada ruta ve la fila de la otra: la nueva da 409 resultado_ya_registrado,
     # el alias su decision_ya_registrada de siempre.
     r = registrar(g5, {"resultado": "descartar", "motivo": "otro"})

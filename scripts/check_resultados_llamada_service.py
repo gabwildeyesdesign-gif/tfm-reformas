@@ -322,6 +322,19 @@ try:
         comprobar(f"{resultado}: fila ({tipo}, {resultado}) y visitas {estados_visita}",
                   fila == (tipo, resultado, "confirmada" in estados_visita, "cancelada" in estados_visita)
                   and visitas == estados_visita, f"({fila}, {visitas})")
+
+    # ==================================================================
+    print("\nS6. El alias llega al servicio NUEVO (ast)")
+    # ==================================================================
+    # Lo que importa app/api/gate_decisions.py y de dónde (N6: un alias que
+    # llamara a una copia del servicio antiguo escribiría la misma fila).
+    arbol_alias = ast.parse((RAIZ_REPO / "app/api/gate_decisions.py").read_text(encoding="utf-8"))
+    origenes = {a.name: n.module for n in arbol_alias.body if isinstance(n, ast.ImportFrom) for a in n.names}
+    comprobar("el alias importa registrar_decision de app.services.resultados_llamada_service",
+              origenes.get("registrar_decision") == "app.services.resultados_llamada_service", f"({origenes.get('registrar_decision')})")
+    # Y no existe ningún servicio viejo al que pudiera llamar.
+    comprobar("app/services/gate_decisions_service.py no existe",
+              not (RAIZ_REPO / "app/services/gate_decisions_service.py").exists())
 finally:
     # Siempre: nombres reales en memoria y ROLLBACK de todo.
     tipo_llamada.CLAVE_SEGUIMIENTO = CLAVE_SEG_REAL
