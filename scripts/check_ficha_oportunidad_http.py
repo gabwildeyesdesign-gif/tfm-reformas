@@ -107,9 +107,10 @@ MADRID = ZoneInfo("Europe/Madrid")
 
 # Claves EXACTAS de cada nivel, copiadas del PLAN (2.5). Un "set" ({...})
 # es un conjunto: no importa el orden, y se compara con set(respuesta).
-# La raíz de la respuesta: los 12 campos.
+# La raíz de la respuesta: los 12 campos. (Nota 2026-10-11, Bloque B2 de
+# docs/Plan_Resultado_Llamadas.txt: 13 desde B2, con llamada_registrable, P9.)
 CLAVES_RAIZ = {"oportunidad_id", "estado_oportunidad", "fecha_solicitud", "contacto", "reforma", "fotos",
-               "presupuesto", "visitas", "llamadas", "historial", "historial_cuadra",
+               "presupuesto", "visitas", "llamadas", "llamada_registrable", "historial", "historial_cuadra",
                "otras_oportunidades_mismo_email"}
 # Los objetos compartidos con /gate-avisos: contacto y reforma.
 CLAVES_CONTACTO = {"nombre", "email", "telefono", "origen"}
@@ -120,7 +121,10 @@ CLAVES_PRESUPUESTO = {"fecha_presupuesto", "motivo_gate", "iva_pct_aplicado", "i
                       "umbral_gate_vigente", "requiere_aprobacion"}
 # Cada elemento de las cuatro listas: visitas, llamadas, historial y otras.
 CLAVES_VISITA = {"estado_visita", "fecha_visita", "fecha_solicitud_visita", "texto_cliente"}
-CLAVES_LLAMADA = {"tipo_llamada", "resultado", "motivo", "fecha_registro", "fecha_visita", "informe"}
+# (Nota 2026-10-11, B2: cada llamada lleva también fecha_visita_cancelada,
+# la fecha de visita_cancelada_id de paso12; null en las del Gate.)
+CLAVES_LLAMADA = {"tipo_llamada", "resultado", "motivo", "fecha_registro", "fecha_visita",
+                  "fecha_visita_cancelada", "informe"}
 CLAVES_EVENTO = {"evento", "estado", "fecha"}
 CLAVES_OTRA = {"oportunidad_id", "tipo_reforma", "estado_oportunidad", "fecha_solicitud"}
 # Lo que NO sale nunca, en ningún nivel (plan, 2.6).
