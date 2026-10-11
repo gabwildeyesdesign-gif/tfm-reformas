@@ -1,7 +1,7 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-09-28 12:01:14 UTC
+-- Generado por scripts/dump_schema.py el 2026-10-11 16:20:43 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
@@ -14,7 +14,7 @@
 
 
 -- ------------------------------------------------------------------------
--- Tabla: clientes   (15 filas en el momento del volcado)
+-- Tabla: clientes   (19 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE clientes (
     id                       SERIAL NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE clientes (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: leads   (20 filas en el momento del volcado)
+-- Tabla: leads   (27 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE leads (
     id                       SERIAL NOT NULL,
@@ -44,7 +44,7 @@ CREATE TABLE leads (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: logs   (12 filas en el momento del volcado)
+-- Tabla: logs   (25 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE logs (
     id                       SERIAL NOT NULL,
@@ -57,7 +57,7 @@ CREATE TABLE logs (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: oportunidades   (20 filas en el momento del volcado)
+-- Tabla: oportunidades   (27 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE oportunidades (
     id                       SERIAL NOT NULL,
@@ -78,7 +78,7 @@ CREATE TABLE oportunidades (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: presupuestos   (12 filas en el momento del volcado)
+-- Tabla: presupuestos   (19 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE presupuestos (
     id                       SERIAL NOT NULL,
@@ -99,7 +99,7 @@ CREATE TABLE presupuestos (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: reglas_negocio   (12 filas en el momento del volcado)
+-- Tabla: reglas_negocio   (13 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE reglas_negocio (
     id                       SERIAL NOT NULL,
@@ -143,7 +143,7 @@ CREATE TABLE umbrales_gate (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: visitas   (0 filas en el momento del volcado)
+-- Tabla: visitas   (1 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE visitas (
     id                       SERIAL NOT NULL,
@@ -161,7 +161,7 @@ CREATE TABLE visitas (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: decisiones_gate   (0 filas en el momento del volcado)
+-- Tabla: decisiones_gate   (6 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE decisiones_gate (
     id                       SERIAL NOT NULL,
@@ -171,14 +171,19 @@ CREATE TABLE decisiones_gate (
     motivo                   VARCHAR(30),
     informe                  TEXT NOT NULL,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    tipo_llamada             VARCHAR(20) NOT NULL DEFAULT 'gate'::character varying,
+    visita_cancelada_id      INTEGER,
     CONSTRAINT decisiones_gate_oportunidad_id_fkey FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
+    CONSTRAINT decisiones_gate_visita_cancelada_oportunidad_fkey FOREIGN KEY (visita_cancelada_id, oportunidad_id) REFERENCES visitas(id, oportunidad_id),
     CONSTRAINT decisiones_gate_visita_oportunidad_fkey FOREIGN KEY (visita_id, oportunidad_id) REFERENCES visitas(id, oportunidad_id),
     CONSTRAINT decisiones_gate_pkey PRIMARY KEY (id),
     CONSTRAINT decisiones_gate_oportunidad_id_key UNIQUE (oportunidad_id),
-    CONSTRAINT chk_decisiones_gate_coherencia CHECK ((((decision)::text <> 'visita_acordada'::text) OR ((visita_id IS NOT NULL) AND (motivo IS NULL))) AND (((decision)::text <> 'descartar'::text) OR ((motivo IS NOT NULL) AND (visita_id IS NULL)))),
-    CONSTRAINT chk_decisiones_gate_decision CHECK ((decision)::text = ANY ((ARRAY['visita_acordada'::character varying, 'descartar'::character varying])::text[])),
+    CONSTRAINT chk_decisiones_gate_coherencia CHECK ((((decision)::text <> ALL ((ARRAY['visita_acordada'::character varying, 'confirmar_hora'::character varying, 'otra_hora'::character varying])::text[])) OR ((visita_id IS NOT NULL) AND (motivo IS NULL))) AND (((decision)::text <> 'descartar'::text) OR ((motivo IS NOT NULL) AND (visita_id IS NULL))) AND (((decision)::text <> 'cliente_cancela'::text) OR ((motivo IS NOT NULL) AND (visita_id IS NULL) AND ((motivo)::text <> ALL ((ARRAY['no_contesta'::character varying, 'sin_decision'::character varying])::text[])))) AND (((decision)::text = ANY ((ARRAY['otra_hora'::character varying, 'cliente_cancela'::character varying])::text[])) = (visita_cancelada_id IS NOT NULL)) AND ((visita_cancelada_id IS NULL) OR (visita_id IS NULL) OR (visita_cancelada_id <> visita_id))),
+    CONSTRAINT chk_decisiones_gate_decision CHECK ((decision)::text = ANY ((ARRAY['visita_acordada'::character varying, 'descartar'::character varying, 'confirmar_hora'::character varying, 'otra_hora'::character varying, 'cliente_cancela'::character varying])::text[])),
     CONSTRAINT chk_decisiones_gate_informe CHECK ((informe = btrim(informe)) AND ((char_length(informe) >= 1) AND (char_length(informe) <= 2000))),
-    CONSTRAINT chk_decisiones_gate_motivo CHECK ((motivo IS NULL) OR ((motivo)::text = ANY ((ARRAY['precio'::character varying, 'plazo'::character varying, 'no_contesta'::character varying, 'proyecto_no_viable'::character varying, 'otro'::character varying])::text[])))
+    CONSTRAINT chk_decisiones_gate_motivo CHECK ((motivo IS NULL) OR ((motivo)::text = ANY ((ARRAY['precio'::character varying, 'plazo'::character varying, 'no_contesta'::character varying, 'proyecto_no_viable'::character varying, 'otro'::character varying, 'sin_decision'::character varying])::text[]))),
+    CONSTRAINT chk_decisiones_gate_tipo_llamada CHECK ((tipo_llamada)::text = ANY ((ARRAY['gate'::character varying, 'seguimiento'::character varying, 'confirmacion_visita'::character varying])::text[])),
+    CONSTRAINT chk_decisiones_gate_tipo_resultado CHECK (((tipo_llamada)::text = 'confirmacion_visita'::text) = ((decision)::text = ANY ((ARRAY['confirmar_hora'::character varying, 'otra_hora'::character varying, 'cliente_cancela'::character varying])::text[])))
 );
 
 -- ==========================================================================

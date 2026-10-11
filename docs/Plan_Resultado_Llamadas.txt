@@ -426,6 +426,11 @@ ruta de Windows).
       visita CANCELADA como visita_id (para que la ficha diga cuál);
       oportunidad -> 'perdida' (D25.11).
   presupuestos no se toca nunca (Gate permanente; aprobado_por NULL).
+  (Nota 2026-10-11, validada por el tutor sobre cfb81ae: contradicción interna
+  entre esta sección y 2.5, resuelta así: visita_id es SIEMPRE la visita CONFIRMADA (NULL en descartar y en cliente_cancela); visita_cancelada_id es la 'solicitada' cancelada (solo en otra_hora y cliente_cancela, y distinta de visita_id). Por tanto, en
+  cliente_cancela la visita cancelada NO va en visita_id, como decía arriba,
+  sino en visita_cancelada_id; y en otra_hora, visita_id es la nueva y
+  visita_cancelada_id la pedida.)
 
 2.5 Respuesta (201 o 200)
   llamada_id          id de la fila de decisiones_gate.
@@ -560,6 +565,9 @@ ruta de Windows).
   base de datos, el CHECK de coherencia (cliente_cancela -> motivo NOT IN
   ('no_contesta', 'sin_decision')). El paso 6 (visita_cancelada_id con
   clave foránea doble) va SIEMPRE.)
+  (Nota 2026-10-11, tutor sobre cfb81ae: la nota anterior decía
+  "cliente_cancela -> motivo NOT NULL, visita_id NOT NULL"; lo aplicado en
+  paso12 es visita_id NULL y visita_cancelada_id NOT NULL. visita_id es SIEMPRE la visita CONFIRMADA (NULL en descartar y en cliente_cancela); visita_cancelada_id es la 'solicitada' cancelada (solo en otra_hora y cliente_cancela, y distinta de visita_id).)
   Por qué main no se rompe: main inserta (oportunidad_id, visita_id,
   decision, motivo, informe) con 'visita_acordada' o 'descartar' -> el
   DEFAULT pone 'gate' y los CHECK ampliados lo aceptan; gate-avisos y la
@@ -787,6 +795,10 @@ ruta de Windows).
   (cuadra sigue true).
   Las llamadas nuevas salen en la ficha con su informe: SQL_LLAMADAS lee
   tipo_llamada, TipoLlamada y el Enum del resultado se amplían (C14).
+  (Nota 2026-10-11, tutor sobre cfb81ae: con la lectura validada (visita_id es SIEMPRE la visita CONFIRMADA (NULL en descartar...),
+  la ficha (SQL_LLAMADAS y LlamadaFicha) tiene que leer también
+  visita_cancelada_id para enseñar QUÉ visita se canceló en otra_hora y
+  cliente_cancela. Va en B2; sus pruebas, en C (scripts de la ficha).)
 
 5.6 Pre-decisión 6: "confirmar otra hora". VALIDADA: validar_fecha y
   leer_reglas_visita de reglas_visita.py; UPDATE de la 'solicitada' a
@@ -1184,3 +1196,26 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
   empieza hasta que el tutor revise B1. paso12 incluye 'sin_decision' (P7)
   y visita_cancelada_id (P11). D añade docs/Contrato_Formulario_Llamadas.md
   (P15).
+  (Nota 2026-10-11: HASHES y resultados hasta B2-M, rama feat/n0-resultado-llamadas
+  desde main = 9153532.)
+    A     5f7d4df plan; 2cb01a6 decisiones (P1-P16, D29.1-D29.3).
+    B1    c9d7332 renombrado: comprobar_b1_ast 13/13, comparar_rutas_b1 35/35,
+          check_gate_decisions_http 121/121 sin tocar, check_gate_decisions_service
+          14/14, suite 41/41 (17:46-17:55).
+    B2-M  cfb81ae paso12, su verificación y la vuelta atrás, SIN ejecutar
+          (verificación antes de migrar: 7/50).
+          paso12 EJECUTADA el 2026-10-11 a las 18:18:30-18:18:33, tras "confirmo la
+          migración paso12" (Docker/n8n y navegador cerrados, formulario cerrado,
+          nadie en WF2); segunda ejecución: no toca nada (idempotente).
+          check_migracion_resultado_llamadas 50/50; foto de las 6 filas reales
+          igual antes y después; negativas (--quitar): tipo_llamada 49/50,
+          decision 49/50, motivo 49/50, coherencia 39/50, tipo_resultado 47/50,
+          clave de visita_cancelada_id 48/50 (cada una, solo sus comprobaciones).
+          docs/schema_actual.sql regenerado (dump_schema no vuelca COMMENT ON
+          TABLE); check_schema_actual_ejecutable 10/10.
+          check_migracion_decisiones_gate actualizado (4.4): 35/38 antes del
+          ajuste (las 3 de estructura previstas en C9), 38/38 después.
+          Scripts de MAIN (worktree de 9153532) contra la base migrada:
+          check_gate_decisions_http 121/121, check_aviso_gate_http 75/75,
+          check_ficha_oportunidad_http 69/69 (18:22:20-18:24:50).
+          Ninguna Kernel-Power 506/507 en 18:13-18:16, 18:17-18:21 ni 18:20-18:26.

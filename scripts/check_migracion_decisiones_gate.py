@@ -245,6 +245,10 @@ try:
     for nombre, datos in columnas.items():
         print(f"    {nombre:16} {datos}")
     # (tipo, ¿admite NULL?) de cada columna, según el plan. Sin presupuesto_id.
+    # (Nota 2026-10-11, plan docs/Plan_Resultado_Llamadas.txt, 4.4: desde
+    # paso12 la tabla tiene también tipo_llamada y visita_cancelada_id, que
+    # comprueba en detalle check_migracion_resultado_llamadas.py. Antes
+    # esperaba exactamente las 7 de paso10.)
     esperadas = {
         "id": ("integer", "NO"),
         "oportunidad_id": ("integer", "NO"),
@@ -253,10 +257,13 @@ try:
         "motivo": ("character varying", "YES"),
         "informe": ("text", "NO"),
         "created_at": ("timestamp with time zone", "NO"),
+        # Las dos de paso12.
+        "tipo_llamada": ("character varying", "NO"),
+        "visita_cancelada_id": ("integer", "YES"),
     }
     # d[:2] se queda con (tipo, NULL); el diccionario entero tiene que ser
     # IGUAL al esperado: ni una columna de más ni de menos.
-    comprobar("las 7 columnas, con su tipo y NULL/NOT NULL (sin presupuesto_id)",
+    comprobar("las 9 columnas (7 de paso10 + 2 de paso12), con su tipo y NULL/NOT NULL (sin presupuesto_id)",
               {n: d[:2] for n, d in columnas.items()} == esperadas)
     # El tercer dato de created_at es su valor por defecto. Si la columna no
     # existiera, .get devuelve tres None y la comprobación falla sin error.
@@ -282,8 +289,10 @@ try:
               and "(visita_id, oportunidad_id)" in restr[FK_VISITA_DOBLE][1]
               and "visitas(id, oportunidad_id)" in restr[FK_VISITA_DOBLE][1])
     # Exactamente dos claves foráneas: ni la simple de visita_id ni la de
-    # presupuesto_id del diseño anterior.
-    comprobar("exactamente 2 claves foráneas", sum(1 for t, _ in restr.values() if t == "f") == 2,
+    # presupuesto_id del diseño anterior. (Nota 2026-10-11, 4.4: tres desde
+    # paso12, que añade la doble de visita_cancelada_id; sigue sin haber la
+    # simple de visita_id ni la de presupuesto_id.)
+    comprobar("exactamente 3 claves foráneas (2 de paso10 + 1 de paso12)", sum(1 for t, _ in restr.values() if t == "f") == 3,
               f"({sorted(n for n, (t, _) in restr.items() if t == 'f')})")
     # Los cuatro CHECK tienen que existir y ser de tipo 'c'.
     for chk in (CHECK_DECISION, CHECK_MOTIVO, CHECK_INFORME, CHECK_COHERENCIA):
@@ -293,11 +302,18 @@ try:
     # La versión antigua (paso10) contenía = 'visita_acordada'; la nueva no.
     # No basta con mirar que no haya una lista IN (...): la antigua tampoco
     # la tenía (enumeraba los valores con dos ramas unidas por OR).
+    # (Nota 2026-10-11, 4.4: paso12 amplía la coherencia con el MISMO
+    # patrón de implicaciones; Postgres escribe la de visita_acordada como
+    # "<> ALL (ARRAY['visita_acordada', ...])". Se sigue exigiendo que no
+    # vuelva la forma de paso10, "= 'visita_acordada'", y se comprueba que es
+    # la de paso12, con cliente_cancela y visita_cancelada_id.)
     definicion_coherencia = restr.get(CHECK_COHERENCIA, ("", ""))[1]
-    comprobar("el CHECK de coherencia es el de paso10b (usa <> y no repite los valores)",
-              "<> 'visita_acordada'" in definicion_coherencia
+    comprobar("el CHECK de coherencia es el de paso12 (implicaciones con <>, sin la forma de paso10)",
+              "<> ALL ((ARRAY['visita_acordada'" in definicion_coherencia
               and "<> 'descartar'" in definicion_coherencia
-              and "= 'visita_acordada'" not in definicion_coherencia.replace("<> 'visita_acordada'", ""),
+              and "<> 'cliente_cancela'" in definicion_coherencia
+              and "visita_cancelada_id" in definicion_coherencia
+              and "= 'visita_acordada'" not in definicion_coherencia,
               f"({definicion_coherencia})")
     # El CHECK del informe tiene que contener sus dos condiciones.
     comprobar("el CHECK del informe exige texto recortado (btrim) y longitud",
