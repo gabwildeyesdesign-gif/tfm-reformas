@@ -1,0 +1,1085 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: registro del resultado de TODAS las llamadas de administración (Gate,
+seguimiento y confirmación de una visita pedida desde el chat)
+(D25.9-D25.11, bloque 4b de D26.6)
+
+Documento de plan · Nivel N0 · 2026-10-11 · Rama feat/n0-resultado-llamadas
+(desde main = origin/main = 9153532)
+Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+
+Fuentes: el encargo del Bloque A del 2026-10-11 (decisiones ya tomadas y
+pre-decisiones 1-11 del tutor), docs/Decisiones_D25_..., D26 y D27 (enteros),
+la Adenda (filas 3, 7, 8 y 9 de la tabla; secciones 3, 5.5, 5.7, 5.8 y 5.9),
+docs/Plan_Endpoint_Gate_Decisions.txt (entero), el plan modelo más reciente
+(docs/Plan_Resumen_Lista_Diaria.txt, secciones 0, 1, 8.4, 11 y 12), el código,
+los scripts, los JSON de n8n/ y la base de datos real, comprobados el mismo
+día (sección 0).
+
+Nota sobre nombres: D19-D27 son decisiones de Gabi (D19-D24 NO están en docs/:
+se citan por la Adenda y los planes; ver C13). Las "pre-decisiones" son las 11
+del tutor en el encargo. P1-P16 son las preguntas abiertas de ESTE plan
+(sección 11). K = hechos comprobados en el código, M = mediciones en la base
+de datos real, G = mediciones con git grep, C = contradicciones y hallazgos
+(sección 1), R = riesgos, N = pruebas en negativo, S = comprobaciones de los
+scripts de servicio, CASO = de los scripts HTTP. Ninguna de estas letras tiene
+que ver con las de otros planes.
+
+Vocabulario de este plan (para leerlo sin dudas):
+  - "llamada": la que hace administración a un cliente; su "tipo" es gate,
+    seguimiento o confirmacion_visita (los tres de D25.9).
+  - "resultado": lo que se registra tras la llamada (hoy se llama "decision").
+  - "ruta nueva": POST /resultados-llamada (nombre propuesto, P1).
+  - "alias": la ruta antigua POST /gate-decisions, que sigue funcionando
+    hasta que el formulario de n8n se actualice (D26.6).
+
+
+================================================================
+0. COMPROBACIONES HECHAS ANTES DE ESCRIBIR ESTE PLAN (solo lectura)
+================================================================
+
+Leído:
+  - CLAUDE.md, entero ("Cómo trabajamos" con las conexiones de prueba sin
+    commit, la regla de uso de la suite con la lección del 2026-10-10 sobre
+    la suspensión en las pruebas en negativo, el gotcha del PID del python
+    del venv, puertos, borrados, gotchas y las deudas C10 y C11).
+  - docs/Decisiones_D25_..., D26_... y D27_..., enteros.
+  - Adenda: tabla de la sección 1 (filas 3, 7, 8 y 9), secciones 3, 5.5,
+    5.7 (con sus notas del 2026-10-08 y 2026-10-11), 5.8 y 5.9.
+  - docs/Plan_Endpoint_Gate_Decisions.txt, entero (P1-P11; sobre todo P2,
+    P5 y P11, y la sección 7, R2 y D3).
+  - docs/Plan_Resumen_Lista_Diaria.txt: secciones 0, 1, 8.4, 11 y 12.
+  - Código: app/api/gate_decisions.py, app/schemas/gate_decisions.py,
+    app/services/gate_decisions_service.py, reglas_visita.py,
+    visits_service.py, condicion_seguimiento.py, followup_service.py,
+    listado_llamadas_service.py, ficha_oportunidad_service.py,
+    aviso_gate_service.py (su consulta), app/schemas/ficha_oportunidad.py,
+    app/schemas/aviso_gate.py y app/main.py (routers y manejador global).
+  - scripts/check_gate_decisions_http.py, check_gate_decisions_service.py y
+    check_migracion_decisiones_gate.py (estructura, ayudas y casos).
+  - docs/schema_actual.sql (decisiones_gate con su UNIQUE (oportunidad_id),
+    sus 4 CHECK y la clave foránea doble; visitas con el índice parcial
+    visitas_una_activa_por_oportunidad). Volcado del 2026-09-28; paso11 solo
+    insertó una fila en reglas_negocio, así que sigue siendo fiel.
+  - n8n/WF_formulario_gate.json y n8n/WF_ficha_oportunidad.json (qué leen
+    del backend; K9, K10).
+  - git log --oneline -6 y git status -sb: main = origin/main = 9153532,
+    árbol limpio (git pull --ff-only: "Already up to date"; git rev-parse
+    --short HEAD = 9153532). Rama creada desde ahí.
+
+Comprobado en el CÓDIGO:
+  - K1. gate_decisions_service.registrar_decision sigue el orden de la Adenda
+    5.5: 404 -> sin_presupuesto -> sin_gate -> ¿hay decisión? (igual: 200;
+    distinta: 409 decision_ya_registrada) -> estado_no_permitido -> (solo
+    visita_acordada) 503 / 422 de fecha / 409 visita_activa_existente ->
+    escritura. FOR UPDATE OF o; READ COMMITTED; sin segunda barrera en el
+    UPDATE de oportunidades (WHERE id = %s a secas). No tiene versión
+    "_con_cursor": abre su propia conexión.
+  - K2. El log de una decisión es 'gate_decision_registrada' con detalle
+    {decision_id, decision, motivo, visita_id, fecha_propuesta}; sin la
+    clave 'estado'. El 503 de visitas deja el log
+    'visita_configuracion_incompleta' con "origen": "gate_decisions".
+  - K3. El texto fijo de la visita acordada (P2 de /gate-decisions) es
+    "Visita acordada por teléfono por administración tras la revisión del
+    Gate." Habla del Gate: no sirve tal cual para un seguimiento (C4).
+  - K4. GET /gate-avisos (aviso_gate_service.py, líneas 149-171) hace LEFT
+    JOIN decisiones_gate d ON d.oportunidad_id = o.id y lee UNA fila: su
+    comentario dice "Como mucho UNA fila: presupuestos y decisiones_gate
+    tienen UNIQUE (oportunidad_id)". Su esquema (DecisionAviso.decision) es
+    el Enum DecisionGate: solo 'visita_acordada' y 'descartar'. Ver C3.
+  - K5. La ficha (ficha_oportunidad_service.py) lee las llamadas con
+    SQL_LLAMADAS sobre decisiones_gate, TODAS con tipo_llamada "gate"
+    (TipoLlamada solo tiene GATE) y resultado de tipo DecisionGate: una fila
+    con otro valor daría ValidationError (500) en la ficha. El historial lee
+    SOLO las cuatro acciones de ACCIONES_HISTORIAL; para
+    gate_decision_registrada deduce el estado de detalle ->> 'decision'. El
+    nombre de la acción es además un VALOR del contrato de la ficha
+    (EventoEstado.GATE_DECISION_REGISTRADA). Ver C10 y C14.
+  - K6. condicion_seguimiento.py tiene los seis criterios de b) y
+    primer_criterio_incumplido (lo que usa create-followup-task para dar el
+    409 del primero que falla). El apartado c) del listado es solo "estado
+    = 'seguimiento_pendiente'" con JOIN a presupuestos (sin criterio de
+    Gate). ESTADO_ABIERTO = 'seguimiento_pendiente' está definido en
+    followup_service.py y en listado_llamadas_service.py.
+  - K7. visits_service.solicitar_visita acepta 'presupuesto_enviado',
+    'seguimiento_pendiente' y 'visita_agendada' (para sustituir una
+    solicitada); con una visita CONFIRMADA de otra fecha da 409
+    visita_confirmada; con la MISMA fecha da 200 (también si está
+    confirmada). Bloquea la misma fila de oportunidades (FOR UPDATE OF o).
+    NO escribe fecha_ultimo_contacto. Los tres estados de visita que usa
+    /gate-decisions se importan de visits_service (deuda D3 de aquel plan).
+  - K8. El manejador global (app/main.py) guarda en el log de un 500 la
+    ruta de la petición (request.url.path): un 500 por el alias quedará con
+    "/gate-decisions" y uno por la ruta nueva con la nueva.
+    check_gate_decisions_http filtra sus 500 por detalle->>'ruta' =
+    '/gate-decisions'.
+  - K9. El formulario publicado (n8n/WF_formulario_gate.json) llama a GET
+    /gate-avisos (nodo leer_caso_gate) y a POST /gate-decisions (nodo
+    registrar_decision), y su nodo traducir_resultado LEE de la respuesta:
+    creado, decision, decision_id, fecha_propuesta, motivo, y los motivos
+    decision_ya_registrada, estado_no_permitido, visita_activa_existente,
+    sin_gate, sin_presupuesto y oportunidad_no_encontrada. El alias tiene que
+    conservarlos EXACTAMENTE (P2).
+  - K10. La página de la ficha publicada (n8n/WF_ficha_oportunidad.json)
+    traduce el evento gate_decision_registrada a "Resultado de la llamada
+    registrado". Un evento nuevo saldría sin traducir hasta que Gabi lo
+    añada (fuera de esta rama; R6).
+  - K11. Puertos: la suite usa 8010-8013, 8015, 8016, 8018-8020, 8023-8027,
+    8030 y 8031 (git grep en scripts/ y planes). netstat a las 16:4x del
+    2026-10-11: ningún proceso en 8019-8039; el 8000 lo ocupa el uvicorn de
+    Gabi (PID 27036, no se toca). Libre y sin uso: 8028 (pre-decisión 10).
+
+Comprobado en la BASE DE DATOS REAL (2026-10-11, now() = 14:43:04 UTC =
+16:43 en Madrid). Dos lecturas, fuera del repositorio:
+    scratchpad/medir_resultado_llamadas.py
+        SHA-256 48d120da637adbc447396fb2e746cbfcf1ddc62b0309ceeff9861dd91915adbf
+    una orden suelta de python -c (versión y permisos), sin archivo.
+Las dos: PRIMERA orden SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ
+ONLY (el script la confirma con current_setting al empezar y al terminar:
+'repeatable read' y 'on'); solo SELECT; terminan en ROLLBACK; imprimen solo
+recuentos, ids, fechas y longitudes, nunca un nombre, email, teléfono,
+informe o texto. medir_resultado_llamadas.py abre su conexión con
+ConexionSinCommit (autoprueba [OK]) porque pasa su cursor al leer_listado y
+al leer_ficha REALES de main.
+Las 4 preguntas de esta medición: (1) no escribe (READ ONLY + ROLLBACK);
+(2) el código que recibe la conexión es la versión buena de main, sin
+versiones rotas, y un commit lanzaría CommitProhibido; (3) si se corta, nada
+que deshacer; (4) no levanta servidor ni toca el 8000; solo lee.
+  - M1. Oportunidades por estado: nueva 8, pendiente_aprobacion 1, perdida
+    5, presupuesto_enviado 12, visita_agendada 1. TOTAL 27 (las mismas que
+    el 2026-10-10).
+  - M2. decisiones_gate: 6 filas, 6 oportunidades distintas (248, 249, 250,
+    251, 252 y 1525), max(id) 494. descartar con motivo 'otro' 5 (las cinco
+    en 'perdida'); visita_acordada 1 (1525, en 'visita_agendada').
+    Columnas de texto: decision VARCHAR(20), motivo VARCHAR(30) (ver C5).
+  - M3. Visitas: UNA en toda la tabla, 'confirmada', de la oportunidad 1525
+    (la del Gate). Ninguna 'solicitada' (el apartado d) no ha tenido nunca
+    un dato real) y ninguna oportunidad con más de una visita.
+    'visita_agendada' sin visita activa: 0.
+  - M4. La lista de HOY con el leer_listado REAL (reglas 24 y 48;
+    dia_visitas = lunes 2026-10-12). Elementos | sin la clave 'contacto':
+        a) gates_sin_decision          1 | 0   (1522)
+        b) seguimientos_por_abrir     12 | 4   (233, 234, 243, 253, 469, 586,
+                                                587, 1523, 1524, 1526, 1527,
+                                                1528)
+        c) seguimientos_abiertos       0 | 0
+        d) visitas_sin_confirmar       0 | 0
+        e) visitas_proximo_laborable   0 | 0
+  - M5. Los 12 'presupuesto_enviado' salen TODOS en b) (ninguno incumple un
+    criterio). Por fecha del presupuesto, los 8 de D25.16 son los que ya
+    tenían más de 48 h en la medición B6 del plan del listado (2026-10-07
+    13:09 UTC, es decir, presupuesto anterior a 2026-10-05 13:09 UTC): 233,
+    234, 243, 253 (los 4 sin 'contacto'), 469, 586, 587 y 1523. Es una
+    DEDUCCIÓN (ningún plan escribió sus ids); cuadra con "8, 4 sin contacto"
+    (ver C7).
+  - M6. logs: gate_decision_registrada 6 y presupuesto_calculado 19 (todos
+    entity_type 'oportunidad'). Claves del detalle de los 6 logs de decisión:
+    decision, decision_id, fecha_propuesta, motivo y visita_id (sin
+    'estado'). Logs de decisión sin fila en decisiones_gate: 0.
+  - M7. fecha_ultimo_contacto NO NULL: 6 (perdida 5, visita_agendada 1),
+    todas escritas por POST /gate-decisions.
+  - M8. Con Gate: pendiente_aprobacion 1, perdida 5, visita_agendada 1 (los
+    7 casos con Gate). 'presupuesto_enviado' con Gate: 0; sin presupuesto:
+    0 (solo las 8 'nueva').
+  - M9. La ficha REAL de las 27 oportunidades: 27 sin error, 27 cuadran, 6
+    con llamadas. Es la línea de base de la pre-decisión 5.
+  - M10. PostgreSQL 17 (server_version_num 170006). anon y authenticated
+    tienen TODOS los permisos de tabla sobre decisiones_gate (DELETE,
+    INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE): hoy solo los
+    frena RLS (Decision_RLS_N0.txt). Vistas en public: 0. Ver R2.
+
+Recuento del RENOMBRADO (pre-decisión 1), con git grep sobre el árbol de
+main (9153532). En Git Bash, los comandos que buscan "/gate-decisions" se
+lanzan con MSYS_NO_PATHCONV=1 (gotcha de CLAUDE.md: sin él, la primera
+pasada dio 0 en todas partes porque Git Bash convirtió el patrón en una
+ruta de Windows).
+  - G1. Menciones por carpeta (archivos | líneas), cualquier contexto:
+        patrón                      app        scripts     docs        n8n
+        decisiones_gate             7 | 26     11 | 67     9 | 84      0
+        gate_decisions              9 | 20      2 | 6      10 | 51      0
+        /gate-decisions            22 | 50     10 | 51     17 | 121    1 | 3
+        GateDecision                5 | 14      1 | 3       2 | 3      0
+        gate_decision_registrada    3 | 5       4 | 16      4 | 17     1 | 1
+        DecisionGate                7 | 23      0           1 | 1      0
+        MotivoDescarte              3 | 9       0           1 | 1      1 | 1
+        registrar_decision          2 | 4       1 | 4       2 | 2      1 | 3
+    Comando (uno por patrón y carpeta):
+        MSYS_NO_PATHCONV=1 git grep -l -F -- "<patrón>" -- <carpeta> | wc -l
+        MSYS_NO_PATHCONV=1 git grep -n -F -- "<patrón>" -- <carpeta> | wc -l
+    Y CLAUDE.md: 16 líneas (git grep -c).
+  - G2. Separando CÓDIGO (nombres y textos que el programa usa) de
+    comentarios y docstrings, con tokenize y ast
+    (scratchpad/medir_renombrado.py, SHA-256
+    0899b4dfdbe51002f56e049180514520fa4f0b8b13acecc8e05f4bfc08bd5cf1):
+        app/:     9 archivos con código afectado, 52 líneas de código y 91
+                  solo de comentario (25 archivos con alguna mención).
+                  Con código: api/gate_decisions.py 7, api/security.py 1 (un
+                  mensaje de error de arranque), main.py 2,
+                  schemas/aviso_gate.py 3, schemas/ficha_oportunidad.py 4,
+                  schemas/gate_decisions.py 9, services/aviso_gate_service.py
+                  1 (el nombre de la tabla en su SQL),
+                  services/ficha_oportunidad_service.py 7 y
+                  services/gate_decisions_service.py 18.
+        scripts/: 11 archivos con código afectado, 77 líneas de código.
+                  Dos son migraciones YA EJECUTADAS (paso10 y paso10b: son
+                  un registro y no se tocan), así que quedan 9 scripts de la
+                  suite.
+  - G3. Qué usa cada script de la suite, en líneas que no son comentario
+    (grep; "ruta" incluye algunas líneas de docstring):
+        script                              ruta  módulos  tabla  acción log
+        check_aviso_gate_http                5      0        4       0
+        check_ficha_oportunidad_http         3      0        3       6
+        check_ficha_oportunidad_service      0      0        1       6
+        check_followup_tasks_http            4      0        1       0
+        check_gate_decisions_http            9      0        7       3
+        check_gate_decisions_service         4      2        3       1
+        check_listado_llamadas_http          4      0        2       0
+        check_migracion_decisiones_gate      1      0       12       0
+        check_migracion_iva_y_seguimiento    2      0        0       0
+    "ruta": llaman a POST /gate-decisions por HTTP (preparan datos o lo
+    prueban). "módulos": importan app.schemas.gate_decisions o
+    app.services.gate_decisions_service. "tabla": escriben decisiones_gate
+    en su SQL (consultas o limpieza). "acción log": el texto
+    gate_decision_registrada.
+    Consecuencia: si la RUTA vieja sigue como alias, ningún script cambia
+    por la ruta; si la TABLA se renombra, cambian 8 scripts; si se mueven los
+    MÓDULOS, cambia 1 (check_gate_decisions_service, 2 imports); si se
+    renombra la ACCIÓN del log, cambian 4.
+
+
+================================================================
+1. CONTRADICCIONES Y HALLAZGOS DETECTADOS ANTES DE DISEÑAR
+================================================================
+
+  C1. Pre-decisión 4 dice que, en cada apartado, "sale en la lista" y "se
+      puede registrar (201)" tienen que COINCIDIR. Para a) no puede ser una
+      equivalencia: un Gate de menos de 24 h no sale en a) (D25.15) pero
+      TIENE que poder registrarse, porque administración llama el mismo día
+      del aviso de WF2 (D25.14) y el formulario publicado lo hace hoy. Se
+      propone: "sale ⇒ se puede registrar" en los cinco apartados, y la
+      equivalencia (⇔) solo en b), c) y d), donde las condiciones son las
+      mismas. En e), una visita YA 'confirmada' es un recordatorio, sin
+      resultado que registrar (la excepción que ya anotaba el tutor). Ver
+      8.3.
+  C2. Pre-decisión 3, ejemplo "me lo pienso" en un seguimiento: es cierto
+      que seguiría saliendo en c) cada día. Para el Gate, eso mismo ya está
+      DECIDIDO (D19, Adenda sección 3, paso 4: "Si el cliente quiere
+      pensarlo, administración NO registra nada"), y D25.14 lo da por
+      bueno ("es normal dejar margen"). Registrar "sin_cambio" reabre D19 y
+      se solapa con el registro de intentos de llamada (D24.4, condicionado
+      al 6 de noviembre, D25.5). Lo evalúa la sección 5.3.
+  C3. GET /gate-avisos (WF2 y el formulario, PUBLICADOS) da por hecho que
+      decisiones_gate tiene como mucho UNA fila por oportunidad y que
+      decision es uno de los dos valores del Gate (K4). D26.6 decide que
+      gate-avisos NO cambia. Cualquier opción que admita varias filas, o un
+      valor nuevo, en un caso CON Gate obligaría a cambiar su consulta y su
+      contrato. Ver 5.3.
+  C4. El texto fijo de la visita acordada (K3) habla de la "revisión del
+      Gate". En una visita acordada en un seguimiento sería falso, y se ve en
+      la ficha y en d)/e) de la lista (D26.1). Hacen falta textos fijos por
+      tipo (P8).
+  C5. decisiones_gate.decision es VARCHAR(20) (M2). Un nombre como
+      "confirmar_hora_pedida" (21 caracteres) no cabe. Se proponen nombres
+      de hasta 20 (sección 2.3); la alternativa, ampliar la columna, es
+      otra migración (P5).
+  C6. El encargo dice que "no contesta" NO entra en este bloque (D25.5,
+      D25.6, D24.4), pero 'no_contesta' YA es un motivo de descarte del Gate
+      (paso10, CHECK chk_decisiones_gate_motivo) y el catálogo es único
+      (D25.9). Lo que queda fuera es registrar un INTENTO sin respuesta; un
+      descarte DEFINITIVO con motivo 'no_contesta' (después de los 3
+      intentos de D24.3, que el sistema no controla) existe desde D19. Se
+      propone mantenerlo para Gate y seguimiento y prohibirlo en
+      cliente_cancela (quien cancela, contestó). P7.
+  C7. D25.16 habla de "8 casos de prueba". Por la medición (M5), son 233,
+      234, 243, 253, 469, 586, 587 y 1523. 1523 no es un dato de un script:
+      es una solicitud del chat (canal chat_web, 4 de octubre; M6 del plan
+      del resumen). Y la nota de M3 del plan del resumen ("cinco
+      solicitudes reales ... cumplieron su plazo" entre el 07/10 y el
+      10/10) es inexacta: fueron cuatro (1524, 1526, 1527 y 1528); 1523 ya
+      estaba entre los 8. Se corrige con una nota fechada en el Bloque D
+      (los registros no se reescriben).
+  C8. Renombrar la TABLA es retirar un nombre que main usa (WF2, el
+      formulario y la ficha, a través del uvicorn del 8000, que comparte la
+      base de datos). Por la regla expand/contract (memoria del proyecto,
+      caso paso8), no se puede hacer en un solo paso. Ver 4.2.
+  C9. La migración de este bloque (paso12) cambia lo que mide
+      check_migracion_decisiones_gate (7 columnas, 4 CHECK): ese script,
+      que está en la suite, FALLARÁ hasta que se actualice en el mismo
+      bloque. Y check_schema_actual_ejecutable exige regenerar
+      docs/schema_actual.sql justo después de migrar. Ver 4.4.
+  C10. El nombre de la acción gate_decision_registrada no es solo interno:
+      es un valor del contrato de la ficha (K5) y lo traduce la página
+      publicada de la ficha (K10); 6 logs reales lo llevan (M6). Renombrarlo
+      cambia el contrato de la ficha y obliga a tocar n8n o los datos
+      reales. Ver 5.5.
+  C11. Carrera en la confirmación: entre la lista de las 9:00 y la llamada,
+      el cliente puede cambiar la hora pedida desde el chat (POST /visits
+      sustituye una 'solicitada', K7). Si "confirmar la hora pedida" no
+      lleva la hora que administración leyó al cliente, el backend
+      confirmaría una hora que nadie le ha confirmado. La ficha no da
+      visita_id (minimización), así que la comprobación se hace por la fecha
+      y la hora (sección 2.3, 409 visita_cambiada).
+  C12. El apartado d) incluye visitas 'solicitada' de fecha YA PASADA
+      (Adenda 5.7). Esas no se pueden "confirmar tal cual": confirmar_hora
+      vuelve a pasar validar_fecha y da 422 fecha_pasada; queda otra_hora o
+      cliente_cancela.
+  C13. El encargo cita "decisión definitiva de D21.5". D19-D24 no están en
+      docs/ (CLAUDE.md, nota del 2026-10-06): no puedo leer D21.5. Lo que sí
+      está escrito es R2 del plan de /gate-decisions y la limitación
+      "Decisión definitiva" de la Adenda 5.5, que es lo que este plan revisa.
+  C14. La ficha dará 500 con la primera fila de un tipo nuevo si su esquema
+      no se amplía en el MISMO commit (K5: Enum de resultado y TipoLlamada).
+      El plan de la ficha ya lo preveía ("4b añadirá valores, no campos").
+      No es opcional.
+  C15. Pre-decisión 8: la ficha trae casi todo lo que el formulario
+      necesita, salvo saber si un 'presupuesto_enviado' cumple ya la
+      condición de b) (plazo y contacto). Ver 5.8 y P9.
+  C16. La ruta /gate-decisions también la usan, para PREPARAR datos, otros
+      cinco scripts de la suite (G3). Mientras exista el alias, no cambian;
+      el día que se quite (otra rama), sí.
+
+
+================================================================
+2. CONTRATO DE POST /resultados-llamada (nombre en P1)
+================================================================
+
+2.1 Quién lo llama y para qué
+  El formulario de n8n que administración rellena DESPUÉS de una llamada
+  (D25.10), nunca un agente de IA. Registra el resultado de cualquiera de
+  los tres tipos de llamada de GET /llamadas-del-dia. Cabecera X-Gate-Secret
+  (GATE_SECRET, "llave de administración": conserva su nombre, D25.9). Solo
+  REST, sin tool MCP.
+
+2.2 El tipo de llamada lo DEDUCE el backend (pre-decisión 2, sección 5.2)
+  En este orden, con la fila de la oportunidad bloqueada:
+    1. Tiene una visita 'solicitada'          -> confirmacion_visita
+    2. estado 'pendiente_aprobacion'          -> gate
+    3. estado 'seguimiento_pendiente'         -> seguimiento (apartado c)
+    4. estado 'presupuesto_enviado' y cumple
+       los seis criterios de b)               -> seguimiento (apartado b)
+       (condicion_seguimiento.py, sin copiar;
+       si no, 409 con el motivo del primero
+       que falla, como create-followup-task)
+    5. cualquier otro caso                    -> 409 estado_no_permitido
+  La deducción vive en UN sitio (función nueva deducir_tipo_llamada, en un
+  módulo de services/, P10), para que la use también la ficha si se aprueba
+  P9.
+
+2.3 Entrada (JSON, extra="forbid")
+  oportunidad_id  entero > 0.
+  resultado       uno de cinco (C5: todos de 20 caracteres o menos):
+                    gate y seguimiento:
+                      'visita_acordada'  (15) la de hoy
+                      'descartar'        (9)  la de hoy
+                    confirmacion_visita (D25.10, D25.11):
+                      'confirmar_hora'   (14) se confirma la hora PEDIDA
+                      'otra_hora'        (9)  se confirma OTRA hora
+                      'cliente_cancela'  (15) el cliente cancela
+  fecha, hora     YYYY-MM-DD y HH:MM (Madrid), los validadores compartidos
+                  de common.py. OBLIGATORIAS con visita_acordada,
+                  confirmar_hora (la hora pedida, tal como la leyó
+                  administración: C11) y otra_hora (la nueva); PROHIBIDAS con
+                  descartar y cliente_cancela.
+  motivo          el catálogo de hoy ('precio', 'plazo', 'no_contesta',
+                  'proyecto_no_viable', 'otro'; P7 sobre si hace falta uno
+                  más). OBLIGATORIO con descartar y cliente_cancela
+                  (cliente_cancela NO admite 'no_contesta', C6); PROHIBIDO
+                  con los otros tres.
+  informe         1 a 2000 caracteres tras recortar; siempre obligatorio
+                  (el validador compartido de hoy).
+  Las combinaciones prohibidas dan 422 de Pydantic antes de tocar la base
+  de datos. Que el resultado corresponda al TIPO (que solo se sabe con la
+  base de datos) es un 409 de negocio, resultado_no_admitido.
+
+2.4 Efectos, en UNA transacción (READ COMMITTED, FOR UPDATE OF o, como hoy)
+  Comunes a todos los 201: una fila en decisiones_gate (con tipo_llamada,
+  columna nueva, 4.1); oportunidades.fecha_ultimo_contacto = now() y
+  updated_at = now() (pre-decisión 7), con segunda barrera "AND estado =
+  <el estado leído>" y rowcount = 1 (como create-followup-task); un log
+  (5.5) con la clave 'estado' del estado en que queda la oportunidad.
+    gate / seguimiento, visita_acordada:
+      INSERT visita 'confirmada' (texto fijo de su tipo, P8); fila con su
+      visita_id; oportunidad -> 'visita_agendada'.
+    gate / seguimiento, descartar:
+      fila con el motivo y visita_id NULL; oportunidad -> 'perdida'.
+    confirmacion_visita, confirmar_hora:
+      UPDATE de la visita 'solicitada' a 'confirmada' (updated_at = now();
+      segunda barrera AND estado = 'solicitada', rowcount = 1); fila con
+      ESA visita_id; la oportunidad sigue en 'visita_agendada'.
+    confirmacion_visita, otra_hora:
+      UPDATE de la 'solicitada' a 'cancelada' y DESPUÉS INSERT de la nueva
+      'confirmada' (en ese orden, por el índice parcial de una visita
+      activa; texto fijo, P8); fila con la visita NUEVA; sigue en
+      'visita_agendada'.
+    confirmacion_visita, cliente_cancela:
+      UPDATE de la 'solicitada' a 'cancelada'; fila con el motivo y la
+      visita CANCELADA como visita_id (para que la ficha diga cuál);
+      oportunidad -> 'perdida' (D25.11).
+  presupuestos no se toca nunca (Gate permanente; aprobado_por NULL).
+
+2.5 Respuesta (201 o 200)
+  llamada_id          id de la fila de decisiones_gate.
+  oportunidad_id
+  tipo_llamada        gate | seguimiento | confirmacion_visita.
+  resultado
+  motivo              o null.
+  estado_oportunidad  'visita_agendada' o 'perdida' (en una repetición, el
+                      de ese momento).
+  visita_id           la visita confirmada (o la cancelada en
+                      cliente_cancela); null en descartar.
+  fecha_visita        su inicio en Madrid con su desfase; null en descartar
+                      y cliente_cancela. (Hoy "fecha_propuesta"; se usa el
+                      nombre de la ficha y de la lista, P2.)
+  visita_cancelada_id la 'solicitada' cancelada en otra_hora y
+                      cliente_cancela; null en los demás.
+  creado
+  NUNCA importes ni datos personales (defensa doble como hoy: la consulta no
+  los lee y el esquema no tiene dónde ponerlos).
+
+2.6 Idempotencia (una fila por oportunidad, opción A de 5.3)
+  La MISMA petición repetida -> 200, creado=false, sin escribir nada (ni
+  fecha_ultimo_contacto, ni visitas, ni log); el informe nuevo se ignora:
+    visita_acordada, confirmar_hora, otra_hora: mismo resultado, misma
+      fecha y hora.
+    descartar, cliente_cancela: mismo resultado y mismo motivo.
+  Cualquier otra con una fila ya registrada -> 409 resultado_ya_registrado.
+
+2.7 Tabla de códigos
+| Código | motivo | Cuándo |
+|---|---|---|
+| 201 | — | Resultado nuevo registrado |
+| 200 | — | Repetición exacta (2.6); no escribe nada |
+| 401 | — | Falta X-Gate-Secret o es incorrecto (también el valor de WEBHOOK_SECRET), antes del cuerpo |
+| 422 | (Pydantic) | Forma: campo de más, valor fuera de lista, combinación prohibida (2.3), informe, formatos |
+| 404 | oportunidad_no_encontrada | No existe (también 2147483648 y 99999999999999999999) |
+| 409 | sin_presupuesto | Sin presupuesto |
+| 409 | resultado_ya_registrado | Ya hay un resultado DISTINTO registrado |
+| 409 | estado_no_permitido | El estado no corresponde a ninguna llamada (2.2, paso 5) |
+| 409 | con_gate / contacto_registrado / visita_existente / plazo_no_cumplido | 'presupuesto_enviado' que no cumple un criterio de b) (el primero, condicion_seguimiento) |
+| 409 | resultado_no_admitido | El resultado no es de ese tipo de llamada (formulario desfasado) |
+| 503 | configuracion_incompleta | Solo con visita: falta una regla de visita; log conservado (origen, P12) |
+| 422 | fecha_pasada / fin_de_semana / fuera_de_franja | La fecha incumple validar_fecha (también confirmar_hora sobre una pedida ya pasada, C12) |
+| 409 | visita_activa_existente | visita_acordada con una visita activa (P1 de /gate-decisions) |
+| 409 | visita_cambiada | confirmar_hora con una fecha distinta de la pedida (C11) |
+| 422 | misma_hora_pedida | otra_hora con la misma fecha y hora que la pedida (debería ser confirmar_hora) |
+| 500 | — | Error no controlado |
+
+2.8 Orden de las comprobaciones
+  401 -> 422 de forma -> 404 (tras el FOR UPDATE) -> 409 sin_presupuesto
+  -> ¿hay resultado? (igual: 200; distinto: 409 resultado_ya_registrado)
+  -> tipo (2.2: 409 estado_no_permitido o el criterio de b)) -> 409
+  resultado_no_admitido -> solo con visita: 503 -> 409 visita_cambiada /
+  422 misma_hora_pedida -> 422 de fecha -> 409 visita_activa_existente ->
+  escritura.
+  La repetición sigue ANTES que el estado (por el mismo motivo de hoy: tras
+  el 201 el estado ya cambió). sin_gate desaparece de la ruta nueva: una
+  oportunidad sin Gate ahora puede tener resultado (seguimiento).
+
+2.9 El alias POST /gate-decisions (D26.6; P2)
+  Mismo contrato que hoy, campo a campo y motivo a motivo (Adenda 5.5 y
+  K9), y SOLO para el Gate: llama a la MISMA función del servicio con un
+  parámetro solo_gate=True, que añade el 409 sin_gate en su sitio de hoy y
+  traduce los nombres (decision <-> resultado, decision_id <-> llamada_id,
+  fecha_propuesta <-> fecha_visita, decision_ya_registrada <->
+  resultado_ya_registrado). Así el formulario publicado no nota nada, y
+  check_gate_decisions_http sigue dando 121/121 SIN tocarlo también después
+  de la ampliación.
+
+
+================================================================
+3. CONSULTAS Y CÓDIGO (resumen; el detalle va en B1 y B2)
+================================================================
+
+  - La consulta inicial de hoy, más la visita 'solicitada' activa (fecha e
+    id) con un LEFT JOIN o una segunda consulta tras el bloqueo.
+  - El resultado previo: SELECT de decisiones_gate (como hoy) más
+    tipo_llamada y visita_cancelada_id (P11: ¿columna o solo en el log?).
+  - b): primer_criterio_incumplido(columnas_criterios()) con los parámetros
+    de parametros_condicion, como followup_service (sin copiar nada).
+  - ESTADO_ABIERTO, VISITA_SOLICITADA, VISITA_CANCELADA y los demás estados
+    se IMPORTAN de donde ya están; ninguno se escribe de nuevo.
+  - Una función registrar_resultado_con_cursor(cursor, data, solo_gate)
+    con el trabajo, y registrar_resultado(data, solo_gate) que abre la
+    transacción (patrón de followup_service): permite probar el servicio
+    con ConexionSinCommit y ROLLBACK (S, sección 8.1).
+
+
+================================================================
+4. MIGRACIONES
+================================================================
+
+4.1 paso12 (Bloque B2-M): solo AÑADE y AMPLÍA (expand). main sigue
+    funcionando contra la base de datos migrada.
+  scripts/migraciones_ejecutadas/paso12_resultado_llamadas.py, una
+  transacción, idempotente (cada paso mira antes si ya está hecho):
+    1. ALTER TABLE decisiones_gate ADD COLUMN tipo_llamada VARCHAR(20) NOT
+       NULL DEFAULT 'gate';  -- las 6 filas reales son del Gate (M2)
+    2. CHECK chk_decisiones_gate_tipo_llamada:
+         tipo_llamada IN ('gate', 'seguimiento', 'confirmacion_visita')
+    3. chk_decisiones_gate_decision, ampliado (DROP + ADD con el mismo
+       nombre, en la misma transacción) a los cinco resultados de 2.3.
+    4. chk_decisiones_gate_coherencia, ampliado con el patrón de paso10b
+       (una implicación por valor: qué ACOMPAÑA a cada uno):
+         visita_acordada, confirmar_hora, otra_hora -> visita_id NOT NULL,
+           motivo NULL;
+         descartar -> motivo NOT NULL, visita_id NULL;
+         cliente_cancela -> motivo NOT NULL, visita_id NOT NULL.
+    5. CHECK chk_decisiones_gate_tipo_resultado (qué resultados tiene cada
+       tipo; una sola responsabilidad, como paso10b):
+         (tipo_llamada <> 'confirmacion_visita' OR decision IN
+            ('confirmar_hora', 'otra_hora', 'cliente_cancela'))
+         AND (tipo_llamada = 'confirmacion_visita' OR decision IN
+            ('visita_acordada', 'descartar'))
+    6. Si P11 = columna: visita_cancelada_id INTEGER NULL con clave foránea
+       DOBLE (visita_cancelada_id, oportunidad_id) -> visitas (id,
+       oportunidad_id), como visita_id.
+    7. COMMENT ON TABLE decisiones_gate: "Resultados de las llamadas de
+       administración (Gate, seguimiento y confirmación de visita). Nombre
+       histórico de la tabla: ver docs/Plan_Resultado_Llamadas.txt." (solo
+       si P3 = b).
+  El UNIQUE (oportunidad_id) NO cambia (opción A de 5.3), ni el CHECK de
+  motivo (salvo P7), ni RLS, ni la clave doble de visita_id.
+  Por qué main no se rompe: main inserta (oportunidad_id, visita_id,
+  decision, motivo, informe) con 'visita_acordada' o 'descartar' -> el
+  DEFAULT pone 'gate' y los CHECK ampliados lo aceptan; gate-avisos y la
+  ficha de main no leen la columna nueva. Se demuestra (4.3).
+  Contracción, DESPUÉS del merge y en otra migración (P13): ALTER COLUMN
+  tipo_llamada DROP DEFAULT, para que un código que olvide el tipo dé error
+  en vez de escribir 'gate' en silencio (ver N6).
+
+4.2 Solo si P3 = a) (renombrar la tabla): paso12r, expand/contract (C8)
+  Expandir (antes de B1): ALTER TABLE decisiones_gate RENAME TO
+  resultados_llamada (y sus 7 restricciones), y CREATE VIEW decisiones_gate
+  WITH (security_invoker = true) AS SELECT * FROM resultados_llamada, más
+  REVOKE ALL ON decisiones_gate FROM anon, authenticated. Una vista simple
+  admite INSERT ... RETURNING (main sigue escribiendo por ella).
+  security_invoker (PostgreSQL 15+, aquí 17, M10) hace que la vista aplique
+  el RLS de la tabla; sin él, la vista leería como su dueño y abriría las
+  decisiones a la Data API pública (R2). Contraer (después del merge y de
+  quitar el alias, otra rama): DROP VIEW. Es una migración más, una vista a
+  probar y una ventana con dos nombres para lo mismo.
+
+4.3 Verificación de paso12 (scripts/check_migracion_resultado_llamadas.py)
+  Como check_migracion_decisiones_gate: TODO en una transacción que acaba
+  en ROLLBACK, cada intento en su SAVEPOINT, rama else con "la excepción se
+  ha tragado", y --quitar <restricción> para las pruebas en negativo (cada
+  CHECK nuevo quitado DENTRO de la transacción; la tabla real los conserva).
+    Antes de migrar (para enseñar que el script detecta lo que falta): las
+    comprobaciones de estructura nuevas FALLAN (se espera N_antes/N).
+    Después: columna, CHECK nuevos y ampliados, las 6 filas reales con
+    tipo_llamada 'gate' (sin tocar ninguna otra columna: mismas filas,
+    mismos valores, comparados con una foto de solo lectura tomada antes),
+    RLS sigue activado, UNIQUE y clave doble intactos.
+    Comportamiento: aceptados los 5 resultados con su tipo y lo que los
+    acompaña; rechazados confirmar_hora con tipo gate, visita_acordada con
+    tipo confirmacion_visita, cliente_cancela sin visita o sin motivo,
+    otra_hora sin visita, un tipo inventado, y DOS filas para la misma
+    oportunidad (el UNIQUE sigue).
+  Compatibilidad con main, por ejecución real: desde una copia de main
+  (git worktree en el scratchpad, con su .env), contra la base de datos YA
+  migrada, check_gate_decisions_http 121/121, check_aviso_gate_http 75/75 y
+  check_ficha_oportunidad_http 69/69 (puertos propios, nunca el 8000).
+  Las 4 preguntas de paso12 (con su [PARA] propio y la confirmación de
+  Gabi, regla del encargo):
+    (1) Sí escribe en una tabla real (estructura de decisiones_gate y el
+        DEFAULT en sus 6 filas), en UNA transacción.
+    (2) No hay código bajo prueba: es SQL fijo del script; no hay versiones
+        rotas de la migración (las negativas van en el script de
+        verificación, que termina en ROLLBACK).
+    (3) Si se corta a mitad, la transacción entera se deshace sola
+        (Postgres); el script es idempotente y se puede repetir. Lo
+        comprueba check_migracion_resultado_llamadas (antes/después) y una
+        foto de solo lectura de las 6 filas.
+    (4) Toca algo en uso: la tabla que leen WF2, el formulario y la ficha
+        por el uvicorn del 8000. Por eso es solo expand, y se demuestra con
+        los scripts de main (arriba). Se ejecuta con Gabi avisado, sin un
+        formulario abierto a medias.
+  Vuelta atrás escrita (NO se ejecuta salvo que haga falta), en una
+  transacción: borrar ANTES las filas de tipo distinto de 'gate' (solo
+  habrá filas propias de los scripts; si hubiera alguna real, se para y se
+  avisa), DROP de chk_decisiones_gate_tipo_resultado y
+  chk_decisiones_gate_tipo_llamada, restaurar las definiciones de paso10b
+  de decision y coherencia (DROP + ADD), DROP COLUMN tipo_llamada (y
+  visita_cancelada_id si existe), y COMMENT ON TABLE ... IS NULL.
+
+4.4 Lo que la migración obliga a cambiar en el mismo bloque (C9)
+  - check_migracion_decisiones_gate: sus comprobaciones de estructura (7
+    columnas, 4 CHECK y la definición de coherencia) pasan a describir la
+    tabla de paso12, con una nota fechada. Sus pruebas de comportamiento
+    siguen valiendo. Su recuento puede cambiar: se dará el real.
+  - docs/schema_actual.sql: regenerado con dump_schema.py, y
+    check_schema_actual_ejecutable debe dar su N/N.
+  - check_rls_estado: sin errores.
+
+
+================================================================
+5. PRE-DECISIONES
+================================================================
+
+5.1 Pre-decisión 1: alcance del renombrado (Regla de Tres, con G1-G3)
+  Coste en archivos que cambian (código, no comentarios) y scripts de la
+  suite que cambian, solo por el renombrado (B1), sin contar la ampliación:
+    a) Renombrado completo: tabla, ruta, servicio, esquemas, scripts y,
+       según P4, la acción del log.
+       app/: 9 archivos con código (52 líneas) + la tabla en 4 consultas.
+       scripts: 8 de la suite cambian su SQL (G3, columna "tabla") + 1 por
+       los imports; check_migracion_decisiones_gate se reescribe (12
+       nombres de restricción). check_gate_decisions_http deja de ser
+       "sin tocar" (7 líneas de SQL): la prueba de "mismo comportamiento"
+       pasa a ser "mismo recuento con el script cambiado SOLO en nombres"
+       (se enseñaría con git diff).
+       Migración paso12r con vista, security_invoker y REVOKE (4.2), su
+       script, su [PARA] y una contracción posterior. n8n: nada en B1.
+       Estimación: unos 20 archivos de código y scripts, 2 migraciones más.
+    b) Renombrar solo el contrato público (ruta, esquemas, servicio) y
+       mantener la tabla decisiones_gate con COMMENT ON TABLE y una nota.
+       app/: 8 archivos (servicio y esquemas nuevos, api nueva y alias,
+       main.py, y los imports de aviso_gate.py y de la ficha).
+       scripts: 1 (check_gate_decisions_service, 2 imports, como el ajuste
+       de check_visits_service en C1 de /gate-decisions);
+       check_gate_decisions_http SIN TOCAR -> 121/121 es la prueba limpia de
+       "sin cambios". Sin migración en B1 (el COMMENT va en paso12).
+       Estimación: unos 9 archivos.
+    c) No renombrar (la salida de D25.9 para el 15 de octubre): 0 archivos
+       en B1; la ampliación se escribe en gate_decisions_*. Contra: la ruta,
+       el servicio y los esquemas se llamarían "decisión del Gate" para
+       llamadas que no lo son, en el contrato que leerá el formulario
+       ampliado (D26.6 rechazó esto como "nombre engañoso permanente").
+  Propuesta de este plan: b). Es la que conserva la prueba
+  más fuerte (un script de 121 comprobaciones que no se toca), no toca la
+  base de datos en B1, no abre la Data API (R2) y deja el contrato que leerá
+  n8n con su nombre definitivo. Lo que b) NO arregla, dicho claro: la TABLA
+  sigue llamándose decisiones_gate y guardará llamadas que no son del Gate;
+  es justo el defecto por el que D26.6 rechazó su opción B, aunque aquí solo
+  en la base de datos (que no ve n8n) y con un COMMENT que lo explica.
+  Decide Gabi con estos números (P3; punto de control del 15 de octubre).
+
+5.2 Pre-decisión 2: cómo se sabe el tipo de llamada (Regla de Tres)
+    a) Lo envía el formulario (campo "tipo") y el backend lo comprueba.
+       Contra: dos fuentes de la misma verdad; el formulario tendría que
+       repetir la deducción de 2.2 (incluida la condición de b), que n8n no
+       puede calcular, C15).
+    b) Lo deduce el backend (2.2) y el resultado lo delata: los resultados
+       de cada tipo no se solapan entre gate/seguimiento y confirmación, así
+       que un formulario desfasado (el cliente pidió visita entre la lista y
+       la llamada) da 409 resultado_no_admitido con un mensaje que dice el
+       tipo actual. Una sola fuente.
+    c) Los dos: el formulario envía el tipo y el backend exige que coincida
+       con el deducido. Contra: un campo más que solo sirve para un mensaje
+       de error algo más claro; el caso que importa (seguimiento ->
+       confirmación) ya lo detecta b).
+  Propuesta: b). Lo único que b) no distingue es Gate frente a seguimiento,
+  y no hace falta: tienen los mismos resultados y el mismo efecto (D25.10,
+  "las mismas páginas"), y un caso no puede pasar de uno a otro (el Gate es
+  permanente). La respuesta devuelve tipo_llamada.
+  Seguimiento: 'seguimiento_pendiente' (c) Y TAMBIÉN 'presupuesto_enviado'
+  que cumpla b), con condicion_seguimiento.py. Motivo: b) sale en la lista,
+  así que tiene que poder registrarse (C1); y si WF3 no llegó a abrir el
+  seguimiento (create-followup-task falló esa mañana), administración puede
+  igualmente cerrar la llamada. Un 'presupuesto_enviado' que no cumple b)
+  (por ejemplo, de hace 10 h) da el 409 del criterio, el mismo que daría
+  create-followup-task.
+
+5.3 Pre-decisión 3: una fila por oportunidad (Regla de Tres)
+  Hallazgo previo: con resultados DEFINITIVOS, ningún camino de N0 lleva a
+  una segunda llamada registrable en la misma oportunidad. Tras cualquier
+  201 la oportunidad queda en 'visita_agendada' con una visita CONFIRMADA
+  (POST /visits ya no la cambia: 409 visita_confirmada, K7) o en 'perdida'
+  (POST /visits: 409 estado_no_permitido), y un Gate nunca tiene una
+  'solicitada' (POST /visits lo rechaza). Recorridos revisados: Gate ->
+  resultado; presupuesto_enviado -> (b/c) -> resultado; presupuesto_enviado
+  o seguimiento -> visita pedida -> confirmación; confirmación con otra hora
+  -> e) al día siguiente (recordatorio, sin resultado).
+    A) Una sola fila definitiva por oportunidad (se mantiene el UNIQUE).
+       "Me lo pienso" no se registra (como el Gate desde D19, C2) y el
+       elemento sigue en a) o c) cada día: es el recordatorio (D25.14).
+       Efectos: la lista no cambia; la ficha lista como mucho una llamada
+       (ya lo soporta); create-followup-task no cambia (tras un resultado el
+       estado ya no es 'presupuesto_enviado', y su 409 es
+       estado_no_permitido antes que contacto_registrado); gate-avisos no
+       cambia (C3).
+    B) Varias filas, como registro de llamadas. Quitar el UNIQUE es retirar
+       algo (expand/contract) y deja sin su segunda barrera la
+       concurrencia. Obliga a cambiar gate-avisos (C3, contra D26.6) y a
+       definir cuál es "el resultado vigente" en la ficha y en la
+       repetición.
+    C) Resultado "sin_cambio" que solo anota la llamada: necesita B) y además
+       decidir cuándo deja de salir en c) (una regla nueva de plazo en el
+       listado) y qué pasa en b): una llamada "sin_cambio" a un
+       'presupuesto_enviado' escribiría fecha_ultimo_contacto y lo SACARÍA
+       de b) sin meterlo en c) (no está en 'seguimiento_pendiente'): un
+       cliente que no saldría en ninguna lista nunca más (pre-decisión 7).
+       Y es, en la práctica, el registro de intentos de D24.4 (condicionado
+       al 6 de noviembre).
+  Propuesta: A). Es la única que no toca gate-avisos ni el listado, y
+  responde a D25.11: la regla de una fila definitiva SE REVISÓ para la
+  confirmación de visitas y sigue valiendo. Coste aceptado (limitación de
+  N0): un seguimiento "me lo pienso" sale cada día en c) hasta un resultado
+  definitivo; la salida está en D24.4.
+
+5.4 Pre-decisión 4: coherencia con la lista diaria. VALIDADA con el matiz
+  de C1; la matriz está en 8.3.
+
+5.5 Pre-decisión 5: la ficha y el historial. VALIDADA, y obliga a decidir
+  el nombre del log (Regla de Tres; C10):
+    L-a) Una sola acción para todo, gate_decision_registrada. Contra: es el
+         nombre engañoso que el bloque quiere quitar, ahora en el historial
+         de la ficha.
+    L-b) Gate conserva gate_decision_registrada (con 'decision' como hoy y
+         las claves nuevas 'tipo_llamada' y 'estado', que solo añaden);
+         seguimiento y confirmación escriben una acción nueva,
+         llamada_registrada, con 'estado' y 'resultado'. La ficha añade la
+         acción nueva a ACCIONES_HISTORIAL y lee su estado de detalle ->>
+         'estado' (solo 'visita_agendada' o 'perdida'; otro valor -> no se
+         entiende, cuadra = false). Los 6 logs reales no se tocan;
+         check_gate_decisions_http y los scripts de la ficha siguen
+         valiendo; la página de n8n necesita UNA etiqueta nueva (K10, R6).
+    L-c) Acción nueva para TODO desde ahora (también el Gate), leyendo la
+         vieja en el historial. Contra: el alias dejaría de escribir lo que
+         check_gate_decisions_http comprueba (la regresión del alias se
+         pierde) y el Gate tendría dos nombres según la fecha.
+    (L-d, renombrar los 6 logs reales con un UPDATE, se descarta: cambia
+    datos reales para que encajen con el código.)
+  Propuesta: L-b (P4). confirmar_hora y otra_hora no cambian el estado: su
+  log deja 'estado' = 'visita_agendada' y la ficha lo enseña como evento
+  (cuadra sigue true).
+  Las llamadas nuevas salen en la ficha con su informe: SQL_LLAMADAS lee
+  tipo_llamada, TipoLlamada y el Enum del resultado se amplían (C14).
+
+5.6 Pre-decisión 6: "confirmar otra hora". VALIDADA: validar_fecha y
+  leer_reglas_visita de reglas_visita.py; UPDATE de la 'solicitada' a
+  'cancelada' ANTES del INSERT de la confirmada (índice parcial); FOR
+  UPDATE de la oportunidad (la misma fila que bloquean /visits,
+  /create-followup-task y este endpoint, así que se ponen en fila); segunda
+  barrera en cada UPDATE (rowcount = 1); repetición idempotente (2.6).
+  Añadido: confirmar_hora también pasa validar_fecha (C12) y exige la fecha
+  pedida (C11).
+
+5.7 Pre-decisión 7: fecha_ultimo_contacto = now() en todo 201. VALIDADA.
+  Efecto en b): ninguno práctico, porque tras un 201 la oportunidad ya no
+  está en 'presupuesto_enviado' (y el criterio contacto_registrado la
+  sacaría igualmente). Efecto en create-followup-task: da 409
+  estado_no_permitido (va antes que contacto_registrado). La trampa está en
+  la opción C de 5.3, que este plan no propone. Los 200 no la escriben
+  (como hoy, P5).
+
+5.8 Pre-decisión 8: el formulario leerá la ficha. COMPROBADO campo a campo:
+  la ficha trae estado_oportunidad, todas las visitas con estado_visita y
+  fecha_visita (la 'solicitada' activa y su hora, que el formulario tiene
+  que enviar en confirmar_hora), y llamadas (si ya hay un resultado, con
+  tipo y resultado tras C14). Falta UNA cosa (C15): si un
+  'presupuesto_enviado' cumple ya b) (plazo, contacto), que n8n no puede
+  calcular, y la deducción del tipo, que el formulario tendría que copiar.
+  Propuesta, NO añadida (P9): un campo llamada_registrable
+  {tipo_llamada, resultados} | null en la ficha, calculado por la MISMA
+  deducir_tipo_llamada.
+
+5.9 Pre-decisión 9: catálogo de motivos. Propuesta: no ampliar. Para una
+  cancelación valen 'precio', 'plazo', 'proyecto_no_viable' y 'otro' (con
+  el informe); 'no_contesta' no (C6). Si Gabi quiere distinguir "cambio de
+  planes / ya no lo necesita", sería un valor nuevo del CHECK (P7).
+
+5.10 Pre-decisión 10: puertos. VALIDADA: 8028 para el script HTTP nuevo
+  (libre, K11); check_gate_decisions_http sigue en 8019/8020 (prueba el
+  alias).
+
+5.11 Pre-decisión 11: fuera de alcance. VALIDADA; sección 10.
+
+
+================================================================
+6. ARCHIVOS (por commit)
+================================================================
+
+B1 (renombrado sin cambios de comportamiento, opción b de 5.1):
+  Nuevos (contenido movido, no copiado: git mv donde se pueda):
+    app/services/resultados_llamada_service.py   (desde gate_decisions_service)
+    app/schemas/resultados_llamada.py            (contrato nuevo, mismos valores)
+    app/api/resultados_llamada.py                (ruta nueva)
+  Modificados:
+    app/api/gate_decisions.py      pasa a ser el ALIAS (traduce y llama al
+                                   servicio nuevo)
+    app/schemas/gate_decisions.py  se queda solo con el contrato antiguo
+                                   (GateDecisionCreate/Response) y los Enum
+                                   que usan gate-avisos y la ficha
+    app/main.py                    un include_router más (noveno)
+    app/schemas/aviso_gate.py, app/schemas/ficha_oportunidad.py,
+    app/services/ficha_oportunidad_service.py   solo imports
+    scripts/check_gate_decisions_service.py     2 imports
+  Sin migración. Recuentos que tienen que salir IGUALES:
+    check_gate_decisions_http 121/121 (SIN tocar),
+    check_gate_decisions_service 14/14, y la suite 41/41.
+  Demostración añadida (como B1 de la ficha): con ast, los textos SQL del
+  servicio nuevo son idénticos a los del viejo, y las respuestas de la ruta
+  nueva y del alias para los mismos casos coinciden traducidas.
+B2-M (migración paso12): el script de migración, el de verificación,
+  check_migracion_decisiones_gate actualizado, docs/schema_actual.sql.
+B2 (ampliación):
+    app/services/resultados_llamada_service.py   los tres tipos
+    app/services/tipo_llamada.py (P10)           deducir_tipo_llamada
+    app/schemas/resultados_llamada.py            Enum y combinaciones
+    app/schemas/common.py                        textos fijos (P8), si van aquí
+    app/schemas/ficha_oportunidad.py,
+    app/services/ficha_oportunidad_service.py    tipos, resultados, acción
+                                                 nueva (C14, L-b)
+    app/api/gate_decisions.py                    solo_gate=True
+C: scripts/check_resultados_llamada_http.py (8028) y
+   scripts/check_resultados_llamada_service.py; ajustes de los scripts de
+   la ficha (valores nuevos).
+D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
+   contrato para el formulario, este plan.
+
+
+================================================================
+7. RELACIÓN CON D26.7 Y CON EL AGENTE 2
+================================================================
+  - Los textos fijos de P8 son del sistema, no del cliente: no les afecta
+    el filtro de D26.7. otra_hora NO copia el texto del cliente a la visita
+    nueva (se quedaría duplicado para un borrado por RGPD, como R10 de la
+    ficha); el original queda en la visita cancelada.
+  - El router del Agente 2 (P12 de create-followup-task) no cambia aquí.
+
+
+================================================================
+8. PRUEBAS
+================================================================
+
+8.0 Reglas comunes
+  Datos propios con marca (emails http-resultado-*@example.com y
+  check-resultado-svc-*@example.com, tokens uuid4), limpieza solo de lo
+  propio en el orden de las claves foráneas, "no toca nada ajeno" con
+  id_base, logs de 500 borrados por id exacto tras comprobarlos, rama else
+  en toda excepción esperada, ConexionSinCommit con su autoprueba donde el
+  cursor de la prueba vaya al código, puerto 8028, uvicorn sin --reload y
+  detenido por el PID del log comprobado con netstat. Las 4 preguntas van
+  al principio de cada script y en el chat antes de lanzarlo; resumen:
+    (1) escriben en tablas reales, solo filas propias (los HTTP con commit,
+        porque el servidor tiene que verlas; los de servicio en una
+        transacción que acaba en ROLLBACK);
+    (2) los de servicio pasan su cursor al código: ConexionSinCommit; los
+        HTTP no pasan conexión (el servidor usa su pool);
+    (3) si se cortan, la limpieza inicial de la siguiente ejecución borra lo
+        propio, y "no toca nada ajeno" lo comprueba; los de servicio se
+        deshacen solos (ROLLBACK);
+    (4) no usan el 8000 ni ningún dato real: la oportunidad de cada prueba
+        es propia (NUNCA los 8 de D25.16 ni 1522).
+
+8.1 scripts/check_resultados_llamada_service.py (sin servidor)
+  S0 autoprueba de ConexionSinCommit. S1 deducir_tipo_llamada en los cinco
+  casos de 2.2, con datos propios en una transacción con ROLLBACK. S2 los
+  criterios de b) llegan de condicion_seguimiento (ast: importados, ningún
+  texto copiado). S3 el 503 con su log y su origen (P12) por los dos caminos
+  (ruta nueva y alias). S4 los estados se importan, no se escriben (ast).
+
+8.2 scripts/check_resultados_llamada_http.py (HTTP real, 8028)
+  Autenticación (401 sin cabecera, con el valor de WEBHOOK_SECRET en las
+  dos), forma (cada combinación prohibida de 2.3), 404 (también ids que no
+  caben), y por TIPO:
+    Gate: visita_acordada y descartar como hoy, por la ruta nueva.
+    Seguimiento c): visita_acordada (texto fijo de seguimiento) y descartar.
+    Seguimiento b): igual, sobre un 'presupuesto_enviado' propio con el
+      presupuesto envejecido a mano (> 48 h); y 409 plazo_no_cumplido,
+      contacto_registrado y visita_existente en propios que no cumplen.
+    Confirmación (d y e): confirmar_hora, otra_hora (con las tres reglas de
+      fecha y misma_hora_pedida) y cliente_cancela (oportunidad 'perdida',
+      visita 'cancelada'); confirmar_hora con otra fecha (409
+      visita_cambiada) y sobre una pedida pasada (422 fecha_pasada).
+    resultado_no_admitido en los dos sentidos.
+  En cada 201: fila (tipo, resultado, motivo, visita_id, informe
+  recortado), visitas, estado, fecha_ultimo_contacto escrita, un log con
+  'estado', presupuestos intacto, claves exactas de la respuesta, 0
+  importes. Repetición: 200 sin escribir nada (foto igual). 409
+  resultado_ya_registrado con cualquier otra.
+  Concurrencia: 5 iguales (un 201, cuatro 200, una fila, una visita); 5
+  distintas (un 201, cuatro 409); registro de seguimiento a la vez que
+  POST /visits del mismo cliente; confirmar_hora a la vez que POST /visits
+  cambia la hora; registro de un b) a la vez que POST
+  /create-followup-task. En todas: nunca un 500 y estado final coherente.
+  Alias: el mismo caso por /gate-decisions y por la ruta nueva deja la MISMA
+  fila (con tipo 'gate') y respuestas equivalentes traducidas; un caso de
+  seguimiento por el alias da 409 sin_gate.
+  Ficha: tras cada 201, GET de la ficha propia: la llamada sale con tipo,
+  resultado e informe; historial_cuadra = true; el último evento deja el
+  estado actual.
+  "Ningún 500" en todas las respuestas de la ejecución.
+
+8.3 La matriz lista <-> registro (pre-decisión 4, con C1)
+  Con datos propios en los cinco apartados (y casos que NO salen), se pide
+  GET /llamadas-del-dia y para cada oportunidad propia se cruzan "sale en el
+  apartado X" y la respuesta de POST /resultados-llamada:
+    a) sale ⇒ 201 (Gate). Un Gate de < 24 h: no sale y da 201 (D25.14).
+    b) sale ⇔ 201 (los mismos criterios).
+    c) sale ⇔ 201.
+    d) sale ⇔ 201 (confirmación).
+    e) 'solicitada': sale ⇒ 201; 'confirmada': sale y NO es registrable
+       (409; recordatorio).
+  Después del 201: el elemento sale de su apartado, salvo una visita
+  confirmada (confirmar_hora u otra_hora) cuya fecha cae en el próximo
+  laborable, que pasa a e). Se comprueba con una segunda lista.
+
+8.4 Regresión
+  check_gate_decisions_http 121/121 y check_gate_decisions_service 14/14
+  (alias), check_aviso_gate_* 18/18 y 75/75, check_ficha_oportunidad_* (los
+  recuentos que den tras C14, explicados), check_listado_llamadas_* 69/69 y
+  109/109, check_followup_* 34/34 y 125/125, check_visits_* 16/16 y 55/55,
+  y suite completa con la regla de uso.
+
+8.5 Pruebas en negativo (sobre COPIAS, de una en una, con su recuento
+    EXACTO al terminar; aquí la PREVISIÓN, "al menos"). Formato: servicio |
+    HTTP.
+  N1.  Sin FOR UPDATE: concurrencia (5 distintas y las cruzadas). El UNIQUE
+       o el índice parcial frenan el duplicado con un 500 (logs borrados por
+       id exacto). Al menos 0 | 3.
+  N2.  Tipo equivocado aceptado (sin el 409 resultado_no_admitido):
+       visita_acordada sobre una confirmación y confirmar_hora sobre un
+       seguimiento. Al menos 0 | 2.
+  N3.  cliente_cancela sin pasar la oportunidad a 'perdida': estado, matriz
+       (queda 'visita_agendada' sin visita activa) y ficha. Al menos 0 | 3.
+  N4.  Log sin la clave 'estado' (llamada_registrada): la ficha da
+       historial_cuadra = false. Al menos 0 | 2.
+  N5.  fecha_ultimo_contacto sin escribir en los tipos nuevos. Al menos 0 | 2.
+  N6.  Alias que NO llega al mismo servicio (llama a una copia del servicio
+       de hoy): con el DEFAULT 'gate' la fila es idéntica; lo ven el log (sin
+       'tipo_llamada' ni 'estado') y una comprobación con ast de lo que
+       importa app/api/gate_decisions.py. Al menos 1 | 1. (Por esto P13.)
+  N7.  otra_hora sin validar_fecha: fin de semana y fuera de franja
+       aceptados. Al menos 0 | 3.
+  N8.  confirmar_hora sin comparar con la fecha pedida (C11). Al menos 0 | 1.
+  N9.  Criterios de b) copiados en el servicio en vez de importados:
+       MUTANTE EQUIVALENTE en comportamiento; solo S2 (ast). Al menos 1 | 0.
+  N10. Repetición después del estado: el 200 de una repetición sale 409.
+       Al menos 0 | 3.
+  N11. Ficha con el esquema antiguo (sin los valores nuevos): 500 en la
+       ficha de cualquier llamada nueva. Al menos 0 | 2.
+  N12. otra_hora con el INSERT antes del UPDATE: el índice parcial da 500.
+       Al menos 0 | 1.
+  N13. Un commit() dentro de registrar_resultado_con_cursor: la S lo cuenta
+       como FALLO (CommitProhibido) y el ROLLBACK lo deshace todo. Al menos
+       1 | 0.
+  Cada N lleva sus 4 preguntas: escriben solo filas propias; las versiones
+  rotas que puedan confirmar (N13) solo se ejecutan con ConexionSinCommit o
+  por HTTP sobre datos propios; un corte lo limpia la siguiente ejecución;
+  ninguna toca el 8000 (puerto 8028 y copias en el scratchpad). Kernel-Power
+  506/507 comprobado en el intervalo de CADA tanda.
+
+8.6 Tiempo y memoria (para el crédito): la suite tarda unos 9-10 min; cada
+  negativa HTTP, 2-3 min; las 13, unos 40 min. Se lanzan por tandas
+  pequeñas, con commit y push entre tandas, y con Docker/n8n y el navegador
+  CERRADOS (confirmación de Gabi antes de cada tanda).
+
+
+================================================================
+9. RIESGOS
+================================================================
+  R1. paso12 toca la tabla que usan WF2, el formulario y la ficha
+      publicados. Mitigación: solo expand (4.1) y prueba con los scripts de
+      main contra la base migrada (4.3), con Gabi avisado.
+  R2. (Solo opción a de 5.1.) Una vista sin security_invoker abriría
+      decisiones a la Data API pública: anon tiene todos los permisos de
+      tabla (M10). Mitigación: security_invoker + REVOKE, y check_rls_estado.
+  R3. El alias es complejidad temporal (D26.6): dos contratos para una
+      operación. Mitigación: una sola función del servicio, N6, y quitarlo
+      en su rama en cuanto el formulario use la ruta nueva.
+  R4. Un formulario abierto mientras cambia el estado registra el tipo que
+      no era. Mitigación: resultado_no_admitido y visita_cambiada (C11).
+  R5. "Me lo pienso" en c) se repite cada día (5.3, A): limitación de N0
+      hasta D24.4.
+  R6. La página de la ficha de n8n no traduce el evento nuevo
+      llamada_registrada hasta que Gabi lo añada (K10): saldría el nombre
+      técnico. Anotado para la ampliación del formulario.
+  R7. Los 8 casos de D25.16 y el Gate 1522 son datos reales: ningún script
+      los usa; se cierran después desde el formulario (D25.16).
+  R8. El DEFAULT 'gate' de paso12 puede esconder un olvido del código (N6)
+      hasta la contracción (P13).
+
+
+================================================================
+10. FUERA DE ALCANCE (pre-decisión 11)
+================================================================
+  - El formulario ampliado, su conexión con WF4 (D27.4), la página de la
+    ficha (etiqueta nueva, R6) y WF3: n8n.
+  - Quitar el alias y actualizar los cinco scripts que lo usan (C16); la
+    contracción de paso12 (P13); y, si se elige a), la de paso12r.
+  - Intentos de llamada, "no contesta" como intento y "llámame en 2 horas"
+    (D24.4, D25.5, D25.6).
+  - El Agente 2 y D28.1; el email del presupuesto (D25.1).
+  - C10 (estimate_service) y C11 (scripts de la ficha y de gate-avisos que
+    no comparan valores), cada uno en su rama.
+  - Corregir un resultado ya registrado (sigue siendo a mano, R2 de
+    /gate-decisions), cambiar una visita ya confirmada, y lo posterior a la
+    visita ('ganada' / 'perdida' tras la visita, D21.2).
+  - D3 (estados de visita en reglas_visita.py): se IMPORTAN de donde están.
+
+
+================================================================
+11. PREGUNTAS ABIERTAS (con propuesta)
+================================================================
+  P1.  Nombre de la ruta: POST /resultados-llamada (plural, como /leads y
+       /visits). Alternativa: POST /oportunidades/{id}/resultado-llamada,
+       bajo el router de la ficha (hereda la llave, P8 de la ficha), pero
+       el id pasa a la ruta y el alias tendría que traducirlo.
+  P2.  Alias con el contrato ANTIGUO y solo para el Gate (2.9), llamando a
+       la misma función. ¿De acuerdo? (Alternativa: alias = ruta nueva con
+       sus nombres; rompería el formulario publicado, K9.)
+  P3.  Pre-decisión 1: a), b) o c) (5.1). Propuesta: b).
+  P4.  Log: L-b (5.5).
+  P5.  Nombres de los resultados (2.3, C5): visita_acordada, descartar,
+       confirmar_hora, otra_hora, cliente_cancela; sin ampliar la columna.
+  P6.  Una sola fila por oportunidad, opción A (5.3).
+  P7.  Motivos: sin valores nuevos; 'no_contesta' prohibido en
+       cliente_cancela (C6, 5.9).
+  P8.  Textos fijos de las visitas confirmadas por teléfono:
+         seguimiento: "Visita acordada por teléfono por administración en
+                       la llamada de seguimiento."
+         otra_hora:   "Visita confirmada por teléfono por administración a
+                       otra hora; la pedida desde el chat queda cancelada."
+       (el del Gate no cambia).
+  P9.  ¿Se añade llamada_registrable a la ficha (5.8)? Propuesta: sí, en
+       B2, con su nota en la Adenda 5.9 (cambia sus claves exactas).
+  P10. deducir_tipo_llamada en un módulo propio (app/services/tipo_llamada.py),
+       como condicion_seguimiento.
+  P11. visita_cancelada_id: ¿columna con clave doble (4.1, paso 6) o solo en
+       el log y la respuesta? Propuesta: columna (la ficha y la auditoría la
+       leen de la tabla, no de logs).
+  P12. "origen" del log de configuración incompleta: "resultados_llamada"
+       por la ruta nueva y "gate_decisions" por el alias (lo que hoy
+       comprueba check_gate_decisions_service).
+  P13. Contracción de paso12 (DROP DEFAULT) después del merge, en su propia
+       rama, como paso12b.
+  P14. Fila 3 de la tabla de la Adenda y 5.5: nota fechada que remite a una
+       sección nueva 5.10 con el contrato de la ruta nueva (cada endpoint
+       tiene la suya). ¿O todo dentro de 5.5?
+  P15. Contrato para el formulario de n8n: una sección propia en la Adenda
+       5.10 ("Qué páginas enseña el formulario") con la tabla tipo ->
+       resultados -> campos -> mensajes de cada 409, o un documento aparte
+       en docs/.
+  P16. Bloque B1 antes que la migración (B2-M), como se propone, para que
+       el renombrado se demuestre sobre la base de datos de hoy.
+
+
+================================================================
+12. BLOQUES
+================================================================
+  A.    Este plan (sin código). [PARA]
+  B1.   Renombrado sin cambios de comportamiento (opción elegida en P3),
+        con la ruta nueva, el alias, la demostración de 6 (ast y respuestas)
+        y los MISMOS recuentos: 121/121, 14/14 y la suite. [PARA]
+  B2-M. Migración paso12 con su script, su verificación antes/después, la
+        prueba de main contra la base migrada, la vuelta atrás escrita y la
+        confirmación EXPLÍCITA de Gabi antes de ejecutarla. [PARA]
+  B2.   Ampliación (tres tipos, alias solo Gate, ficha) con una prueba
+        mínima por HTTP real en el 8028. [PARA]
+  C.    Scripts completos (8.1-8.3), regresión (8.4), N1-N13 de una en una
+        con su resultado exacto en este plan (8.5) y suite con la regla de
+        uso; por tandas con commit entre ellas. [PARA]
+  D.    Documentación: Adenda (fila 3, nota en 5.5, 5.10 nueva, nota en 5.9
+        si P9), CLAUDE.md (estado del bloque, puertos, suite), notas
+        fechadas en D25 (sección 4) y D26 (estado de 4b), nota en el plan
+        del resumen (C7), contrato para el formulario (P15) y este plan con
+        los hashes. [PARA]
+  Cada bloque, un commit con los recuentos reales y el SHA-256 de cada
+  script del scratchpad que dé un recuento, y git push. Todo el código,
+  scripts incluidos, comentado línea a línea o en grupos de 2-4 líneas,
+  también dentro de las funciones auxiliares, con "# SQL" encima de cada
+  execute; antes de cada commit se mide el número de sentencias en tramos
+  de más de 4 sin comentario y se pone en el mensaje. Nada de merge a main
+  sin la confirmación explícita de Gabi, después de la revisión del tutor,
+  y siempre con --ff-only (lo hace Gabi).
