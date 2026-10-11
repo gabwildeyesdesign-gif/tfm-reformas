@@ -1058,6 +1058,30 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
     comportamiento, como se preveía: solo la S2 (ast).
   - N10 (repetición después del tipo): - | 146/160 (las 5 repeticiones, los
     409 de resultado ya registrado y la concurrencia de 5 iguales).
+  (Nota 2026-10-11, Bloque C, tanda 2c, 22:39-22:57, sin Kernel-Power
+  506/507 entre 22:38 y 22:58; git diff -- app/ vacío.)
+  - Primera pasada: N11 y N12 pararon check_resultados_llamada_http con una
+    traza (KeyError 'llamadas' e IndexError en el CASO 11, al leer una ficha
+    en 500 o sin llamadas), sin recuento. Defecto del SCRIPT, no del código:
+    un fallo tiene que salir como FALLO contado. Se protegió el CASO 11 (.get
+    y [{}], nota fechada en el script) y se repitieron N11, N12 y el script
+    con el código bueno (160/160). La limpieza de las pasadas cortadas
+    funcionó (0 datos propios, 0 logs de 500).
+  - N11 (ficha con el esquema antiguo): - | 156/160 (las dos fichas de
+    confirmación en 500, la fecha de la visita cancelada y "ningún 500";
+    logs 8790-8792 borrados); check_ficha_oportunidad_http 69/69: sus casos
+    solo tienen llamadas del Gate, que el Enum antiguo admite.
+  - N12 (otra_hora con el INSERT antes del UPDATE): - | 147/160 (otra_hora en
+    500 por el índice parcial de una visita activa, y todo lo que depende de
+    ella; logs 8874, 8884 y 8907 borrados).
+  - N13 (commit() dentro de registrar_resultado_con_cursor): 27/32 | -. Los
+    cinco resultados de la S5 dan CommitProhibido, contado como FALLO; el
+    total baja a 32 porque, tras él, el caso se salta (continue).
+  - N14 ('sin_decision' en el Enum del alias): - | 158/160 (el 422 del alias
+    sale 201 y, en cascada, el Gate g3 ya no tiene llamada_registrable).
+  - N15 ('sin_decision' en cliente_cancela, sin el validador): - | 158/160
+    (los dos 422 de cliente_cancela). No da 500: esos casos se piden sobre un
+    Gate, y el 409 resultado_no_admitido llega antes que el CHECK de la base.
   Cada N lleva sus 4 preguntas: escriben solo filas propias; las versiones
   rotas que puedan confirmar (N13) solo se ejecutan con ConexionSinCommit o
   por HTTP sobre datos propios; un corte lo limpia la siguiente ejecución;

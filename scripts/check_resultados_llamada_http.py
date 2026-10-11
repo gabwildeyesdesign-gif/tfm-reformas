@@ -634,11 +634,16 @@ try:
                   f"llamada_registrable null, cuadra en '{estado}'",
                   (ll[0].get("tipo_llamada"), ll[0].get("resultado"), ll[0].get("informe")) == (tipo, resultado, "Llamada de prueba.")
                   and (ll[0].get("fecha_visita_cancelada") is not None) == con_cancelada and f.get("llamada_registrable") is None
-                  and f.get("historial_cuadra") is True and f["historial"][-1]["estado"] == estado, f"({ll[0]} {f.get('historial')})")
+                  and f.get("historial_cuadra") is True and (f.get("historial") or [{}])[-1].get("estado") == estado,
+                  f"({ll[0]} {f.get('historial')})")
     # otra_hora: la cancelada es la de las 10:00 y la confirmada, la de las 17:00.
+    # (Nota 2026-10-11, tanda 2c: con .get y [{}], una ficha en 500 o sin
+    # llamadas da FALLO contado; antes, N11 y N12 paraban el script con una traza.)
     f = cuerpo_de(pedir("GET", f"/oportunidades/{k2}/ficha"))
+    l0 = (f.get("llamadas") or [{}])[0]
     comprobar("ficha otra_hora: fecha_visita 17:00 y fecha_visita_cancelada 10:00",
-              f["llamadas"][0]["fecha_visita"] == madrid(LUNES, 17, 0) and f["llamadas"][0]["fecha_visita_cancelada"] == madrid(LUNES, 10, 0))
+              l0.get("fecha_visita") == madrid(LUNES, 17, 0) and l0.get("fecha_visita_cancelada") == madrid(LUNES, 10, 0),
+              f"({l0})")
     # Antes de registrar: llamada_registrable con el tipo y sus resultados.
     for op, tipo in ((g3, "gate"), (s5, "seguimiento"), (k5, "confirmacion_visita")):
         f = cuerpo_de(pedir("GET", f"/oportunidades/{op}/ficha"))
