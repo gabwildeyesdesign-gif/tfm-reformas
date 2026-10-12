@@ -254,6 +254,17 @@ B1. paso13: 6 filas de plazos (D18.7, en semanas) y, si P19 = C,
     check_migracion_agente2: debe FALLAR antes de migrar. Se aplica solo
     tras "confirmo la migración paso13". Negativo: ninguno propio (riesgo
     BAJO: solo AÑADE filas; el "antes de migrar" ya es la prueba en vacío).
+    [Nota 2026-10-12: B1 CERRADO. Código en 3bfa427 (antes de migrar,
+    check_migracion_agente2 0/38, exit 1). paso13 APLICADA tras "confirmo
+    la migración paso13" de Gabi, el 2026-10-12 de 13:41:14 a 13:41:15:
+    reglas_negocio de 13 a 20 filas, las 7 "insertada", reglas que ya
+    existían cambiadas o desaparecidas: ninguna; exit 0. Después,
+    check_migracion_agente2 38/38, CORRECTO, exit 0 (13:41:19). Segunda
+    ejecución (13:41:20): 20 -> 20 filas, las 7 "ya existía, no se toca",
+    reglas nuevas: ninguna; exit 0 (idempotente). Claves:
+    semanas_obra_bano_min/_max = 2/3, semanas_obra_cocina_min/_max = 2/4,
+    semanas_fabricacion_cocina_min/_max = 3/6, paso_huecos_min = 30.
+    Vuelta atrás (paso13_vuelta_atras.py) sin ejecutar.]
 B2. Contexto: GET /leads/session gana "reforma" {tipo_reforma, m2,
     nivel_acabados, incluye_cambios_estructurales} y plazo_orientativo (null
     salvo bano/cocina, sin Gate y sin cambios: D18.7, lo calcula el backend).
