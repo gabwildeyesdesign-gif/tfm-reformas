@@ -118,6 +118,7 @@ El `mensaje` lo escribe el backend para administración y se puede enseñar tal 
 | 409 | `plazo_no_cumplido`, `contacto_registrado`, `visita_existente`, `con_gate` | "Esta oportunidad no está en el seguimiento ahora mismo." (+ `mensaje`) | No |
 | 409 | `sin_presupuesto` | "Todavía no tiene presupuesto." | No |
 | 409 | `visita_activa_existente` | "Ya tiene una visita activa." | No |
+| 409 | `hueco_ocupado` | "Esa hora ya está ocupada por otra visita." + las horas de `huecos_libres` (ver abajo), y volver a la página de la fecha. | No |
 | 422 | `fecha_pasada`, `fin_de_semana`, `fuera_de_franja` | El `mensaje` (dice las franjas) y volver a la página de la fecha. | No |
 | 422 | `misma_hora_pedida` | "Es la hora que pidió: elige 'confirmar la hora pedida'." | No |
 | 422 | (lista de Pydantic, sin `motivo`) | Error del formulario (un campo mal enviado). | **Sí** |
@@ -129,10 +130,35 @@ El `mensaje` lo escribe el backend para administración y se puede enseñar tal 
 Reintentos de n8n: solo ante 500 o sin conexión (un reintento que llega dos veces da 200, no duplica nada). Nunca
 ante 4xx ni 503.
 
+### 409 `hueco_ocupado` (D31, desde el 2026-10-12, rama feat/n0-agente2)
+
+Con `visita_acordada`, `confirmar_hora` y `otra_hora`, la visita no puede solaparse con OTRA visita activa
+(`solicitada` o `confirmada`, de cualquier cliente): un solo técnico, y una visita ocupa de su hora de inicio a esa
+hora más la duración (60 min). La visita pedida por el propio cliente no cuenta: `confirmar_hora` la confirma y
+`otra_hora` la cancela. Cuerpo exacto (el único error con una clave más, `huecos_libres`):
+
+```json
+{"detail": {"motivo": "hueco_ocupado",
+            "mensaje": "Esa hora no está disponible: coincide con otra visita. Horas de inicio libres ese día: 08:30, 09:00, 11:00, 11:30, 12:00, 12:30, 17:00, 17:30, 18:00, 18:30, 19:00.",
+            "huecos_libres": ["08:30", "09:00", "11:00", "11:30", "12:00", "12:30", "17:00", "17:30", "18:00", "18:30", "19:00"]}}
+```
+
+- `huecos_libres`: horas de inicio de ESE día que siguen libres, cada 30 min (regla `paso_huecos_min`), con la
+  visita entera dentro de su franja y ya en el futuro. Lista vacía si no queda ninguna; entonces el `mensaje` es
+  "Esa hora no está disponible y ese día no queda ninguna hora libre: propón otro día."
+- Qué enseñar a administración: "Esa hora ya está ocupada por otra visita. Horas libres ese día: 08:30, 09:00, …"
+  (las de `huecos_libres`, o "ninguna: elige otro día" si está vacía), y volver a la página de la fecha con el
+  mismo resultado. No se escribe nada: se puede volver a enviar con otra hora. No es un aviso técnico (WF4 no).
+- El mensaje nunca dice de quién es la otra visita ni a qué hora termina.
+- El ALIAS POST /gate-decisions (el formulario de hoy) responde exactamente igual, con el mismo cuerpo, en
+  `visita_acordada` (P17): el formulario publicado tiene que enseñarlo también.
+
 ## 5. Lo que este formulario NO hace (N0)
 
 - "Me lo pienso" no se registra: el caso sigue en la lista diaria al día siguiente (D25.14). La salida prevista es
   el aviso de "última llamada" (D29.2, bloque 4c) y, en ese momento, `descartar` con `sin_decision`. `aplazar` y el
   registro de intentos de llamada quedan para N1 (D29.1, D24.4).
+  *(Nota 2026-10-12: D30 revisa D29.2: el aviso de "última llamada" no se hace en el backend (no hay bloque 4c),
+  sino en n8n. El documento de D30 lo tiene el tutor en el Proyecto de claude.ai.)*
 - No corrige un resultado ya registrado ni cambia una visita ya confirmada (a mano en N0).
 - No identifica al operador (la llave es compartida).

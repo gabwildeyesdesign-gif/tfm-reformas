@@ -12,14 +12,14 @@ endpoints y revisión técnica final.
 |---|---|---|---|---|
 | 1 | POST /leads | nombre, email (se guarda entero en minúsculas), telefono (se normaliza; ver 5.1), tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token (máx. 100 caracteres; clave de idempotencia, ver 5.1) | 201 (alta nueva) o 200 (repetición con el mismo lead_token): lead_id, cliente_id, oportunidad_id, status, creado (ver 5.1) | Webhook n8n, al confirmar el cliente los datos en el chat web (Agente 1) |
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
-| 3 | POST /gate-decisions | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) **[Nota 2026-10-11, rama feat/n0-resultado-llamadas]** Desde el Bloque B1 es el ALIAS, con este mismo contrato y solo para casos con Gate, de POST /resultados-llamada (fila 10, 5.10): la misma función del servicio. Se quitará cuando el formulario de n8n use la ruta nueva (D26.6). Ver la nota de 5.5 |
-| 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST |
+| 3 | POST /gate-decisions | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) **[Nota 2026-10-11, rama feat/n0-resultado-llamadas]** Desde el Bloque B1 es el ALIAS, con este mismo contrato y solo para casos con Gate, de POST /resultados-llamada (fila 10, 5.10): la misma función del servicio. Se quitará cuando el formulario de n8n use la ruta nueva (D26.6). Ver la nota de 5.5  **[Nota 2026-10-12, rama feat/n0-agente2]** El alias gana el 409 hueco_ocupado con huecos_libres (D31, P17): ver 5.11 |
+| 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** texto_cliente baja a 1..300 caracteres y da 422 si tiene forma de email o de teléfono (D26.7); 409 hueco_ocupado con huecos_libres si la visita se solapa con otra activa (D31). Ver 5.11 |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`. **[Nota 2026-10-07]** La base del plazo es presupuestos.created_at (la pre-estimación), no la creación de la oportunidad; las 48 h viven en reglas_negocio.horas_seguimiento_presupuesto (migración paso11), no en el código. Las oportunidades que cumplen la condición las da GET /llamadas-del-dia (fila 8, apartado seguimientos_por_abrir); este endpoint sigue sin implementar (rama siguiente). **[Nota 2026-10-08, rama feat/n0-create-followup-task]** Implementado. Contrato real: entrada oportunidad_id (entero > 0) y motivo (solo 'sin_respuesta_visita' en N0, D25.13), cabecera X-Gate-Secret; salida log_id, oportunidad_id, motivo, estado_oportunidad (el "status" de esta fila, con el nombre de los endpoints recientes; P6 de su plan), fecha_apertura y creado; 201 (abre el seguimiento) o 200 (ya abierto, no escribe); 404, 409 con seis motivos, 422, 503 sin log. Trigger: WF3, por cada elemento de seguimientos_por_abrir de GET /llamadas-del-dia. Solo REST. Ver 5.8 |
-| 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST |
+| 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** Añade reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales} y plazo_orientativo (D18.7; null salvo baño o cocina con presupuesto, sin Gate y sin cambios); 503 configuracion_incompleta solo si hace falta un plazo y su regla falta. Sigue sin importes. Ver 5.11 |
 | 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura |
 | 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura. **[Nota 2026-10-11, rama feat/n0-resumen-lista-diaria, D26.1]** Cada elemento lleva además el objeto "solicitud" {m2 (texto exacto o null), nivel_acabados, incluye_cambios_estructurales}, siempre presente, después de tipo_reforma; los de visita (d y e), además, texto_cliente de ESA visita. Siguen sin salir email e importes. Ver la nota del 2026-10-11 en 5.7 |
 | 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura |
-| 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md |
+| 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11 |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
 autenticación del webhook): además del cuerpo, toda petición debe traer la
@@ -30,6 +30,10 @@ cuerpo. Ver 5.1.
 
 get_business_rules() y request_missing_information() son MCP tools puras,
 sin endpoint HTTP propio — leen directamente de services/.
+(Nota 2026-10-12, rama feat/n0-agente2: get_business_rules() ya existe,
+como tool MCP sin parámetros y de solo lectura, ver 5.11.
+request_missing_information() sale de N0 (P14 del plan del Agente 2): el
+Agente 1 ya pide en la conversación lo que falta.)
 
 Aclaración de diseño (resuelve ambigüedad de "doble invocación"): cada
 endpoint con dualidad MCP/REST expone la MISMA función de services/ por
@@ -427,6 +431,9 @@ PresupuestoSesion). Límites de lead_token: MIN_LEAD_TOKEN y
 MAX_LEAD_TOKEN en app/schemas/common.py, compartidos con LeadCreate.
 Verificación: scripts/check_lead_session_http.py.
 
+(Nota 2026-10-12, rama feat/n0-agente2: la respuesta añade "reforma" y
+"plazo_orientativo", y puede dar 503 configuracion_incompleta; ver 5.11.)
+
 5.4 POST /visits (añadido el 2026-09-26, en el mismo bloque que el código)
 
 Para qué: registra la SOLICITUD de visita técnica que el cliente pide en
@@ -532,6 +539,11 @@ check_visits_http 55/55 y check_visits_service 16/16. El log del 503
 lleva además "origen": "visits" en su detalle. Y la limitación "Gate
 permanente" de arriba se cumple, pero POST /gate-decisions NO escribe
 aprobado_por: se queda NULL porque N0 no identifica al operador; ver 5.5.)
+
+(Nota 2026-10-12, rama feat/n0-agente2: texto_cliente pasa a 1..300
+caracteres y sin email ni teléfono (D26.7), y la visita no puede solaparse
+con otra activa: 409 hueco_ocupado con huecos_libres (D31; revisa D18.6).
+Las limitaciones "hora exacta" (C7) y "festivos" siguen; ver 5.11.)
 
 5.5 POST /gate-decisions (añadido el 2026-10-01, rama feat/n0-gate-decisions)
 
@@ -695,6 +707,11 @@ scripts/check_migracion_decisiones_gate.py (38/38),
 scripts/check_gate_decisions_service.py (14/14) y
 scripts/check_gate_decisions_http.py (121/121), con ocho pruebas en
 negativo (detalle en el commit 36c6ec2).
+
+(Nota 2026-10-12, rama feat/n0-agente2: este alias gana el 409
+hueco_ocupado con huecos_libres, con la misma comprobación que /visits y
+/resultados-llamada (P17); el formulario publicado tiene que enseñarlo:
+docs/Contrato_Formulario_Llamadas.md. Ver 5.11.)
 
 5.6 GET /gate-avisos/{oportunidad_id} (añadido el 2026-10-03, rama
 feat/n0-aviso-gate)
@@ -1532,6 +1549,133 @@ paso12_resultado_llamadas.py. Verificación: check_resultados_llamada_service
 check_migracion_resultado_llamadas (50/50), con quince pruebas en negativo
 N1-N15 (resultados exactos en la sección 8.5 del plan) y suite completa
 44/44 en una pasada válida.
+(Nota 2026-10-12, rama feat/n0-agente2: visita_acordada, confirmar_hora y
+otra_hora dan 409 hueco_ocupado con huecos_libres si la visita se solapa con
+OTRA activa (la pedida propia no cuenta, C8); ver 5.11. La mitigación de
+"me lo pienso" con el aviso de "última llamada" (D29.2, bloque 4c) queda
+revisada por D30: no se hace en el backend, sino en n8n; el documento de D30
+lo tiene el tutor en el Proyecto de claude.ai.)
+
+5.11 Rama feat/n0-agente2: contexto del Agente 2, get_business_rules, filtro
+D26.7 y disponibilidad D31 (añadido el 2026-10-12)
+
+Plan completo y decisiones (P1-P22, notas del tutor, hallazgos y hashes):
+docs/Plan_Agente2_Calendar.txt. Decisiones de otros documentos que esta
+rama revisa (resumen de una línea; los documentos de D30 y D31 los tiene el
+tutor en el Proyecto de claude.ai):
+  - D31 (revisa D18.6): POST /visits, POST /resultados-llamada y el alias
+    POST /gate-decisions comprueban que el hueco esté libre (un solo técnico,
+    solapes, 409 hueco_ocupado con las horas libres); el calendario externo
+    sigue fuera (Fase 2 del formulario en n8n).
+  - D30 (revisa D29.2): el aviso de "última llamada" no se hace en el
+    backend (no hay bloque 4c ni regla horas_ultima_llamada): se hará en n8n.
+
+(a) GET /leads/session/{lead_token}: contexto del Agente 2 (P4 = A, D18.4)
+  Campos nuevos, siempre presentes (null si existe = false):
+    reforma: {tipo_reforma, m2 (texto exacto, como en la ficha),
+              nivel_acabados, incluye_cambios_estructurales}
+    plazo_orientativo: {obra_semanas: {min, max},
+                        fabricacion_muebles_semanas: {min, max} | null} | null
+  Regla de D18.7, la decide el BACKEND: hay plazo solo si tipo_reforma es
+  bano o cocina, hay presupuesto, requiere_aprobacion es false y
+  incluye_cambios_estructurales es false (un dato que falta cuenta como "no
+  se sabe": null, D4). Baño: solo obra; cocina: obra y fabricación de
+  muebles. Los valores son seis reglas de reglas_negocio (migración paso13:
+  semanas_obra_bano_min/max 2/3, semanas_obra_cocina_min/max 2/4,
+  semanas_fabricacion_cocina_min/max 3/6), enteros de 1 a 52 con mínimo <=
+  máximo. Solo se leen si hace falta un plazo, para que una regla rota no
+  tumbe la captura del Agente 1 (el router llama a este endpoint en cada
+  turno). Si falta o no es válida: 503 {"detail": {"motivo":
+  "configuracion_incompleta", "mensaje", "faltan"}}, SIN log, con una línea
+  [AVISO] en el stderr del uvicorn. Sigue SIN importes.
+
+(b) Tool MCP get_business_rules (D18.4, D18.5.2, D18.8)
+  Sin parámetros, misma puerta /mcp y mismo Bearer MCP_SECRET que
+  calculate_estimate (list_tools devuelve las dos). Devuelve:
+    visita: {dias ("de lunes a viernes"), manana {inicio, fin},
+             tarde {inicio, fin}, duracion_min}  (las reglas de POST /visits)
+    recargo_informe_tecnico_con_iva  (D14: con IVA; el tipo de IVA no sale)
+    incluye_tipico: [{tipo_reforma, nivel_acabados, incluye_tipico}]  (las
+             filas de tarifas_base, orientativo)
+  NUNCA devuelve precio_m2, margen, el tipo de IVA ni los umbrales del Gate
+  (C4 del plan: con ellos el agente podría calcular la cifra de un caso con
+  Gate). Dos barreras: la consulta no lee precio_m2 y el esquema de salida
+  (extra="forbid") no tiene dónde ponerlo. Solo lectura (REPEATABLE READ,
+  READ ONLY). Regla rota o tarifas_base vacía: error de la tool con un
+  mensaje genérico para el agente ("Las reglas de negocio no están
+  disponibles ahora mismo...") y un [AVISO] en stderr que nombra las claves;
+  sin log.
+
+(c) Filtro D26.7 sobre visits.texto_cliente (P3)
+  texto_cliente: de 1 a 300 caracteres (antes 1000), contados tras quitar
+  los espacios de los extremos. 422 de Pydantic en texto_cliente si tiene
+  forma de email ([^\s@]+@[^\s@]+\.[^\W\d_]{2,}) o de teléfono (9 o más
+  cifras con espacios, puntos, guiones o paréntesis; ":" y "/" cortan el
+  tramo, para que horas y fechas no cuenten). Mensajes para el agente, que
+  no repiten el dato: "el texto parece contener un email: escríbelo sin
+  datos de contacto (...)" y "el texto parece contener un teléfono (9 o más
+  cifras seguidas): escríbelo sin datos de contacto y sin números largos
+  (...)". La longitud es defensa doble (Pydantic y CHECK); la forma, solo
+  Pydantic. OJO: el CHECK de la base de datos sigue en 1..1000 hasta la
+  migración paso13b, que se aplica DESPUÉS del merge (C6: endurecerlo antes
+  daría 500 en main con textos de 301 a 1000).
+  Limitaciones: no detecta una dirección ni datos de salud en prosa, ni un
+  teléfono dictado en palabras (R1); falsos positivos con números largos,
+  por ejemplo "referencia 123 456 789", que el agente reescribe (R2); el 422
+  devuelve el texto en "input" y queda en la ejecución de n8n (R3).
+
+(d) D31: el hueco tiene que estar libre (P15-P22)
+  Un solo técnico. Una visita 'solicitada' o 'confirmada' OCUPA
+  [inicio, inicio + duracion_visita_min): una de 10:00 a 11:00 ocupa las
+  10:59 y deja libres las 09:00 y las 11:00. Cuentan los solapes, no solo el
+  mismo inicio. Las cuentas se hacen en tiempo real (UTC), también los días
+  del cambio de hora.
+  Respuesta, en los tres endpoints:
+    409 {"detail": {"motivo": "hueco_ocupado", "mensaje": "...",
+                    "huecos_libres": ["08:30", "09:00", ...]}}
+  huecos_libres: horas de inicio de ESE día, cada paso_huecos_min (30,
+  regla de paso13) desde el inicio de cada franja, con la visita entera
+  dentro de la franja, ya en el futuro y sin solaparse; lista vacía si no
+  queda ninguna. Es solo para OFRECER: se puede pedir cualquier hora válida,
+  como antes (P19 = C). El mensaje solo nombra horas libres: nunca el id,
+  el cliente ni la hora de fin de la otra visita. paso_huecos_min entra en
+  las reglas de visita: si falta o vale 0, el 503 de siempre.
+  Concurrencia (P15): pg_advisory_xact_lock(3101, AAAAMMDD), un bloqueo por
+  DÍA que se toma después del FOR UPDATE de la oportunidad y dura hasta el
+  final de la transacción; luego, la consulta de solapes. Verificado con 10
+  peticiones simultáneas de 10 oportunidades al mismo hueco, en 5 rondas:
+  un 201 y nueve 409 en cada una, ningún 500.
+  Orden de las comprobaciones (precisión del tutor), el mismo en los tres:
+  forma (422 de Pydantic) -> 404 -> estado y Gate (409) -> reglas de fecha
+  (503 y 422 de negocio) -> las propias del endpoint sobre la visita PROPIA
+  (en /visits, repetición 200 y visita_confirmada; en /resultados-llamada,
+  visita_cambiada, misma_hora_pedida y visita_activa_existente; la
+  repetición va antes, como siempre) -> 409 hueco_ocupado -> escritura.
+  La visita propia no cuenta (C8): la que se sustituye en /visits, la que
+  confirmar_hora confirma y la que otra_hora cancela.
+  Limitaciones: una solicitud sin confirmar bloquea su hueco (R5, aceptado,
+  P22); una escritura a mano en la base de datos se salta la comprobación
+  (R6; la restricción de exclusión, que lo impediría en la base de datos,
+  queda para N1 con su coste: necesita una columna con el fin guardado,
+  porque timestamptz + interval es STABLE); las visitas que ya se solaparan
+  antes no se tocan (P20); festivos no detectados (como 5.4).
+
+Implementación: app/services/plazo_orientativo.py, leads_service.py y
+app/api/leads.py (a); app/services/business_rules_service.py,
+app/schemas/business_rules.py y app/mcp_server/server.py (b);
+app/schemas/common.py (texto_sin_datos_de_contacto) y visits.py (c);
+app/services/reglas_visita.py (solapa, huecos_libres,
+mensaje_hueco_ocupado, comprobar_hueco_libre, HuecoOcupado),
+visits_service.py, resultados_llamada_service.py, app/api/visits.py y
+resultados_llamada.py (d). Migración paso13 (APLICADA el 2026-10-12: 7
+filas de reglas_negocio) y paso13b (PREPARADA, sin aplicar: CHECK de
+texto_cliente a 1..300, después del merge). Verificación:
+check_lead_session_http 69/69, check_mcp_business_rules 21/21,
+check_texto_agente_service 44/44, check_disponibilidad_service 35/35,
+check_visits_http 90/90, check_resultados_llamada_http 183/183,
+check_gate_decisions_http 124/124, check_migracion_agente2 CORRECTO, con
+pruebas en negativo N1-N9 (resultados exactos en la sección 7 del plan) y
+suite completa 48/48 (Bloque C).
 
 6. Revisión técnica final — hallazgos y resolución
 

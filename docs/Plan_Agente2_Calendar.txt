@@ -545,6 +545,19 @@ C.  Regresión (los 15 scripts que crean visitas, los de MCP y el de sesión)
 D.  Adenda (filas 3, 4, 6 y 10; secciones 5.3, 5.4, 5.5, 5.10; MCP; nota de
     P14), docs/Contrato_Formulario_Llamadas.md (409 hueco_ocupado),
     CLAUDE.md (con C1) y prompts/agente2_asesor.md.
+    [Nota 2026-10-12: Bloque D hecho (solo documentación, sin pruebas).
+    Adenda: sección nueva 5.11 y notas fechadas en las filas 3, 4, 6 y 10,
+    en la nota de las tools MCP (get_business_rules existe;
+    request_missing_information fuera de N0, P14) y al final de 5.3, 5.4,
+    5.5 y 5.10. Notas fechadas de una línea donde D31 revisa D18.6 (en
+    Decisiones_D18) y D30 revisa D29.2 (en Decisiones_D29, en la Adenda
+    5.10 y en el contrato); los documentos de D30 y D31 los tiene el tutor.
+    docs/Contrato_Formulario_Llamadas.md: el 409 hueco_ocupado con su cuerpo
+    exacto y lo que ve administración (también por el alias). CLAUDE.md al
+    día. paso13b preparada SIN aplicar (sección 11). Tabla de hashes
+    (sección 12). prompts/agente2_asesor.md NO se escribe en esta rama: el
+    prompt se escribe en n8n después del merge (pasos de n8n, más arriba) y
+    se copia a prompts/ cuando esté probado, como el del Agente 1.]
 Merge (confirmación de Gabi, --ff-only) y después paso13b (CHECK de
 texto_cliente a 1..300; medir antes).
 
@@ -784,3 +797,92 @@ Precisiones del tutor:
       encaja.
   (3) B5-0 no lleva pruebas en negativo propias: es un cambio mecánico; su
       prueba son los mismos recuentos que hoy.
+
+
+================================================================
+11. INTEGRACIÓN EN MAIN Y paso13b (Bloque D, 2026-10-12)
+================================================================
+11.1 Comandos EXACTOS para Gabi (Git Bash), solo tras la revisión del tutor:
+
+    cd /c/Proyectos/tfm-reformas
+    git status -sb                       # tiene que estar limpio
+    git fetch origin
+    git checkout main
+    git pull --ff-only origin main
+    git rev-parse --short HEAD           # tiene que dar 579fd00; si no, PARA
+    git log --oneline -1 origin/feat/n0-agente2   # el commit del Bloque D
+    git merge --ff-only origin/feat/n0-agente2    # sin merge commit; si
+                                                  # falla, PARA (no forzar)
+    git log --oneline -3                 # main = el commit del Bloque D
+    git push origin main
+    git push origin --delete feat/n0-agente2      # la rama en GitHub
+    git branch -d feat/n0-agente2                 # la rama en local
+
+  Después, reiniciar el uvicorn del 8000 (el de n8n) con el código nuevo,
+  SIN --reload (regla crítica de CLAUDE.md): en su terminal, Ctrl+C y
+
+    ./venv/Scripts/python.exe -m uvicorn app.main:app
+
+  (en PowerShell: .\venv\Scripts\python.exe -m uvicorn app.main:app).
+  Comprobar a mano GET http://127.0.0.1:8000/health/db (200). Sin el
+  reinicio, n8n sigue con el código de antes: sin plazo_orientativo, sin
+  get_business_rules y sin D31.
+
+11.2 paso13b (CHECK de visitas.texto_cliente a 1..300), PREPARADA SIN APLICAR
+  Medición previa en solo lectura (2026-10-12 21:22:54): 3 visitas en la
+  tabla (538, 3069 y 3070), longitudes 74, 74 y 77; 0 por encima de 300;
+  el CHECK actual es "char_length(texto_cliente) >= 1 AND <= 1000".
+  Archivos: scripts/migraciones_ejecutadas/paso13b_check_texto_cliente_300.py
+  (freno --confirmo-paso13b; vuelve a medir y no cambia nada si alguna fila
+  supera 300; idempotente), paso13b_vuelta_atras.py (vuelve a 1..1000, freno
+  --confirmo-vuelta-atras) y scripts/check_migracion_paso13b.py (definición
+  1..300; 301 rechazado, 300 "á" aceptado, vacío rechazado, en una
+  transacción con ROLLBACK; ninguna fila real por encima). Escrita para
+  FALLAR antes de migrar (la definición dice 1000 y 301 se acepta); no se ha
+  ejecutado en el Bloque D (sin pruebas). Mientras paso13b no se aplique,
+  check_migracion_paso13b es el único script de la suite que debe fallar.
+  Orden, DESPUÉS de 11.1:
+    1. check_migracion_paso13b -> tiene que FALLAR (prueba en negativo).
+    2. Frase de Gabi: "confirmo la migración paso13b".
+    3. ./venv/Scripts/python.exe scripts/migraciones_ejecutadas/paso13b_check_texto_cliente_300.py --confirmo-paso13b
+    4. check_migracion_paso13b -> todo correcto; y la migración otra vez:
+       "ya es de 1..300: no se toca nada" (idempotente).
+    5. En el mismo paso (una rama corta), los dos scripts que prueban el
+       1000 de paso9 dejan de pasar y se cambian: check_migracion_visitas
+       (1000 aceptado / 1001 rechazado -> 300 / 301) y el CASO 20 de
+       check_listado_llamadas_http (texto de 1.000 por SQL -> 300). Después,
+       regresión de los scripts que crean visitas (lección de B5).
+    6. docs/schema_actual.sql: regenerarlo con scripts/dump_schema.py.
+
+11.3 Pendiente después del merge, fuera de esta rama: la rama 2 (resumen
+  de D28.1); los pasos de n8n del Agente 2 (sección 7) con N10; la lista de
+  pendientes anotados en CLAUDE.md.
+
+
+================================================================
+12. HASHES DE LA RAMA feat/n0-agente2 (desde main 579fd00)
+================================================================
+  Bloque A  cbd2ec7  D28 y D29 copiados a docs/ sin cambios
+            3e50cd2  plan (D28.1, D26.7, Google Calendar)
+            06bec0c  decisiones de la revisión y D31
+            be97d86  respuestas P15-P22 y precisiones del tutor
+  B1        3bfa427  migración paso13 (sin aplicar) y su comprobación
+            990d058  paso13 aplicada (38/38)
+  B2        e550bed  reforma y plazo_orientativo en GET /leads/session (69/69)
+            8d4ab48  pruebas en negativo N1 y N2
+  B4 (D26.7, pedido como "B3")
+            d730c41  filtro de texto_cliente (sin ejecutar)
+            d3d5823  ejecutado (44/44, 65/65) y N4a-N4c
+  B3        3df603d  tool MCP get_business_rules (sin ejecutar)
+            d43f42b  ejecutado (21/21, 19/19) y N3
+  B5-0      0a6300e  fechas propias en los scripts que crean visitas
+  B5 (D31)  4aabe11  el hueco tiene que estar libre (sin ejecutar)
+            870e5f1  ejecutado, N5-N9, H-B5-1 y H-B5-2
+            2074452  revisión del tutor: hueco libre antes de cada ronda,
+                     H-B5-1 resuelto
+  C         ffd1ea2  suite completa 48/48 y H-C-1
+  D         (el commit de esta nota) Adenda 5.11, contrato del formulario,
+            notas de D30 y D31, CLAUDE.md, paso13b preparada y estas
+            secciones 11 y 12.
+  Pendiente de merge: lo hace Gabi tras la revisión del tutor, con
+  --ff-only (11.1).

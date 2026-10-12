@@ -119,6 +119,33 @@ actual: Nivel N0 (núcleo mínimo aprobable).
     sys.exit, así que terminan con código 0 aunque una comprobación salga
     mal (solo dan otro código si revientan con una excepción). Su salida
     hay que revisarla a mano: el código de salida no basta.
+- Memoria en dos fases (regla desde el 2026-10-12, rama feat/n0-agente2).
+  Con 8 GB, Docker/n8n y los navegadores ocupan casi toda la RAM. Cada bloque
+  con pruebas se hace en dos fases:
+  - Fase 1, con Docker/n8n abiertos (Gabi trabaja en n8n): SOLO se escribe
+    el código y los scripts, con sus comentarios medidos, y se hace commit
+    "SIN ejecutar". No se arranca uvicorn ni se ejecuta ninguna prueba (sí
+    se permiten lecturas en solo lectura de la base de datos para medir).
+  - Fase 2, cuando Gabi lo dice: antes de nada se MIDE la memoria libre
+    (Win32_OperatingSystem.FreePhysicalMemory) y se comprueba que no hay
+    procesos chrome, msedge ni docker/vmmem. Con menos de 1,5 GB libres, o
+    con Docker/n8n, Chrome o Edge abiertos, NO se ejecuta nada: se para y se
+    avisa. No se cierra ningún proceso ajeno: lo cierra Gabi (Chrome y Edge
+    se quedan en segundo plano al cerrar la ventana; hay que "Salir" desde
+    el icono junto al reloj). Una excepción solo si Gabi la pide y la prueba
+    no escribe ninguna fila (B3, anotada); para B5 y la suite, el tutor la
+    hizo obligatoria.
+- Regresión de visitas (lección del 2026-10-12, H-B5-2): cada bloque que
+  toque visitas (su esquema, su filtro, sus reglas o sus endpoints) ejecuta
+  la regresión de TODOS los scripts que crean visitas, no solo los del
+  bloque. En B4 se cambió el filtro de texto_cliente y no se ejecutó
+  check_ficha_oportunidad_http, que fallaba en un 15 % de las pasadas.
+- Los scripts solo comprueban SUS datos (lección del 2026-10-12, H-B5-1 y
+  H-C-1): nada de contar en toda la respuesta o en toda una tabla, porque un
+  dato real (una visita de mañana con el texto fijo del Gate, un seguimiento
+  registrado desde el formulario) los hace fallar sin que nada esté roto.
+  Se cuenta en los elementos de las oportunidades propias, o en las filas
+  que existían al migrar, y lo demás sale como [INFO].
 
 ## REGLA CRÍTICA: nunca arrancar uvicorn con --reload
 
@@ -226,6 +253,17 @@ REST, sin tool MCP, noveno include_router, cabecera X-Gate-Secret. POST
 /gate-decisions pasa a ser su ALIAS con el contrato antiguo, solo Gate, hasta
 que el formulario de n8n use la ruta nueva (D26.6). Detalle en "Estado
 actual".)
+(Nota 2026-10-12: corrige la nota anterior: 4b ya NO está pendiente de merge,
+main = 579fd00 contiene sus commits (C1 del plan del Agente 2). Desde el
+2026-10-12, en la rama feat/n0-agente2 (pendiente de merge): GET
+/leads/session añade "reforma" y "plazo_orientativo"; get_business_rules
+EXISTE como tool MCP sin parámetros y de solo lectura (list_tools devuelve
+calculate_estimate y get_business_rules; NUNCA precio_m2, margen, IVA ni
+umbrales); POST /visits filtra texto_cliente (D26.7: 1..300, 422 con email o
+teléfono); y POST /visits, POST /resultados-llamada y el alias comprueban que
+el hueco esté libre (D31: 409 hueco_ocupado con huecos_libres).
+request_missing_information() sale de N0 (P14). Detalle en "Estado actual"
+y en la Adenda 5.11.)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -566,6 +604,27 @@ SOLO REST.
 > claude.ai, todavía no en docs/). El siguiente bloque de backend es 4c, el
 > aviso de "última llamada" (D29.2, regla horas_ultima_llamada); en n8n, el
 > formulario ampliado (conectado a WF4, D27.4) y después WF3 (bloque 5).
+>
+> **(Nota 2026-10-12, rama feat/n0-agente2.)** El párrafo anterior está
+> superado en dos puntos: 4b está **integrado en `main` (579fd00)**, y el
+> aviso de "última llamada" ya no es un bloque de backend: **D30** revisa
+> D29.2 y lo lleva a n8n (el documento lo tiene el tutor). **Bloque actual:
+> el backend del Agente 2 (rama 1 de 2)**, implementado y verificado en la
+> rama `feat/n0-agente2`, **pendiente de merge** (bloques A, B1, B2, B3, B4,
+> B5-0, B5, C y D cerrados; plan docs/Plan_Agente2_Calendar.txt, hashes en
+> su sección 12; contrato en la Adenda 5.11). Contenido: GET /leads/session
+> con reforma y plazo_orientativo (D18.7, reglas de paso13); tool MCP
+> get_business_rules; filtro D26.7 sobre visits.texto_cliente (300 en
+> Pydantic); D31 (revisa D18.6), el hueco libre con bloqueo por día, en
+> /visits, /resultados-llamada y el alias. OJO: la migración paso13 (7
+> filas de reglas_negocio) YA ESTÁ APLICADA; paso13b (CHECK de texto_cliente
+> a 1..300) está PREPARADA SIN APLICAR y va DESPUÉS del merge (sección 11
+> del plan, con los comandos exactos de integración). Suite completa 48/48
+> (Bloque C). Misma regla de siempre: no hacer merge sin la confirmación
+> explícita de Gabi, después de la revisión del tutor, y siempre con
+> `--ff-only`. Después del merge: reiniciar el uvicorn del 8000 SIN
+> --reload, paso13b, y en n8n el Agente 2 (router, prompt, tools y memoria).
+> La rama 2 (resumen de D28.1) va después, en su propia rama.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -919,6 +978,19 @@ PID 28620 (log = netstat; el lanzador 29800 terminó con él). Salida de los
 cinco scripts de P4 revisada a mano: sin fallos. Las pruebas en negativo se
 hicieron en tres tandas con commit entre ellas, cada una con su
 comprobación de 506/507.)
+(Nota 2026-10-12, rama feat/n0-agente2: la suite tiene ahora 48 scripts, con
+check_migracion_agente2, check_texto_agente_service, check_mcp_business_rules
+(puerto 8029) y check_disponibilidad_service (check_lead_session_http ya
+existía; usa el 8016). 48/48 en UNA pasada (18:46:04-18:59:41) tras corregir
+check_migracion_resultado_llamadas (H-C-1: 49/50 por datos reales, ahora
+50/50), con 1,99 GB libres, Docker/n8n, Chrome y Edge cerrados, enchufado, y
+sin Kernel-Power 506/507 entre 18:45 y 19:01; datos reales iguales antes y
+después. Uvicorn del 8031 detenido por su PID 25988 (log = netstat). Los
+scripts que crean visitas piden sus fechas a scripts/fechas_prueba.py (un
+bloque de 4 semanas por script desde la semana +30, y exigir_libres: si una
+visita AJENA ocupa sus huecos, FALLO y se para sin borrar nada). Además,
+check_migracion_paso13b (nuevo) FALLA a propósito hasta que se aplique
+paso13b después del merge: es su prueba en negativo.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1127,6 +1199,22 @@ uno en su propia rama:
   - Copiar a docs/ el documento de D29 (está en el Proyecto de claude.ai).
   - dump_schema.py no vuelca los COMMENT ON TABLE: el de decisiones_gate no
     aparece en docs/schema_actual.sql.
+(Nota 2026-10-12, rama feat/n0-agente2.) De la lista anterior: el bloque 4c
+ya NO es de backend (D30 revisa D29.2: el aviso de "última llamada" va a
+n8n), y el documento de D29 YA está en docs/ (cbd2ec7, junto con el de D28).
+Pendientes nuevos:
+  - Después del merge de feat/n0-agente2: reiniciar el uvicorn del 8000 sin
+    --reload; paso13b (sección 11.2 del plan), con el cambio de
+    check_migracion_visitas y del CASO 20 de check_listado_llamadas_http y
+    regenerar docs/schema_actual.sql.
+  - n8n: el Agente 2 (router con 'perdida' y 'ganada', prompt, tools
+    solicitar_visita y get_business_rules, Simple Memory), sin X-Gate-Secret
+    (N10 del plan); prompts/agente2_asesor.md cuando esté probado; el
+    formulario publicado tiene que enseñar el 409 hueco_ocupado.
+  - Rama 2: el resumen de D28.1 (leads.resumen_solicitud, POST /leads, ficha,
+    GET /gate-avisos, plantilla de WF2 y el Agente 1 que lo escribe).
+  - N1: la restricción de exclusión de visitas (segunda barrera de D31, con
+    una columna de fin guardado) y el calendario externo.
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
@@ -1219,6 +1307,16 @@ rápida, no sustituye esa documentación. Contiene:
   para registrar el resultado de una llamada: la ficha, las páginas por
   tipo, los campos de cada resultado, los motivos y qué enseñar ante cada
   respuesta (P15; la Adenda 5.10 remite a él).
+  (Nota 2026-10-12: incluye el 409 hueco_ocupado de D31, también por el alias.)
+- Plan_Agente2_Calendar.txt — plan de la rama feat/n0-agente2 (el backend
+  del Agente 2): P1-P22 decididas, D31 (sección 10.3), hallazgos y pruebas
+  en negativo N1-N9 con sus resultados exactos, integración y paso13b
+  (sección 11) y hashes (sección 12).
+- Decisiones_D28_Resumen_Conversacion_y_Enlace_Ficha.md y
+  Decisiones_D29_Me_Lo_Pienso_y_Ultima_Llamada.md — D28 (resumen de la
+  conversación, rama 2) y D29 (copiados del Proyecto de claude.ai el
+  2026-10-12). D30 y D31 los tiene el tutor en el Proyecto: resumidos en
+  una línea en la Adenda 5.11.
 - Plan_Ejecutor_Suite.txt — lanzador de la suite que impide la suspensión
   de Windows. APLAZADO el 2026-10-03; lo sustituye la regla de uso de este
   archivo.

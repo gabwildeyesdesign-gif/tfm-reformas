@@ -99,6 +99,12 @@ varias oportunidades devuelve la primera, igual que la idempotencia, y deja un `
 Los Code nodes de n8n son **JavaScript**, no Java; n8n tiene nodo nativo de Google Calendar — verificar en la
 versión instalada si incluye consulta de disponibilidad antes de diseñar nada.
 
+*(Nota 2026-10-12: D31 revisa D18.6. Ya en N0, POST /visits, POST /resultados-llamada y su alias comprueban
+en la base de datos que el hueco esté libre (un solo técnico, solapes, 409 hueco_ocupado con las horas libres);
+lo que sigue para N1 es el calendario externo. Rama feat/n0-agente2; detalle en la Adenda 5.11 y en
+docs/Plan_Agente2_Calendar.txt (sección 10.3). El documento de D31 lo tiene el tutor en el Proyecto de
+claude.ai.)*
+
 ### D18.7 — Plazos de ejecución (CERRADO)
 
 **Regla confirmada por Gabi:** el agente da plazo orientativo **solo si** `tipo_reforma ∈ {bano, cocina}`
