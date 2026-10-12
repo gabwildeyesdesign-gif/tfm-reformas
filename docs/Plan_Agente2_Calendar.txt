@@ -290,6 +290,24 @@ B2. Contexto: GET /leads/session gana "reforma" {tipo_reforma, m2,
 B3. get_business_rules (tool MCP, sin parámetros, 3.4).
     check_mcp_business_rules: list_tools = las dos tools; 401 sin Bearer;
     claves exactas. N3 (ALTO): copia que devuelve precio_m2 -> FALLO.
+    [Nota 2026-10-12: código y script escritos SIN ejecutar (Docker/n8n
+    abiertos). Servicio app/services/business_rules_service.py: una
+    transacción REPEATABLE READ, READ ONLY; franjas y duración con
+    leer_reglas_visita (la función de POST /visits); tarifas_base SIN leer
+    precio_m2; error de configuración -> ConfiguracionIncompleta, que la
+    tool convierte en ToolError con un mensaje genérico y un [AVISO] en
+    stderr, sin log. Esquema app/schemas/business_rules.py (extra="forbid"):
+    visita {dias, manana {inicio, fin}, tarde {inicio, fin}, duracion_min},
+    recargo_informe_tecnico_con_iva e incluye_tipico [{tipo_reforma,
+    nivel_acabados, incluye_tipico}]. Dos precisiones sobre 3.4: (1) el
+    recargo sale CON IVA (D14: todo precio que ve el cliente lo lleva),
+    calculado con aplicar_iva del presupuesto; el tipo de IVA no sale; (2)
+    "dias" = "de lunes a viernes", la regla fija de validar_fecha, que no
+    está en reglas_negocio. Script check_mcp_business_rules (puerto 8029):
+    401 sin Bearer, con WEBHOOK_SECRET y con GATE_SECRET; list_tools = las
+    dos; claves exactas; valores contra la base de datos (recargo con su
+    propia cuenta); ninguna clave ni valor prohibido; configuración rota en
+    memoria.]
 B4. Filtro D26.7 en POST /visits: MAX_TEXTO_VISITA = 300, emails y
     teléfonos con 422 (función compartida en app/schemas/common.py, que la
     rama 2 reutilizará). check_visits_http (hoy prueba 1000: cambia el

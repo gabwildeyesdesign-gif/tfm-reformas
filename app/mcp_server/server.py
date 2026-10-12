@@ -8,7 +8,8 @@ la puerta REST equivalente.
 
 Contiene dos cosas:
   1. La autenticación de /mcp (VerificadorSecretoMCP).
-  2. Las tools. En este bloque, solo calculate_estimate.
+  2. Las tools: calculate_estimate y, desde el Bloque B3 del plan del
+     Agente 2 (2026-10-12), get_business_rules.
 
 Se monta dentro de FastAPI, en /mcp, desde app/main.py (un solo proceso,
 decisión de arquitectura por la RAM de 8 GB).
@@ -17,6 +18,10 @@ decisión de arquitectura por la RAM de 8 GB).
 # secrets: módulo estándar; se usa su compare_digest para comparar el token
 # en tiempo constante (ver verify_token, más abajo).
 import secrets
+
+# sys: para escribir el [AVISO] de get_business_rules en stderr (consola del
+# uvicorn).
+import sys
 
 # Annotated (biblioteca estándar, módulo typing) permite pegarle a un tipo
 # información extra sin cambiar el tipo en sí. Annotated[int, Field(gt=0)]
@@ -48,15 +53,25 @@ from pydantic import Field
 
 # El secreto de la puerta /mcp, leído del .env en app/config.py.
 from app.config import MCP_SECRET
+# El esquema de la respuesta de get_business_rules (esquema de salida).
+from app.schemas.business_rules import BusinessRulesResponse
+
 # El esquema de la respuesta del cálculo: fastmcp lo usa como esquema de
 # salida de la tool.
 from app.schemas.estimates import EstimateResponse
+
+# El servicio de get_business_rules, importado como MÓDULO por el mismo
+# motivo que estimate_service (la tool y la función se llaman igual).
+from app.services import business_rules_service
 
 # Se importa el MÓDULO del servicio, y no la función suelta, porque la
 # tool se llama igual que la función (calculate_estimate). Con dos
 # nombres iguales en este archivo, uno taparía al otro. Así se escribe
 # estimate_service.calculate_estimate(...) y queda claro cuál es cuál.
 from app.services import estimate_service
+
+# El rechazo por configuración (falta o no es válida una regla).
+from app.services.reglas_visita import ConfiguracionIncompleta
 
 # ---------------------------------------------------------------------
 # Comprobación de arranque (fail fast)
@@ -238,3 +253,57 @@ def calculate_estimate(
     # cambios estructurales. La regla vive en services/ y aquí solo se
     # aplica.
     return estimate_service.ocultar_importes_para_agente(respuesta)
+
+
+# ---------------------------------------------------------------------
+# Tool: get_business_rules (Bloque B3 del plan del Agente 2, sección 3.4)
+# ---------------------------------------------------------------------
+# Mensaje del error que ve el agente si falta una regla. Genérico: no
+# nombra ninguna clave (esas van al [AVISO] de stderr, para administración).
+MENSAJE_REGLAS_NO_DISPONIBLES = (
+    "Las reglas de negocio no están disponibles ahora mismo. No inventes "
+    "horarios ni precios: di al cliente que administración se lo confirmará."
+)
+
+
+# Misma forma que calculate_estimate: @mcp.tool la registra, el docstring
+# es la descripción que lee el agente y el tipo de retorno es el esquema de
+# salida. Sin parámetros: estas reglas son iguales para todos los clientes
+# y un LLM no aporta identificadores (Adenda 1.1a). def y no async def,
+# porque lee de Postgres con psycopg2 (bloqueante).
+@mcp.tool
+def get_business_rules() -> BusinessRulesResponse:
+    """
+    Devuelve las reglas generales de la empresa que puedes contar al
+    cliente. No necesita ningún dato.
+
+    - visita: días, franjas de mañana y de tarde y duración de la visita
+      técnica. La visita debe EMPEZAR y TERMINAR dentro de una franja.
+      Úsalo para proponer horas válidas antes de solicitar la visita.
+    - recargo_informe_tecnico_con_iva: la visita técnica es gratuita; solo
+      se cobra este importe, con el IVA incluido, si el técnico tiene que
+      emitir un informe (obras con cambios estructurales).
+    - incluye_tipico: lo que suele incluir cada tipo de reforma según su
+      nivel de acabados. Es ORIENTATIVO: preséntalo siempre así, nunca
+      como un compromiso.
+
+    No contiene precios por metro ni el presupuesto del cliente: no los
+    calcules ni los estimes.
+    """
+    # La tool solo traduce: llama al servicio y convierte el rechazo por
+    # configuración en un error de la tool.
+    try:
+        # Toda la lógica está en services/.
+        return business_rules_service.get_business_rules()
+    # Falta o no es válida una regla: la traza para administración en
+    # stderr (como el 503 de GET /leads/session), sin escribir ningún log.
+    except ConfiguracionIncompleta as error:
+        # Nombra las claves, nunca un valor de precio ni un secreto.
+        print(
+            f"[AVISO] tool get_business_rules: configuración incompleta: {error.faltan}",
+            file=sys.stderr,
+            flush=True,
+        )
+        # "from None", como en calculate_estimate: el agente no necesita el
+        # traceback, solo el mensaje.
+        raise ToolError(MENSAJE_REGLAS_NO_DISPONIBLES) from None
