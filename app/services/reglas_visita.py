@@ -29,7 +29,7 @@ Como todo services/, este archivo NO importa fastapi ni fastmcp.
 
 # Los tipos de fecha y hora de la librería estándar: date (un día), time
 # (una hora del día) y datetime (un instante: día y hora, con zona).
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 
 # ZoneInfo: las zonas horarias oficiales (base de datos IANA). En Windows
 # necesita el paquete tzdata (fijado en requirements.txt, decisión P1 de
@@ -53,7 +53,25 @@ CLAVE_MANANA_FIN = "visita_manana_fin_min"
 CLAVE_TARDE_INICIO = "visita_tarde_inicio_min"
 CLAVE_TARDE_FIN = "visita_tarde_fin_min"
 CLAVE_DURACION = "duracion_visita_min"
-CLAVES_REGLAS = (CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN, CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN, CLAVE_DURACION)
+# D31 (2026-10-12, paso13): cada cuántos minutos se ofrecen horas de inicio
+# libres en el 409 hueco_ocupado (30: 08:30, 09:00, 09:30...). Es solo para
+# OFRECER: se puede pedir cualquier hora válida, como antes (P19, opción C).
+CLAVE_PASO_HUECOS = "paso_huecos_min"
+# Las seis claves que se leen y validan juntas (503 si falta alguna). Desde
+# D31 incluye el paso: así un paso que falte da 503 al principio, en el
+# mismo sitio que las demás, y no solo cuando un hueco esté ocupado.
+CLAVES_REGLAS = (CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN, CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN, CLAVE_DURACION,
+                 CLAVE_PASO_HUECOS)
+
+# D31: los estados de visita que OCUPAN su hueco (una 'cancelada' o una
+# 'completada' no ocupan nada).
+ESTADOS_QUE_OCUPAN = ("solicitada", "confirmada")
+
+# D31: el primer número del bloqueo de Postgres (pg_advisory_xact_lock con
+# dos enteros). Es fijo del proyecto (31, por D31, y 01: visitas); el
+# segundo número es el día (AAAAMMDD). Así dos peticiones del MISMO día se
+# esperan una a otra, y las de días distintos no.
+CLAVE_BLOQUEO_VISITAS = 3101
 
 # 1440: el valor máximo que puede tener una de esas claves (medianoche).
 MINUTOS_POR_DIA = 24 * 60
@@ -107,6 +125,23 @@ class ConfiguracionIncompleta(RechazoNegocio):
         super().__init__(motivo, mensaje)
         # Y la lista de claves con problemas, como atributo propio.
         self.faltan = faltan
+
+
+class HuecoOcupado(RechazoNegocio):
+    """
+    D31: la visita se solapa con otra visita activa (-> 409 hueco_ocupado).
+
+    huecos_libres: las horas de inicio ("HH:MM") de ese día que siguen
+    libres, ya en el futuro; lista vacía si no queda ninguna. Se guarda
+    aparte del mensaje para que el adaptador la devuelva y el agente la
+    ofrezca sin tener que sacarla de una frase (P18).
+    """
+
+    def __init__(self, motivo: str, mensaje: str, huecos_libres: list[str]):
+        # El motivo y el mensaje los guarda la clase base (RechazoNegocio).
+        super().__init__(motivo, mensaje)
+        # Y la lista de horas libres, como atributo propio.
+        self.huecos_libres = huecos_libres
 
 
 # ======================================================================
@@ -257,6 +292,9 @@ def leer_reglas_visita(cursor) -> tuple[dict[str, int], list[str]]:
     # rechazó el caso 2).
     if reglas.get(CLAVE_DURACION) == 0:
         problemas.append(f"{CLAVE_DURACION}: debe ser mayor que 0")
+    # D31: un paso de 0 minutos dejaría el bucle de huecos_libres sin avanzar.
+    if reglas.get(CLAVE_PASO_HUECOS) == 0:
+        problemas.append(f"{CLAVE_PASO_HUECOS}: debe ser mayor que 0")
 
     # Se devuelven los dos: quien llama decide qué hacer si hay problemas.
     return reglas, problemas
@@ -287,3 +325,137 @@ def registrar_configuracion_incompleta(cursor, oportunidad_id: int, problemas: l
             Json({"problemas": problemas, "origen": origen}),
         ),
     )
+
+
+# ======================================================================
+# D31: el hueco tiene que estar libre (revisa D18.6)
+# ======================================================================
+# Un solo técnico: una visita 'solicitada' o 'confirmada' OCUPA el
+# intervalo [inicio, inicio + duracion_visita_min), cerrado al principio y
+# abierto al final. Dos visitas chocan si se SOLAPAN, no solo si empiezan a
+# la misma hora: una de 10:00 a 11:00 ocupa las 10:59 y deja libres las
+# 11:00 (plan, sección 10.3).
+#
+# Orden de las comprobaciones (precisión 2 del tutor), igual en POST
+# /visits, POST /resultados-llamada y su alias: forma (422 de Pydantic) ->
+# 404 -> estado y Gate (409) -> reglas de fecha (503 y 422 de negocio) ->
+# las comprobaciones propias de cada endpoint que miran la visita PROPIA
+# (repetición 200, visita_confirmada, visita_cambiada, visita_activa_existente)
+# -> hueco_ocupado, la última antes de escribir.
+
+
+def solapa(inicio_a: datetime, inicio_b: datetime, duracion_min: int) -> bool:
+    """
+    True si dos visitas de duracion_min minutos que empiezan en inicio_a y
+    en inicio_b se solapan. Intervalos [inicio, fin): que una termine justo
+    cuando empieza la otra NO es solapar.
+    """
+    # Las cuentas, en UTC: sumar minutos a una hora de Madrid con su zona
+    # es una suma "de reloj de pared" (gotcha de CLAUDE.md); en UTC es una
+    # duración real.
+    a = inicio_a.astimezone(timezone.utc)
+    # La otra, también en UTC.
+    b = inicio_b.astimezone(timezone.utc)
+    # La duración como timedelta.
+    duracion = timedelta(minutes=duracion_min)
+    # Se solapan si cada una empieza ANTES de que termine la otra (estricto:
+    # el final es abierto).
+    return a < b + duracion and b < a + duracion
+
+
+def huecos_libres(dia: date, ahora: datetime, reglas: dict[str, int], ocupadas: list[datetime]) -> list[str]:
+    """
+    Las horas de inicio ("HH:MM", Madrid) de ese día que se pueden ofrecer:
+    cada paso_huecos_min minutos desde el inicio de cada franja, con la
+    visita entera dentro de la franja (la misma regla que validar_fecha), ya
+    en el futuro y sin solaparse con ninguna de las ocupadas.
+    """
+    # La lista empieza vacía.
+    libres = []
+    # Las dos franjas: (inicio, fin) en minutos desde medianoche.
+    for clave_inicio, clave_fin in ((CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN), (CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN)):
+        # El primer candidato: el inicio de la franja.
+        minuto = reglas[clave_inicio]
+        # Mientras la visita entera quepa en la franja.
+        while minuto + reglas[CLAVE_DURACION] <= reglas[clave_fin]:
+            # Ese minuto de ese día, en Madrid (con su desfase de ESE día).
+            candidato = datetime.combine(dia, time(minuto // 60, minuto % 60), tzinfo=ZONA_MADRID)
+            # En el futuro y sin solaparse con ninguna ocupada: se ofrece.
+            if candidato > ahora and not any(solapa(candidato, o, reglas[CLAVE_DURACION]) for o in ocupadas):
+                # Como texto "HH:MM".
+                libres.append(_hhmm(minuto))
+            # El siguiente candidato.
+            minuto += reglas[CLAVE_PASO_HUECOS]
+    # Las horas libres, en orden.
+    return libres
+
+
+def mensaje_hueco_ocupado(libres: list[str]) -> str:
+    """
+    El texto del 409. Solo dice que la hora no está libre y cuáles sí: NUNCA
+    datos de la otra visita (ni su id, ni su cliente, ni a qué hora termina).
+    """
+    # Con horas libres: se nombran.
+    if libres:
+        # ", ".join une la lista con comas.
+        return ("Esa hora no está disponible: coincide con otra visita. "
+                f"Horas de inicio libres ese día: {', '.join(libres)}.")
+    # Sin ninguna: hay que pedir otro día.
+    return "Esa hora no está disponible y ese día no queda ninguna hora libre: propón otro día."
+
+
+def comprobar_hueco_libre(cursor, inicio: datetime, ahora: datetime, reglas: dict[str, int],
+                          excluir: list[int] | tuple[int, ...] = ()) -> None:
+    """
+    D31: lanza HuecoOcupado (409) si la visita que empieza en inicio se
+    solapa con otra visita activa. Si no, no hace nada.
+
+    excluir: ids de visitas que NO cuentan porque son de la propia
+    oportunidad y se sustituyen o se confirman en esta misma transacción (la
+    sustitución de /visits, confirmar_hora y otra_hora: C8).
+
+    Se llama con el cursor de quien llama, DESPUÉS de bloquear su
+    oportunidad (FOR UPDATE) y como última comprobación antes de escribir.
+
+    Contra dos peticiones a la vez (P15): antes de mirar, toma un bloqueo de
+    Postgres para ESE día (pg_advisory_xact_lock), que dura hasta el final
+    de la transacción. La segunda petición del mismo día espera aquí a que
+    la primera termine; su consulta de después ve la visita ya confirmada
+    (READ COMMITTED: cada sentencia ve lo confirmado hasta ese momento) y
+    da 409. Solo protege a quien pasa por aquí: por eso es el ÚNICO camino
+    (R6: una escritura a mano en la base de datos se lo salta).
+    """
+    # El día de la visita en Madrid (el de la franja).
+    dia = inicio.astimezone(ZONA_MADRID).date()
+    # SQL: el bloqueo del día. Dos enteros: el del proyecto y el día como
+    # AAAAMMDD (20261019). Se libera solo al terminar la transacción
+    # (commit o rollback); con Supavisor en modo Session, la transacción va
+    # entera por la misma conexión.
+    cursor.execute("SELECT pg_advisory_xact_lock(%s, %s);",
+                   (CLAVE_BLOQUEO_VISITAS, dia.year * 10000 + dia.month * 100 + dia.day))
+    # Desde: medianoche de ese día menos una duración (una visita que
+    # empezara antes y terminara ese día también contaría). Hasta: la
+    # medianoche siguiente. En Madrid, con el desfase de cada medianoche.
+    desde = datetime.combine(dia, time(0, 0), tzinfo=ZONA_MADRID) - timedelta(minutes=reglas[CLAVE_DURACION])
+    # La medianoche siguiente.
+    hasta = datetime.combine(dia + timedelta(days=1), time(0, 0), tzinfo=ZONA_MADRID)
+    # SQL: el inicio de las visitas activas de ese día, salvo las excluidas.
+    # "NOT (id = ANY(...))" con una lista vacía es verdadero; ::int[] le dice
+    # a Postgres el tipo de la lista aunque esté vacía.
+    cursor.execute(
+        """
+        SELECT fecha_propuesta FROM visitas
+        WHERE estado = ANY(%s)
+          AND NOT (id = ANY(%s::int[]))
+          AND fecha_propuesta >= %s AND fecha_propuesta < %s;
+        """,
+        (list(ESTADOS_QUE_OCUPAN), list(excluir), desde, hasta),
+    )
+    # Solo los inicios (llegan en UTC; solapa compara instantes).
+    ocupadas = [fila[0] for fila in cursor.fetchall()]
+    # ¿Se solapa con alguna? Si no, el hueco está libre y no se hace nada.
+    if any(solapa(inicio, ocupada, reglas[CLAVE_DURACION]) for ocupada in ocupadas):
+        # Las horas libres de ese día, para ofrecerlas.
+        libres = huecos_libres(dia, ahora, reglas, ocupadas)
+        # 409 con el mensaje y la lista.
+        raise HuecoOcupado("hueco_ocupado", mensaje_hueco_ocupado(libres), libres)

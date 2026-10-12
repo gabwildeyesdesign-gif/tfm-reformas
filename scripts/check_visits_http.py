@@ -29,6 +29,8 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+# re: buscar las horas "HH:MM" en el mensaje del 409 hueco_ocupado (D31).
+import re
 from datetime import date, datetime, time as hora_del_dia, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -494,6 +496,232 @@ try:
     comprobar("con la MISMA fecha: 200, creado false, estado confirmada",
               r.status_code == 200 and cuerpo(r).get("estado") == "confirmada" and cuerpo(r).get("creado") is False, f"({r.status_code}, {cuerpo(r)})")
     comprobar("la confirmada sigue intacta", visitas_de(op_c1) == [(visita_conf, "confirmada")])
+
+    # ==================================================================
+    # D31 (Bloque B5, 2026-10-12): el hueco tiene que estar libre.
+    # ==================================================================
+    # Las reglas reales, leídas aquí aparte (franjas, duración y paso), para
+    # calcular las horas libres que se esperan sin usar el código probado.
+    REGLAS_D31 = dict(
+        (clave, int(valor)) for clave, valor in
+        [consultar("SELECT clave, valor FROM reglas_negocio WHERE clave = %s;", (c,)) for c in (
+            "visita_manana_inicio_min", "visita_manana_fin_min", "visita_tarde_inicio_min",
+            "visita_tarde_fin_min", "duracion_visita_min", "paso_huecos_min")]
+    )
+    # La duración, que se usa mucho.
+    DURACION = REGLAS_D31["duracion_visita_min"]
+
+    def minutos(hhmm):
+        """'10:30' -> 630 (minutos desde medianoche)."""
+        # Horas y minutos como enteros.
+        h, m = map(int, hhmm.split(":"))
+        # Total en minutos.
+        return h * 60 + m
+
+    def huecos_esperados(ocupadas):
+        """Las horas de inicio libres de un día lejano (todas futuras) con
+        esas visitas ocupadas ("HH:MM"), calculadas aquí: la rejilla de cada
+        franja cada paso_huecos_min, con la visita entera dentro, y sin
+        solaparse (|inicio - ocupada| < duración) con ninguna ocupada."""
+        # La lista que se va llenando.
+        libres = []
+        # Las dos franjas, por sus claves.
+        for ini, fin in (("visita_manana_inicio_min", "visita_manana_fin_min"),
+                         ("visita_tarde_inicio_min", "visita_tarde_fin_min")):
+            # Cada inicio posible de la franja.
+            for m in range(REGLAS_D31[ini], REGLAS_D31[fin] - DURACION + 1, REGLAS_D31["paso_huecos_min"]):
+                # Libre si no se solapa con ninguna ocupada.
+                if all(abs(m - minutos(o)) >= DURACION for o in ocupadas):
+                    # Como "HH:MM".
+                    libres.append(f"{m // 60:02d}:{m % 60:02d}")
+        # Las libres, en orden.
+        return libres
+
+    def detalle_409(r):
+        """El "detail" de un 409 (o {} si no lo es)."""
+        # Solo si es un 409 con un diccionario dentro.
+        d = cuerpo(r).get("detail") if r.status_code == 409 else None
+        # Un diccionario, o vacío.
+        return d if isinstance(d, dict) else {}
+
+    def mensaje_limpio(mensaje, libres, prohibidos):
+        """True si el mensaje solo nombra horas de la lista de libres y no
+        lleva ninguna otra cifra ni ninguno de los textos prohibidos (ids,
+        nombres, la hora ocupada o su hora de fin)."""
+        # Las horas "HH:MM" del mensaje.
+        horas = re.findall(r"\b\d{2}:\d{2}\b", mensaje or "")
+        # Sin las horas, ¿queda alguna cifra?
+        otras_cifras = re.search(r"\d", re.sub(r"\b\d{2}:\d{2}\b", "", mensaje or ""))
+        # Todas las horas nombradas son libres, no hay otras cifras y no
+        # aparece nada prohibido.
+        return (all(h in libres for h in horas) and not otras_cifras
+                and not any(str(p) in (mensaje or "") for p in prohibidos))
+
+    def visitas_y_logs(op):
+        """(visitas, logs) de una oportunidad: dos recuentos."""
+        # SQL: cuántas visitas y cuántos logs tiene.
+        return consultar("SELECT (SELECT count(*) FROM visitas WHERE oportunidad_id = %(op)s), "
+                         "(SELECT count(*) FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %(op)s);",
+                         {"op": op})
+
+    # El jueves y el viernes de la semana de prueba.
+    JUEVES, VIERNES = LUNES + timedelta(days=3), LUNES + timedelta(days=4)
+
+    # ------------------------------------------------------------------
+    print("\nCASO 16 - D31: hueco ocupado (409 hueco_ocupado con huecos_libres)")
+    # A pide el jueves a las 10:00: 201.
+    token_a, op_a = lead_http()
+    # Con su presupuesto.
+    calcular(op_a)
+    # La visita de A.
+    r = visita(token_a, JUEVES, "10:00")
+    # 201.
+    comprobar("A pide el jueves 10:00 -> 201", r.status_code == 201, f"({r.status_code}, {motivo(r)})")
+    # El id de la visita de A (para comprobar que no sale en el mensaje).
+    visita_a = cuerpo(r).get("visita_id")
+    # B, otra oportunidad.
+    token_b, op_b = lead_http()
+    # Con su presupuesto.
+    calcular(op_b)
+    # Lo que tiene B antes (para ver que los 409 no escriben).
+    antes_b = visitas_y_logs(op_b)
+    # Las horas libres esperadas con la de A ocupada.
+    libres_10 = huecos_esperados(["10:00"])
+    # (hora pedida, descripción): la misma, dos que solapan sin coincidir.
+    for hora, que in (("10:00", "la misma hora"), ("10:30", "solapa sin coincidir en el inicio"),
+                      ("09:01", "empieza antes y termina dentro")):
+        # B pide esa hora.
+        r = visita(token_b, JUEVES, hora)
+        # El detalle del 409.
+        d = detalle_409(r)
+        # Se enseña.
+        print(f"      B {hora} <- {r.status_code} {d}")
+        # 409 hueco_ocupado, con las claves exactas y la lista esperada.
+        comprobar(f"B {hora} ({que}) -> 409 hueco_ocupado con huecos_libres exactos",
+                  r.status_code == 409 and d.get("motivo") == "hueco_ocupado"
+                  and set(d) == {"motivo", "mensaje", "huecos_libres"} and d.get("huecos_libres") == libres_10,
+                  f"({r.status_code}, {d.get('motivo')}, {d.get('huecos_libres')})")
+    # El último mensaje: sin ids, sin la hora ocupada ni su fin, sin cifras de más.
+    comprobar("el mensaje solo nombra horas libres: ni ids, ni la visita de A (10:00) ni su fin, ni el cliente",
+              mensaje_limpio(d.get("mensaje"), libres_10, [op_a, visita_a, "10:00", "Prueba Visitas"]),
+              f"({d.get('mensaje')})")
+    # Los 409 no han escrito nada en B.
+    comprobar("los 409 no escriben nada (visitas y logs de B iguales)", visitas_y_logs(op_b) == antes_b,
+              f"({antes_b} -> {visitas_y_logs(op_b)})")
+    # B a las 11:00: justo cuando termina la de A -> 201 (borde libre).
+    r = visita(token_b, JUEVES, "11:00")
+    # 201.
+    comprobar("B 11:00 (empieza cuando termina la de A) -> 201", r.status_code == 201, f"({r.status_code}, {motivo(r)})")
+    # El id, para la sustitución.
+    visita_b = cuerpo(r).get("visita_id")
+    # B a las 09:00: termina justo cuando empieza la de A -> 201, y sustituye a
+    # su propia visita de las 11:00 (la propia no cuenta, C8).
+    r = visita(token_b, JUEVES, "09:00")
+    # 201 con sustituye_a.
+    comprobar("B 09:00 (termina cuando empieza la de A) -> 201, sustituye a su visita de las 11:00",
+              r.status_code == 201 and cuerpo(r).get("sustituye_a") == visita_b, f"({r.status_code}, {cuerpo(r)})")
+    # Una sustitución que solo se solapa con la PROPIA: B pide 08:30, que
+    # choca con su visita de las 09:00 y con ninguna otra: 201 (C8).
+    r = visita(token_b, JUEVES, "08:30")
+    # 201: su propia visita no ocupa.
+    comprobar("B 08:30 (solo se solapa con su PROPIA visita de las 09:00) -> 201 (C8)",
+              r.status_code == 201, f"({r.status_code}, {motivo(r)})")
+
+    # ------------------------------------------------------------------
+    print("\nCASO 17 - D31: el orden de las comprobaciones (hueco de A ocupado)")
+    # Con Gate: 409 presupuesto_con_gate, no hueco_ocupado.
+    token_g, op_g = lead_http(estructural=True)
+    # Su presupuesto (con Gate).
+    calcular(op_g)
+    # Pide el hueco de A.
+    r = visita(token_g, JUEVES, "10:00")
+    # El motivo del Gate.
+    comprobar("con Gate -> 409 presupuesto_con_gate (antes que hueco_ocupado)",
+              r.status_code == 409 and motivo(r) == "presupuesto_con_gate", f"({r.status_code}, {motivo(r)})")
+    # Sin presupuesto: 409 sin_presupuesto.
+    token_s, _ = lead_http()
+    # Pide el hueco de A.
+    r = visita(token_s, JUEVES, "10:00")
+    # El motivo de sin presupuesto.
+    comprobar("sin presupuesto -> 409 sin_presupuesto (antes que hueco_ocupado)",
+              r.status_code == 409 and motivo(r) == "sin_presupuesto", f"({r.status_code}, {motivo(r)})")
+    # Token que no existe: 404.
+    r = visita(str(uuid.uuid4()), JUEVES, "10:00")
+    # 404.
+    comprobar("token inexistente -> 404 (antes que hueco_ocupado)", r.status_code == 404, f"({r.status_code})")
+    # A repite su propia hora: 200 (la repetición va antes, y lo propio no ocupa).
+    r = visita(token_a, JUEVES, "10:00")
+    # 200, creado false.
+    comprobar("A repite su hora -> 200 creado=false (repetición antes que hueco_ocupado)",
+              r.status_code == 200 and cuerpo(r).get("creado") is False, f"({r.status_code}, {motivo(r)})")
+    # op_c1 tiene una visita confirmada (CASO 13): pide el hueco de A -> 409
+    # visita_confirmada, no hueco_ocupado.
+    r = visita(token_c1, JUEVES, "10:00")
+    # El motivo de la confirmada.
+    comprobar("con visita confirmada -> 409 visita_confirmada (antes que hueco_ocupado)",
+              r.status_code == 409 and motivo(r) == "visita_confirmada", f"({r.status_code}, {motivo(r)})")
+
+    # ------------------------------------------------------------------
+    print("\nCASO 18 - D31: /visits contra una visita CONFIRMADA por administración")
+    # La de op_c1 (lunes 10:00) está 'confirmada' (CASO 13). H pide el lunes 10:30.
+    token_h, op_h = lead_http()
+    # Con su presupuesto.
+    calcular(op_h)
+    # Pide 10:30 del lunes.
+    r = visita(token_h, LUNES, "10:30")
+    # El detalle.
+    d = detalle_409(r)
+    # Las libres de ese lunes: la confirmada de op_c1 (10:00); las demás
+    # visitas del lunes son de este script y están canceladas (CASOS 8-10).
+    comprobar("H lunes 10:30 -> 409 hueco_ocupado frente a la confirmada (10:00)",
+              r.status_code == 409 and d.get("motivo") == "hueco_ocupado"
+              and d.get("huecos_libres") == huecos_esperados(["10:00"]), f"({r.status_code}, {d})")
+
+    # ------------------------------------------------------------------
+    print("\nCASO 19 - D31: concurrencia (10 oportunidades al mismo hueco, 5 rondas)")
+    # Diez oportunidades sin Gate, con presupuesto.
+    DIEZ = []
+    # Una a una (no a la vez: aquí solo se preparan).
+    for _ in range(10):
+        # El lead.
+        tk, op = lead_http()
+        # Su presupuesto.
+        calcular(op)
+        # Se guarda.
+        DIEZ.append((tk, op))
+    # Cinco rondas, cada una en un día de la semana siguiente (lunes a
+    # viernes) a las 10:00. Las mismas diez oportunidades en todas: la que
+    # ganó la ronda anterior pide como sustitución.
+    for ronda in range(5):
+        # El día de esta ronda.
+        dia = LUNES + timedelta(days=7 + ronda)
+        # Barrier(10): las diez peticiones salen a la vez.
+        barrera = threading.Barrier(10)
+
+        def a_la_vez(tk, b=barrera, d=dia):
+            """Espera a las demás y pide el hueco."""
+            # Todas esperan aquí hasta que llegan las diez.
+            b.wait()
+            # La petición.
+            return visita(tk, d, "10:00")
+
+        # Diez hilos, uno por oportunidad.
+        with ThreadPoolExecutor(max_workers=10) as grupo:
+            # map: las respuestas en el orden de DIEZ.
+            respuestas = list(grupo.map(lambda par: a_la_vez(par[0]), DIEZ))
+        # Los códigos, ordenados.
+        codigos = sorted(r.status_code for r in respuestas)
+        # Los motivos de los 409.
+        motivos_409 = {motivo(r) for r in respuestas if r.status_code == 409}
+        # SQL: visitas activas a esa hora de ese día (de cualquiera).
+        activas = consultar("SELECT count(*) FROM visitas WHERE estado IN ('solicitada', 'confirmada') "
+                            "AND fecha_propuesta = %s;", (esperado_madrid(dia, "10:00"),))[0]
+        # Se enseña.
+        print(f"      ronda {ronda + 1} ({dia}): códigos {codigos}, motivos 409 {motivos_409}, activas a las 10:00: {activas}")
+        # Un 201 y nueve 409 hueco_ocupado, ningún 500, una sola visita activa.
+        comprobar(f"ronda {ronda + 1}: un 201 y nueve 409 hueco_ocupado, ningún 500, una visita activa",
+                  codigos == [201] + [409] * 9 and motivos_409 == {"hueco_ocupado"} and activas == 1,
+                  f"({codigos}, {motivos_409}, {activas})")
 
     # ------------------------------------------------------------------
     print("\nCASO 14 - Ningún importe en ninguna respuesta de POST /visits")

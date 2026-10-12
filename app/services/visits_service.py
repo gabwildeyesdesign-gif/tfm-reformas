@@ -25,6 +25,7 @@ from app.services.reglas_visita import (
     ConfiguracionIncompleta,
     RechazoNegocio,
     combinar_fecha_hora_madrid,
+    comprobar_hueco_libre,
     leer_reglas_visita,
     registrar_configuracion_incompleta,
     validar_fecha,
@@ -98,6 +99,7 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
       ConfiguracionIncompleta  503  configuracion_incompleta
       FechaNoValida            422  fecha_pasada, fin_de_semana,
                                     fuera_de_franja
+      HuecoOcupado             409  hueco_ocupado (D31), con huecos_libres
     """
     inicio = combinar_fecha_hora_madrid(data.fecha, data.hora)
 
@@ -243,6 +245,17 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
                         "Ya tienes una visita confirmada con administración. Para cambiarla, "
                         "administración se pondrá en contacto contigo.",
                     )
+            # ----------------------------------------------------------
+            # 5b. D31: ¿el hueco está libre? (409 hueco_ocupado)
+            # ----------------------------------------------------------
+            # La ÚLTIMA comprobación antes de escribir, después de la
+            # repetición y de visita_confirmada (precisión 2 del tutor).
+            # La visita activa propia no cuenta: en una sustitución se
+            # cancela en esta misma transacción (C8). Bloquea el día hasta
+            # el final de la transacción (P15).
+            comprobar_hueco_libre(cursor, inicio, ahora, reglas, [activa[0]] if activa is not None else [])
+
+            if activa is not None:
                 # Otra fecha y 'solicitada': se cancela y se sustituye.
                 cursor.execute(
                     "UPDATE visitas SET estado = %s, updated_at = now() WHERE id = %s;",

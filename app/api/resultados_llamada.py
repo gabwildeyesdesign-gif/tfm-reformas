@@ -32,7 +32,7 @@ from app.services.resultados_llamada_service import (
     registrar_resultado,
 )
 # Los rechazos compartidos con /visits y su base común.
-from app.services.reglas_visita import ConfiguracionIncompleta, FechaNoValida, RechazoNegocio
+from app.services.reglas_visita import ConfiguracionIncompleta, FechaNoValida, HuecoOcupado, RechazoNegocio
 
 # El router de este archivo; main.py lo engancha con include_router. tags
 # agrupa la ruta en /docs.
@@ -43,11 +43,14 @@ router = APIRouter(tags=["resultados-llamada"])
 #   404 no existe la oportunidad; 409 la oportunidad no admite ese
 #   resultado; 422 la fecha incumple una regla de negocio (distinto del 422
 #   de Pydantic); 503 falta configuración de visitas.
+#   409 también, desde D31: el hueco lo ocupa otra visita (hueco_ocupado),
+#   en la ruta nueva y en el alias (P16 y P17).
 CODIGO_HTTP = {
     OportunidadNoEncontrada: 404,
     EstadoNoPermiteResultado: 409,
     FechaNoValida: 422,
     ConfiguracionIncompleta: 503,
+    HuecoOcupado: 409,
 }
 
 
@@ -65,6 +68,11 @@ def http_de_rechazo(error: RechazoNegocio) -> HTTPException:
     faltan = getattr(error, "faltan", None)
     if faltan is not None:
         detalle["faltan"] = faltan
+    # D31: solo HuecoOcupado tiene "huecos_libres"; se añade si existe.
+    huecos = getattr(error, "huecos_libres", None)
+    # Lista (quizá vacía) de horas de inicio libres de ese día.
+    if huecos is not None:
+        detalle["huecos_libres"] = huecos
     # type(error): la clase concreta, para buscar su código en la tabla.
     return HTTPException(status_code=CODIGO_HTTP[type(error)], detail=detalle)
 

@@ -22,7 +22,7 @@ from app.schemas.visits import VisitaCreate, VisitaResponse
 # ConfiguracionIncompleta) y su base común RechazoNegocio viven en
 # reglas_visita.py desde el 2026-09-30; los PROPIOS de /visits, en
 # visits_service.py.
-from app.services.reglas_visita import ConfiguracionIncompleta, FechaNoValida, RechazoNegocio
+from app.services.reglas_visita import ConfiguracionIncompleta, FechaNoValida, HuecoOcupado, RechazoNegocio
 from app.services.visits_service import (
     EstadoNoPermiteVisita,
     LeadNoEncontrado,
@@ -43,11 +43,13 @@ router = APIRouter(tags=["visitas"])
 #        fuera de franja). Distinto del 422 de Pydantic (formato), que
 #        FastAPI genera por su cuenta con otra forma (ver la Adenda).
 #   503: falta configuración en reglas_negocio (decisión P2).
+#   409 también, desde D31: el hueco lo ocupa otra visita (hueco_ocupado).
 CODIGO_HTTP = {
     LeadNoEncontrado: 404,
     EstadoNoPermiteVisita: 409,
     FechaNoValida: 422,
     ConfiguracionIncompleta: 503,
+    HuecoOcupado: 409,
 }
 
 
@@ -95,6 +97,12 @@ def post_visits(data: VisitaCreate, response: Response) -> VisitaResponse:
         # Solo el 503 trae "faltan": se añade al detalle para ver qué falta.
         if faltan is not None:
             detalle["faltan"] = faltan
+        # D31: solo HuecoOcupado tiene "huecos_libres" (lista, quizá vacía):
+        # el agente ofrece esas horas sin sacarlas del mensaje (P18).
+        huecos = getattr(error, "huecos_libres", None)
+        # Se añade al detalle solo si existe el atributo.
+        if huecos is not None:
+            detalle["huecos_libres"] = huecos
         # Se corta la petición con el código de la tabla y el detalle.
         raise HTTPException(status_code=CODIGO_HTTP[type(error)], detail=detalle)
 

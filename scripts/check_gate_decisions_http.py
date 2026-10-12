@@ -1052,6 +1052,30 @@ try:
                   f"({r.status_code}, {j.get('estado_oportunidad')}, {(j.get('presupuesto') or {}).get('requiere_aprobacion')})")
 
     # ------------------------------------------------------------------
+    # CASO 9b (Bloque B5, 2026-10-12, D31 y P17): el alias gana el 409
+    # hueco_ocupado. La visita acordada de op_va (CASO 5) ocupa el lunes de
+    # 08:30 a 09:30; otro Gate pide las 09:00 de ese lunes.
+    print("\nCASO 9b - D31: 409 hueco_ocupado también por el alias")
+    # Un Gate nuevo.
+    _, op_hueco = lead_con_gate()
+    # Su foto antes.
+    foto = foto_op(op_hueco)
+    # La petición, a una hora que se solapa con la de op_va.
+    r = decidir(visita_acordada(op_hueco, LUNES, "09:00"))
+    # El detalle del 409, para enseñarlo y mirar su lista.
+    d = cuerpo(r).get("detail") if r.status_code == 409 else {}
+    # Se enseña.
+    print(f"      <- {r.status_code} {d}")
+    # 409 hueco_ocupado y nada escrito.
+    verificar_409("visita_acordada sobre la visita de otro Gate (08:30-09:30)", r, op_hueco, foto, "hueco_ocupado")
+    # Con huecos_libres: una lista de horas en la que no están ni las 08:30 ni las 09:00.
+    libres = (d or {}).get("huecos_libres")
+    # Una lista sin las horas que se solapan con la de op_va.
+    comprobar("   con huecos_libres (lista) sin las 08:30 ni las 09:00",
+              isinstance(libres, list) and "08:30" not in libres and "09:00" not in libres and "09:30" in libres,
+              f"({libres})")
+
+    # ------------------------------------------------------------------
     print("\nCASO 10 - Ningún importe en ninguna respuesta de POST /gate-decisions")
     # Las respuestas que tengan alguna clave de importe (la lista debe quedar vacía).
     con_importe = [c for c in cuerpos_gate if claves_con_importe(c)]

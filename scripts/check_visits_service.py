@@ -119,12 +119,16 @@ for p in problemas:
 comprobar("detecta la regla que falta", any("duracion_visita_min: no existe" in p for p in problemas))
 comprobar("detecta el valor con decimales", any("visita_manana_inicio_min: valor no válido" in p for p in problemas))
 comprobar("detecta la franja al revés", any("visita_tarde_inicio_min (1200) no es menor" in p for p in problemas))
+# B5 (2026-10-12, D31): desde paso13 son SEIS reglas; la sexta,
+# paso_huecos_min, es el paso de las horas libres que ofrece el 409
+# hueco_ocupado. Sin ella, leer_reglas_visita da un problema (lo prueba
+# scripts/check_disponibilidad_service.py, S6).
 reglas_ok, problemas_ok = reglas_visita.leer_reglas_visita(CursorDeMentira([
     (reglas_visita.CLAVE_MANANA_INICIO, Decimal("510.00")), (reglas_visita.CLAVE_MANANA_FIN, Decimal("810.00")),
     (reglas_visita.CLAVE_TARDE_INICIO, Decimal("1020.00")), (reglas_visita.CLAVE_TARDE_FIN, Decimal("1200.00")),
-    (reglas_visita.CLAVE_DURACION, Decimal("60.00")),
+    (reglas_visita.CLAVE_DURACION, Decimal("60.00")), (reglas_visita.CLAVE_PASO_HUECOS, Decimal("30.00")),
 ]))
-comprobar("con las 5 reglas correctas: 0 problemas y valores enteros",
+comprobar("con las 6 reglas correctas: 0 problemas y valores enteros",
           problemas_ok == [] and reglas_ok[reglas_visita.CLAVE_DURACION] == 60, f"({reglas_ok})")
 
 print("\n" + "=" * 78)

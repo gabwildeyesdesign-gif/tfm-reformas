@@ -816,6 +816,115 @@ try:
               f"(registro {r_reg.status_code}, seguimiento {r_seg.status_code}, final {final})")
 
     # ------------------------------------------------------------------
+    print("\nCASO 13b - D31: hueco ocupado en /resultados-llamada y en el alias")
+    # Las reglas reales, leídas aquí aparte, para calcular las horas libres
+    # esperadas sin usar el código probado. SQL: clave y valor de las seis.
+    R31 = {c: int(v) for c, v in consultar(
+        "SELECT clave, valor FROM reglas_negocio WHERE clave = ANY(%s);",
+        (["visita_manana_inicio_min", "visita_manana_fin_min", "visita_tarde_inicio_min",
+          "visita_tarde_fin_min", "duracion_visita_min", "paso_huecos_min"],))}
+
+    # Ayuda: las horas libres esperadas, calculadas por la prueba.
+    def libres_esperados(ocupadas_min):
+        """Las horas de inicio libres de un día lejano con esas visitas
+        ocupadas (en minutos desde medianoche): la rejilla de cada franja,
+        con la visita entera dentro y sin solaparse con ninguna."""
+        # La duración de una visita.
+        dur = R31["duracion_visita_min"]
+        # Cada inicio de cada franja que no se solapa con ninguna ocupada.
+        return [f"{m // 60:02d}:{m % 60:02d}"
+                for ini, fin in (("visita_manana_inicio_min", "visita_manana_fin_min"),
+                                 ("visita_tarde_inicio_min", "visita_tarde_fin_min"))
+                for m in range(R31[ini], R31[fin] - dur + 1, R31["paso_huecos_min"])
+                if all(abs(m - o) >= dur for o in ocupadas_min)]
+
+    # Ayuda: el "detail" de un 409.
+    def detalle_409(r):
+        """El "detail" de un 409 (o {} si no lo es)."""
+        # Solo un 409 con un diccionario dentro.
+        d = cuerpo_de(r).get("detail") if r.status_code == 409 else None
+        # El diccionario o vacío.
+        return d if isinstance(d, dict) else {}
+
+    # Tres días propios más del bloque (B5-0).
+    D_H1, D_H2, D_H3 = DIAS.siguiente(), DIAS.siguiente(), DIAS.siguiente()
+    # 1) Al revés que en /visits: un Gate quiere acordar una visita encima de
+    #    la que otro cliente pidió desde el chat (10:00).
+    _, kh1 = confirmacion(D_H1, "10:00")
+    # El Gate, con su foto antes.
+    _, gh1 = lead(estructural=True)
+    # Lo que tiene antes de los 409.
+    antes = foto_op(gh1)
+    # Ruta nueva, 10:30 (se solapa sin coincidir en el inicio).
+    r = registrar(gh1, {"resultado": "visita_acordada", "fecha": str(D_H1), "hora": "10:30"})
+    # El detalle.
+    d = detalle_409(r)
+    # Se enseña.
+    print(f"      ruta nueva 10:30 <- {r.status_code} {d}")
+    # 409 hueco_ocupado, claves exactas y la lista esperada.
+    comprobar("ruta nueva: visita_acordada sobre una pedida del chat -> 409 hueco_ocupado con huecos_libres",
+              d.get("motivo") == "hueco_ocupado" and set(d) == {"motivo", "mensaje", "huecos_libres"}
+              and d.get("huecos_libres") == libres_esperados([600]), f"({r.status_code} {d})")
+    # El alias (formulario publicado, P17), a la misma hora que la pedida.
+    r = pedir("POST", "/gate-decisions", {"oportunidad_id": gh1, "decision": "visita_acordada",
+                                          "fecha": str(D_H1), "hora": "10:00", "informe": "x"})
+    # El detalle.
+    d = detalle_409(r)
+    # Se enseña.
+    print(f"      alias 10:00 <- {r.status_code} {d}")
+    # El alias, igual: 409 hueco_ocupado con la lista.
+    comprobar("alias /gate-decisions: el mismo 409 hueco_ocupado con huecos_libres",
+              d.get("motivo") == "hueco_ocupado" and d.get("huecos_libres") == libres_esperados([600]),
+              f"({r.status_code} {d})")
+    # Ningún 409 ha escrito nada.
+    comprobar("los 409 no escriben nada en el Gate", foto_op(gh1) == antes)
+    # A las 11:00 (cuando termina la pedida): 201.
+    verificar_201("Gate visita_acordada a las 11:00 (borde libre)",
+                  registrar(gh1, {"resultado": "visita_acordada", "fecha": str(D_H1), "hora": "11:00"}),
+                  gh1, antes, "gate", "visita_acordada", "visita_agendada", ["confirmada"], TEXTO_GATE)
+
+    # 2) confirmar_hora cuando OTRA visita activa se solapa con la pedida
+    #    (hecha a mano, R6: la base de datos no lo impide). La pedida es la
+    #    propia y no cuenta (C8), pero la otra sí.
+    _, kh2 = confirmacion(D_H2, "10:00")
+    # Otra oportunidad propia, sin visita.
+    _, gh2 = lead(estructural=True)
+    # SQL: una visita 'confirmada' a las 10:30 de ese día, en esa oportunidad PROPIA.
+    cur.execute(f"INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
+                f"SELECT %(op)s, %(f)s, 'confirmada', 'hecha a mano' WHERE %(op)s IN ({SQL_OPS});",
+                {"op": gh2, "f": madrid(D_H2, 10, 30), "p": PATRON})
+    # Se confirma (es una fila propia).
+    cn.commit()
+    # La foto antes.
+    antes = foto_op(kh2)
+    # confirmar_hora de la pedida (10:00): choca con la de las 10:30.
+    r = registrar(kh2, {"resultado": "confirmar_hora", "fecha": str(D_H2), "hora": "10:00"})
+    # 409 hueco_ocupado.
+    comprobar("confirmar_hora con OTRA visita solapada -> 409 hueco_ocupado, sin escribir",
+              motivo(r) == "hueco_ocupado" and foto_op(kh2) == antes, f"({r.status_code} {cuerpo_de(r)})")
+    # otra_hora a las 11:00: también choca con la de las 10:30 (hasta las 11:30).
+    r = registrar(kh2, {"resultado": "otra_hora", "fecha": str(D_H2), "hora": "11:00"})
+    # 409 hueco_ocupado.
+    comprobar("otra_hora a un hueco ocupado por otra -> 409 hueco_ocupado, sin escribir",
+              motivo(r) == "hueco_ocupado" and foto_op(kh2) == antes, f"({r.status_code} {cuerpo_de(r)})")
+    # otra_hora a las 11:30 (justo cuando termina la otra): 201.
+    verificar_201("otra_hora a las 11:30 (borde libre)",
+                  registrar(kh2, {"resultado": "otra_hora", "fecha": str(D_H2), "hora": "11:30"}),
+                  kh2, antes, "confirmacion_visita", "otra_hora", "visita_agendada", ["cancelada", "confirmada"],
+                  TEXTO_OTRA_HORA)
+
+    # 3) otra_hora que solo se solapa con la PROPIA pedida (que se cancela en
+    #    la misma transacción): 201 (C8).
+    _, kh3 = confirmacion(D_H3, "10:00")
+    # La foto antes.
+    antes = foto_op(kh3)
+    # 10:30 solo choca con su propia pedida de las 10:00.
+    verificar_201("otra_hora que solo se solapa con su PROPIA pedida -> 201 (C8)",
+                  registrar(kh3, {"resultado": "otra_hora", "fecha": str(D_H3), "hora": "10:30"}),
+                  kh3, antes, "confirmacion_visita", "otra_hora", "visita_agendada", ["cancelada", "confirmada"],
+                  TEXTO_OTRA_HORA)
+
+    # ------------------------------------------------------------------
     print("\nCASO 14 - Ningún 500, 201 <-> creado, ningún importe")
     comprobar(f"ninguna respuesta 500 ({len(codigos)} peticiones)", 500 not in codigos)
     comprobar(f"201 <-> creado=true y 200 <-> creado=false ({len(pares)} éxitos)",

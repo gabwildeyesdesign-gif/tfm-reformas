@@ -53,6 +53,7 @@ from app.services.reglas_visita import (
     FechaNoValida,
     RechazoNegocio,
     combinar_fecha_hora_madrid,
+    comprobar_hueco_libre,
     leer_reglas_visita,
     registrar_configuracion_incompleta,
     validar_fecha,
@@ -193,7 +194,8 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
       (igual: 200; distinto: 409) -> tipo (409 estado_no_permitido o el
       criterio de b); 503 de la regla de 48 h) -> 409 resultado_no_admitido
       -> con visita: 503 -> 409 visita_cambiada / 422 misma_hora_pedida ->
-      422 de fecha -> 409 visita_activa_existente -> escritura.
+      422 de fecha -> 409 visita_activa_existente -> 409 hueco_ocupado (D31)
+      -> escritura.
     """
     # El instante pedido (fecha + hora en Madrid), solo si el resultado
     # lleva visita; se calcula sin base de datos.
@@ -338,6 +340,12 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
                     "visita_activa_existente",
                     f"La oportunidad ya tiene una visita activa (id {activa[0]}); no se puede acordar otra.",
                 )
+        # D31: el hueco tiene que estar libre (409 hueco_ocupado), la última
+        # comprobación antes de escribir, con la MISMA función que /visits
+        # (P16; también por el alias, P17). La visita pedida de la propia
+        # oportunidad no cuenta: confirmar_hora la confirma y otra_hora la
+        # cancela en esta misma transacción (C8). Bloquea el día (P15).
+        comprobar_hueco_libre(cursor, inicio, ahora, reglas, [solicitada_id] if solicitada_id is not None else [])
 
     # ------------------------------------------------------------------
     # 7. Escritura

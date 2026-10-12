@@ -405,6 +405,28 @@ B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
     sin solapes -> FALLO. N7 (ALTO): intervalo cerrado [] en el borde ->
     FALLO. N8 (ALTO): mensaje con datos de otra visita -> FALLO. N9 (ALTO):
     /resultados-llamada sin la comprobación -> FALLO (si P16).
+    [Nota 2026-10-12: código y scripts escritos SIN ejecutar (Docker/n8n
+    abiertos). app/services/reglas_visita.py: HuecoOcupado (409, con
+    huecos_libres), solapa (intervalos [inicio, fin), cuentas en UTC),
+    huecos_libres (rejilla cada paso_huecos_min, visita entera en su
+    franja, solo futuras), mensaje_hueco_ocupado (solo horas libres) y
+    comprobar_hueco_libre (pg_advisory_xact_lock(3101, AAAAMMDD) y consulta
+    de las visitas activas del día, con las propias excluidas, C8).
+    paso_huecos_min entra en CLAVES_REGLAS: si falta o es 0, el 503 de
+    siempre, en el mismo sitio que las otras cinco (precisión: por eso
+    cambia la prueba 2a de check_visits_service, de 5 a 6 reglas). Llamada
+    única, la última antes de escribir: en /visits después de la repetición
+    y de visita_confirmada; en /resultados-llamada después de
+    visita_activa_existente (también el alias, P17). Adaptadores: 409 con
+    "huecos_libres" en el detalle. Scripts: check_disponibilidad_service
+    (nuevo, S0-S8, ConexionSinCommit y ROLLBACK; S8 comprueba el orden con
+    ast); check_visits_http CASOS 16-19 (bordes, solape sin coincidir,
+    orden, confirmada, concurrencia 10 x 5 rondas); check_resultados_
+    llamada_http CASO 13b (al revés que /visits, alias, confirmar_hora y
+    otra_hora con C8); check_gate_decisions_http CASO 9b (alias). OJO: la
+    concurrencia usa 10 peticiones a la vez con DB_POOL_MAX = 10: justas.
+    Pendiente para el Bloque D: Adenda 5.4, 5.5 y 5.10 y
+    Contrato_Formulario_Llamadas.md (409 hueco_ocupado).]
 C.  Regresión (los 15 scripts que crean visitas, los de MCP y el de sesión)
     y suite completa en UNA pasada válida (regla de suspensión).
 D.  Adenda (filas 3, 4, 6 y 10; secciones 5.3, 5.4, 5.5, 5.10; MCP; nota de
