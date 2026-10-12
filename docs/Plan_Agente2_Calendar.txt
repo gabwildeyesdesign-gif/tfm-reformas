@@ -308,6 +308,19 @@ B3. get_business_rules (tool MCP, sin parámetros, 3.4).
     dos; claves exactas; valores contra la base de datos (recargo con su
     propia cuenta); ninguna clave ni valor prohibido; configuración rota en
     memoria.]
+    [Nota 2026-10-12: B3 CERRADO (código en 3df603d). Ejecutado con
+    Docker/n8n y Edge cerrados y Chrome ABIERTO, por decisión de Gabi (0,79
+    GB libres a las 16:43:41, por debajo del 1,5 GB de B2; aceptado porque
+    ni el script ni la N3 escriben ninguna fila y cada pasada dura unos
+    segundos). check_mcp_business_rules 21/21 (16:43:42-16:43:51; recargo
+    con IVA 726.00, 12 filas de incluye_tipico) y, por el cambio en
+    server.py, check_mcp_calculate_estimate 19/19 (16:44:01-16:44:14). Aviso
+    de fastmcp en el cliente (UserWarning: el patrón del Decimal del
+    esquema de salida no lo aplica Pydantic): no afecta. En negativo, sobre
+    una copia de app/: N3 precio_m2 en incluye_tipico 17/21, exit 1
+    (16:44:34-16:44:43; claves exactas, igualdad con tarifas_base, clave
+    prohibida y valores prohibidos). Kernel-Power 506/507 entre 16:42 y
+    16:46: ninguno. git diff -- app/ vacío al terminar.]
 B4. Filtro D26.7 en POST /visits: MAX_TEXTO_VISITA = 300, emails y
     teléfonos con 422 (función compartida en app/schemas/common.py, que la
     rama 2 reutilizará). check_visits_http (hoy prueba 1000: cambia el
