@@ -311,6 +311,17 @@ B4. Filtro D26.7 en POST /visits: MAX_TEXTO_VISITA = 300, emails y
     paso13b: check_migracion_visitas prueba 1000/1001 contra el CHECK y el
     CASO 20 de check_listado_llamadas_http inserta por SQL un texto de
     1000; los dos cambian con paso13b.]
+    [Nota 2026-10-12: B4 CERRADO (código en d730c41). Ejecutado con
+    Docker/n8n, Chrome y Edge cerrados (2,10 GB libres a las 16:23:29):
+    check_texto_agente_service 44/44 (16:23:34-16:23:35) y check_visits_http
+    65/65 (16:23:42-16:24:15; antes 55, más los 10 del CASO 2b), limpieza 0
+    y "no toca nada ajeno" en las seis tablas. En negativo, sobre copias de
+    app/ en el scratchpad, de una en una (servicio | HTTP): N4a sin la
+    comprobación del email 38/44 | 64/65 (16:24:40-16:25:22); N4b sin la del
+    teléfono 31/44 | 63/65 (16:25:30-16:26:04; también los dos falsos
+    positivos de S4 dejan de rechazarse); N4c con el límite en 1000 41/44 |
+    64/65 (16:26:11-16:26:45). Limpieza 0 en las tres. Kernel-Power 506/507
+    entre 16:22 y 16:28: ninguno. git diff -- app/ vacío al terminar.]
 B5-0. Fechas propias en los scripts que crean visitas (C7, P21), sin cambio
     de comportamiento del código: los mismos recuentos que hoy.
 B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
