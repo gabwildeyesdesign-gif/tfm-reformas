@@ -24,6 +24,7 @@ from app.schemas.common import (
     MIN_LEAD_TOKEN,
     fecha_en_formato_exacto,
     hora_en_formato_exacto,
+    texto_sin_datos_de_contacto,
     texto_sin_espacios_en_los_extremos,
 )
 
@@ -51,9 +52,11 @@ class VisitaCreate(BaseModel):
     # Hora de INICIO de la visita, en hora de Madrid.
     hora: time
 
-    # Lo que dijo el cliente, tal cual, para que administración lo lea
-    # antes de llamar. Longitud: de 1 a MAX_TEXTO_VISITA caracteres,
-    # contados DESPUÉS de quitar los espacios de los extremos.
+    # Lo que dijo el cliente, resumido por el Agente 2, para que
+    # administración lo lea antes de llamar. Longitud: de 1 a
+    # MAX_TEXTO_VISITA (300) caracteres, contados DESPUÉS de quitar los
+    # espacios de los extremos. Sin email ni teléfono (D26.7; ver el
+    # validador de abajo).
     texto_cliente: str = Field(min_length=1, max_length=MAX_TEXTO_VISITA)
 
     # ------------------------------------------------------------------
@@ -90,6 +93,16 @@ class VisitaCreate(BaseModel):
     def recortar_texto_cliente(cls, valor):
         # Devuelve el texto ya recortado, que es el que se guardará.
         return texto_sin_espacios_en_los_extremos(valor)
+
+    # Rechaza un texto_cliente con forma de email o de teléfono (D26.7).
+    # mode="after": se ejecuta DESPUÉS de que Pydantic haya comprobado que
+    # es texto y su longitud (sobre el texto ya recortado). Si la longitud
+    # falla, este validador no llega a ejecutarse y el 422 es el de longitud.
+    @field_validator("texto_cliente", mode="after")
+    @classmethod
+    def filtrar_datos_de_contacto(cls, valor):
+        # Texto limpio, o ValueError con un mensaje para el agente (422).
+        return texto_sin_datos_de_contacto(valor)
 
 
 class VisitaResponse(BaseModel):

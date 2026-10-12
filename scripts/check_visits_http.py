@@ -42,6 +42,8 @@ import requests
 import uvicorn
 
 from app.config import DATABASE_URL, WEBHOOK_SECRET
+# Los dos mensajes del filtro de D26.7 (CASO 2b), para compararlos exactos.
+from app.schemas.common import MENSAJE_EMAIL_EN_TEXTO, MENSAJE_TELEFONO_EN_TEXTO
 
 PUERTO = 8018
 BASE = f"http://127.0.0.1:{PUERTO}"
@@ -295,12 +297,47 @@ try:
     print("\nCASO 2 - Formato (422 de Pydantic)")
     for nombre, args, campo in [
         ("hora '10:00:00'", dict(hora="10:00:00"), "hora"),
-        ("texto de 1001 caracteres", dict(hora="10:00", texto="x" * 1001), "texto_cliente"),
+        # 301 desde D26.7 (antes, 1001): el máximo de Pydantic es 300.
+        ("texto de 301 caracteres", dict(hora="10:00", texto="x" * 301), "texto_cliente"),
         ("oportunidad_id de más", dict(hora="10:00", extra={"oportunidad_id": 5}), "oportunidad_id"),
     ]:
         r = visita(token_x, LUNES, **args)
         loc = cuerpo(r).get("detail", [{}])[0].get("loc") if r.status_code == 422 else None
         comprobar(f"422 con {nombre}, señalando {campo}", r.status_code == 422 and loc[-1] == campo, f"({r.status_code}, loc={loc})")
+
+    # ------------------------------------------------------------------
+    # CASO 2b (2026-10-12, D26.7): el filtro de texto_cliente por HTTP. El
+    # token no existe, así que un texto que PASA el filtro llega al servicio
+    # y da 404: el 404 demuestra que Pydantic lo ha dejado pasar, sin crear
+    # nada. Los detalles del filtro se prueban sin servidor en
+    # scripts/check_texto_agente_service.py.
+    print("\nCASO 2b - Filtro de D26.7 en texto_cliente (máximo 300, sin email ni teléfono)")
+    # Textos que deben pasar (los tres del tutor y 300 "á", el máximo).
+    for texto in ("a las 9:30", "piso 2º B", "unos 12 m2", "á" * 300):
+        # POST /visits con ese texto.
+        r = visita(token_x, LUNES, "08:30", texto=texto)
+        # 404 lead_no_encontrado: ha pasado la validación de forma.
+        comprobar(f"pasa el filtro (404 del token): {texto[:20]!r} ({len(texto)} caracteres)",
+                  r.status_code == 404 and motivo(r) == "lead_no_encontrado", f"({r.status_code}, {r.text[:200]})")
+    # Textos que deben dar 422, con el dato, la parte del mensaje esperada y
+    # el mensaje completo de common.py.
+    for texto, dato, mensaje in (
+        ("escríbeme a pepe@gmail.com", "pepe@gmail.com", MENSAJE_EMAIL_EN_TEXTO),
+        ("llámame al 666 777 444", "666 777 444", MENSAJE_TELEFONO_EN_TEXTO),
+        ("+34 (666) 777-444 por la tarde", "777-444", MENSAJE_TELEFONO_EN_TEXTO),
+    ):
+        # POST /visits con ese texto.
+        r = visita(token_x, LUNES, "08:30", texto=texto)
+        # El primer error del 422 (o {} si no hay).
+        error = (cuerpo(r).get("detail") or [{}])[0] if r.status_code == 422 else {}
+        # 422 en texto_cliente, con el mensaje para el agente.
+        comprobar(f"422 en texto_cliente con el mensaje del filtro: {texto!r}",
+                  r.status_code == 422 and error.get("loc", [None])[-1] == "texto_cliente"
+                  and error.get("msg") == "Value error, " + mensaje,
+                  f"({r.status_code}, {error.get('loc')}, {error.get('msg')})")
+        # El mensaje no repite el dato (el texto entero sí vuelve en
+        # "input": K3 del plan, aceptado como R3).
+        comprobar("  y el mensaje no repite el dato", dato not in str(error.get("msg")), f"({error.get('msg')})")
 
     # ------------------------------------------------------------------
     print("\nCASO 3 - 404")

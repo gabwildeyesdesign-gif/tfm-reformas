@@ -237,13 +237,20 @@ MAX_LEAD_TOKEN = 100
 # Longitud máxima de visitas.texto_cliente: lo que dijo el cliente en el
 # chat sobre cuándo le viene bien la visita. Es una frase, no la
 # descripción del proyecto: un turno de chat normal ronda los 300
-# caracteres, y 1000 son dos párrafos largos. El tope evita que un texto
-# pegado (o un bucle del agente) meta decenas de KB en visitas y en logs.
+# caracteres. El tope evita que un texto pegado (o un bucle del agente)
+# meta decenas de KB en visitas y en logs.
 #
 # Defensa doble (mismo criterio que MAX_M2_LEAD): el mismo valor está en
 # el CHECK chk_visitas_texto_cliente_longitud de la base de datos
 # (migración paso9). Si se cambia aquí, hay que cambiarlo también allí.
-MAX_TEXTO_VISITA = 1000
+#
+# Nota 2026-10-12 (D26.7, plan del Agente 2): baja de 1000 a 300. Durante
+# un tiempo el CHECK sigue en 1000: endurecerlo antes del merge haría que
+# POST /visits de main diera 500 con textos de 301 a 1000 caracteres (C6
+# del plan). Lo baja la migración paso13b, DESPUÉS del merge. Mientras
+# tanto Pydantic es más estricto que la base de datos, que es el orden
+# seguro.
+MAX_TEXTO_VISITA = 300
 
 # Longitud máxima de decisiones_gate.informe: lo que anota administración
 # tras la llamada al cliente en un caso de Gate (POST /gate-decisions). Es
@@ -316,3 +323,88 @@ def texto_sin_espacios_en_los_extremos(valor):
     # Expresión condicional en una línea: "A if condición else B". Si es
     # texto, se devuelve recortado; si no, el valor tal cual llegó.
     return valor.strip() if isinstance(valor, str) else valor
+
+
+# ======================================================================
+# Filtro de datos de contacto en el texto que escribe un agente (D26.7)
+# ======================================================================
+# El texto que escribe el Agente 2 (visitas.texto_cliente) lo leen
+# administración, la ficha y la lista diaria. No debe llevar el email ni el
+# teléfono del cliente: ya están en la solicitud, y copiarlos en texto
+# libre los esparce por sitios que no los esperan. Este filtro los rechaza
+# con un 422 y el agente reescribe el texto sin ellos.
+#
+# Vive aquí, y no en visits.py, porque la rama 2 del plan lo reutilizará
+# para el resumen de la solicitud (LeadCreate.resumen): un solo sitio.
+#
+# Solo en Pydantic, nunca en un CHECK: una expresión regular escrita en SQL
+# divergiría con el tiempo de la de Python (P3 del plan).
+#
+# Límites conocidos (R1 y R2 del plan): no detecta una dirección ni datos
+# de salud escritos en prosa, ni un número dictado en palabras ("seis seis
+# seis..."). Y puede rechazar un texto inocente con 9 o más cifras
+# seguidas, por ejemplo "referencia 123 456 789"; el agente lo reescribe.
+
+# Forma de email, la misma que pide el Agente 1 ("Validating contact data"
+# de prompts/agente1_captura.md): texto, una @, un dominio, un punto y un
+# final de al menos 2 letras. Se BUSCA dentro del texto (re.search), no se
+# exige que el texto entero lo sea.
+#   [^\s@]+    -> uno o más caracteres que no son espacio ni @ (el usuario)
+#   @          -> la arroba
+#   [^\s@]+    -> el dominio (puede llevar puntos: "correo.empresa")
+#   \.         -> un punto literal
+#   [^\W\d_]{2,} -> 2 o más LETRAS (\W es "no letra ni cifra ni _"; quitar
+#                 también \d y _ deja solo letras, con tildes incluidas)
+PATRON_EMAIL_EN_TEXTO = re.compile(r"[^\s@]+@[^\s@]+\.[^\W\d_]{2,}")
+
+# Forma de teléfono: un tramo de 9 o más cifras, con o sin separadores
+# entre ellas. El Agente 1 admite de 9 a 15 cifras con espacios, guiones,
+# puntos y paréntesis; aquí no hay máximo, para que un número más largo
+# (16 cifras) también se detecte. El "+" del prefijo no hace falta:
+# "+34 666 777 444" ya tiene 11 cifras.
+#   (?<![\d:/])  -> el tramo no empieza pegado a una cifra, ":" o "/"
+#   \d           -> una cifra
+#   (?:[\s.\-()]{0,3}\d){8,} -> 8 o más veces: hasta 3 separadores
+#                   (espacio, punto, guion o paréntesis) y otra cifra
+#   (?![\d:/])   -> y no termina pegado a una cifra, ":" o "/"
+# La barra "/" y los dos puntos ":" NO son separadores y además cortan el
+# tramo por los dos lados: así una hora ("9:30") o una fecha ("19/10/2026")
+# no cuentan, y tampoco "2026-10-19 10:00", donde sin esos bordes las
+# cifras de la fecha y el "10" de la hora sumarían 10.
+PATRON_TELEFONO_EN_TEXTO = re.compile(r"(?<![\d:/])\d(?:[\s.\-()]{0,3}\d){8,}(?![\d:/])")
+
+# Mensajes del 422. Los lee el agente (n8n le pasa el cuerpo del error), así
+# que dicen qué hacer. NO repiten el dato encontrado. OJO: el 422 de
+# Pydantic sí devuelve el texto completo en "input" (K3 del plan, aceptado
+# y documentado como R3).
+# Mensaje cuando el texto tiene forma de email.
+MENSAJE_EMAIL_EN_TEXTO = (
+    "el texto parece contener un email: escríbelo sin datos de contacto "
+    "(administración ya tiene el email y el teléfono del cliente)"
+)
+# Mensaje cuando el texto tiene forma de teléfono.
+MENSAJE_TELEFONO_EN_TEXTO = (
+    "el texto parece contener un teléfono (9 o más cifras seguidas): "
+    "escríbelo sin datos de contacto y sin números largos "
+    "(administración ya tiene el email y el teléfono del cliente)"
+)
+
+
+# El filtro: lo llama VisitaCreate desde un @field_validator (visits.py).
+def texto_sin_datos_de_contacto(valor):
+    """
+    Deja pasar un texto sin forma de email ni de teléfono; si tiene alguna,
+    ValueError (que Pydantic convierte en un 422 que nombra el campo).
+    Se llama DESPUÉS de que Pydantic haya comprobado el tipo y la longitud,
+    así que valor ya es un str recortado. Devuelve el texto sin tocar.
+    """
+    # re.search busca el patrón en cualquier punto del texto. Si encuentra
+    # un email, se rechaza con su mensaje (se mira antes que el teléfono:
+    # si hay los dos, basta con un mensaje).
+    if PATRON_EMAIL_EN_TEXTO.search(valor):
+        raise ValueError(MENSAJE_EMAIL_EN_TEXTO)
+    # Igual con la forma de teléfono.
+    if PATRON_TELEFONO_EN_TEXTO.search(valor):
+        raise ValueError(MENSAJE_TELEFONO_EN_TEXTO)
+    # Sin datos de contacto: el texto se devuelve tal cual.
+    return valor

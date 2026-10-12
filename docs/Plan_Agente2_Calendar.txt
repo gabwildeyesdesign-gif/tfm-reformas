@@ -296,6 +296,21 @@ B4. Filtro D26.7 en POST /visits: MAX_TEXTO_VISITA = 300, emails y
     contrato) y check_texto_agente_service (separadores, falsos positivos
     conocidos). N4 (ALTO): tres copias, sin la regex de email, sin la de
     teléfono y sin el límite -> FALLO cada una.
+    [Nota 2026-10-12: el tutor pidió este bloque como "B3", antes que
+    get_business_rules; el orden no importa (no dependen uno del otro) y la
+    numeración del plan no se cambia: este es el B4 y get_business_rules
+    va después. Código y scripts escritos SIN ejecutar (Docker/n8n abiertos):
+    MAX_TEXTO_VISITA = 300; texto_sin_datos_de_contacto en common.py con
+    PATRON_EMAIL_EN_TEXTO [^\s@]+@[^\s@]+\.[^\W\d_]{2,} y
+    PATRON_TELEFONO_EN_TEXTO (?<![\d:/])\d(?:[\s.\-()]{0,3}\d){8,}(?![\d:/])
+    (9 o más cifras, sin máximo, para no dejar pasar 16 cifras; ":" y "/"
+    cortan el tramo, para horas y fechas); dos mensajes que no repiten el
+    dato; validador mode="after" en VisitaCreate (la longitud va antes).
+    check_texto_agente_service nuevo (S1-S7, sin servidor ni base de datos)
+    y CASO 2b en check_visits_http (301 en vez de 1001). Hallazgo para
+    paso13b: check_migracion_visitas prueba 1000/1001 contra el CHECK y el
+    CASO 20 de check_listado_llamadas_http inserta por SQL un texto de
+    1000; los dos cambian con paso13b.]
 B5-0. Fechas propias en los scripts que crean visitas (C7, P21), sin cambio
     de comportamiento del código: los mismos recuentos que hoy.
 B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
