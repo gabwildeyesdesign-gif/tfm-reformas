@@ -1,0 +1,14 @@
+Reformas Integrales Amedida — Decisiones N0
+D28 — Enlace a la ficha en WF2 descartado y resumen de la conversación para administración
+
+Sesión: 2026-10-11. Aceptado por Gabi el 2026-10-11 ("dejamos lo anterior anotado para hacerlo cuando creemos el agente 2"). Base: D26.1, D26.7, D26.8, D18 (el Agente 2 entra después del cálculo), D21.6 (n8n no lee la base de datos).
+
+1. Hallazgo (pregunta de Gabi, 2026-10-11)
+
+"¿De qué sirve enseñar la ficha completa en el aviso del Gate si el email ya informa del tipo de reforma?" Comprobado en el código (main = 9153532): cuando WF2 avisa, la oportunidad acaba de recibir su presupuesto con Gate. POST /visits rechaza los casos con Gate (409 presupuesto_con_gate, visits_service.py), nadie ha llamado todavía y el historial solo tiene el alta y el cálculo. Lo único que la ficha añadiría es "otras solicitudes con el mismo email". El paso 3a del handoff ("enlace a la ficha en WF2", puesto primero "por orden de valor") se propuso sin medir ese valor: error del tutor.
+
+2. Decisiones
+D28.1 — Resumen de la conversación para quien llama (opción A). Lo que el cliente cuenta en el chat sobre su proyecto no llega hoy a administración: leads.mensaje_original existe pero se guarda siempre a NULL (leads_service.py) y el historial del chat solo vive en la memoria de n8n. Se añadirá un resumen corto escrito por el agente, guardado en la base de datos, con las protecciones de D26.7 (prompt que prohíbe datos personales, límite de longitud y rechazo 422 de emails y teléfonos), visible en el email de WF2 y en la ficha, y NO en la lista diaria (acumulación, D26 sección 1.3).
+B. Guardar la conversación completa: más riesgo RGPD (conversaciones enteras con datos personales, retención) y mucho texto que nadie lee. Rechazada.
+C. Nada (administración pregunta en la llamada): llamada a ciegas en lo cualitativo. Rechazada. Detalle de diseño: WF2 se dispara ANTES de que hable el Agente 2 (D18), así que, para que el resumen llegue al aviso del Gate, lo natural es que lo escriba el Agente 1 al capturar (un campo más de lo que envía a POST /leads). Pregunta abierta para ese plan: dónde se guarda (columna nueva o leads.mensaje_original, hoy sin uso) y si el Agente 2 lo amplía después. Valor medible (business case, D26.8): tiempo de preparación de la llamada de un caso con Gate. Cuándo: en el bloque del Agente 2, junto con D26.7 (misma migración, mismo filtro, misma prueba de prompts).
+D28.2 — Sin enlace a la ficha en WF2. WF2 no se toca. El enlace a la ficha se pone en cada elemento de WF3, donde sí añade lo que falta (importes, visitas, informes de llamadas anteriores, historial): la lista diaria solo lleva el resumen sin email ni importes. Los casos con Gate también lo reciben por WF3 (apartado a) si nadie los llama a tiempo.
