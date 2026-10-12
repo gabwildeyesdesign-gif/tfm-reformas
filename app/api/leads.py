@@ -24,14 +24,20 @@ entre las dos puertas.
 # Path: describe un parámetro que viene DENTRO de la ruta (el
 # {lead_token} de /leads/session/{lead_token}) y permite ponerle reglas,
 # como la longitud mínima y máxima.
+# sys: para escribir el [AVISO] del 503 en stderr (consola del uvicorn).
+import sys
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Response
 
 from app.api.security import verificar_webhook_secret
 from app.schemas.common import MAX_LEAD_TOKEN, MIN_LEAD_TOKEN
 from app.schemas.leads import LeadCreate, LeadCreateResponse, LeadSessionResponse
 from app.services.leads_service import create_lead, get_lead_session
+
+# El único rechazo de GET /leads/session: falta o no es válida una regla del
+# plazo orientativo (-> 503). Es la misma clase que usan /visits y el listado.
+from app.services.reglas_visita import ConfiguracionIncompleta
 
 # tags=["leads"] agrupa estos endpoints bajo un epígrafe "leads" en la
 # documentación automática de /docs. Es solo presentación.
@@ -141,6 +147,26 @@ def get_leads_session(
     importes.
 
     Toda la lógica está en services/ (get_lead_session); este adaptador
-    solo traduce entre HTTP y esa función.
+    solo traduce entre HTTP y esa función. Desde el Bloque B2 del plan del
+    Agente 2 devuelve también la reforma y el plazo orientativo (D18.7).
     """
-    return get_lead_session(lead_token)
+    # try / except: si el servicio rechaza por configuración, se traduce a
+    # HTTP; cualquier otro error sigue hasta el manejador global (500).
+    try:
+        return get_lead_session(lead_token)
+    # Falta o no es válida una regla del plazo (solo se leen si hacen falta).
+    except ConfiguracionIncompleta as error:
+        # La traza para administración: una línea en stderr, en la consola
+        # del uvicorn. NO se escribe en logs: el endpoint es de solo
+        # lectura. Nombra las claves, nunca un secreto ni el lead_token.
+        print(
+            f"[AVISO] GET /leads/session: configuración incompleta en reglas_negocio: {error.faltan}",
+            file=sys.stderr,
+            flush=True,
+        )
+        # 503 con el mismo formato que /visits y GET /llamadas-del-dia:
+        # {"detail": {"motivo": ..., "mensaje": ..., "faltan": [...]}}.
+        raise HTTPException(
+            status_code=503,
+            detail={"motivo": error.motivo, "mensaje": error.mensaje, "faltan": error.faltan},
+        )

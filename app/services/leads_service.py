@@ -37,6 +37,24 @@ from app.schemas.leads import (
     PresupuestoSesion,
 )
 
+# ReformaAviso: el objeto "reforma" de la sesión (el mismo de gate-avisos y
+# de la ficha). COLUMNAS_CASO: las expresiones SQL de esos datos, en una
+# sola fuente (datos_oportunidad.py), para no copiarlas aquí.
+from app.schemas.aviso_gate import ReformaAviso
+from app.services.datos_oportunidad import COLUMNAS_CASO
+
+# El plazo orientativo de D18.7: cuándo se puede dar y cómo se lee.
+from app.services.plazo_orientativo import leer_plazo, plazo_aplicable
+
+# Los datos de la reforma para GET /leads/session (plan del Agente 2, B2):
+# los NOMBRES de sus columnas dentro de COLUMNAS_CASO, en este orden, y sus
+# expresiones resueltas UNA vez al importar el archivo. Un nombre que no
+# exista lanza KeyError al arrancar uvicorn, no en mitad de un chat (mismo
+# patrón que NOMBRES_SOLICITUD del listado).
+NOMBRES_REFORMA_SESION = ("tipo_reforma", "m2", "nivel_acabados", "cambios_estructurales")
+# ", ".join las separa con comas para el SELECT.
+COLUMNAS_REFORMA_SESION_SQL = ", ".join(dict(COLUMNAS_CASO)[nombre] for nombre in NOMBRES_REFORMA_SESION)
+
 # Canal fijo de N0: el lead llega de un CHAT web (el Agente 1 de n8n
 # conversa con el cliente y, al confirmar los datos, llama a POST /leads).
 # Antes valía "formulario_web", un nombre que ya no describe el canal real.
@@ -403,7 +421,9 @@ def get_lead_session(lead_token: str) -> LeadSessionResponse:
 
     Contesta a dos preguntas en UNA sola consulta: ¿existe ya un lead con
     este lead_token? Y, si existe, ¿en qué estado está su oportunidad y
-    tiene presupuesto, con Gate o sin él?
+    tiene presupuesto, con Gate o sin él? Desde el Bloque B2 del plan del
+    Agente 2 devuelve además la reforma pedida y el plazo orientativo de
+    D18.7 (contexto del Agente 2).
 
     Un token que no existe NO es un error: devuelve existe=False. Para el
     router, "este chat todavía no tiene lead" es un estado normal.
@@ -411,6 +431,13 @@ def get_lead_session(lead_token: str) -> LeadSessionResponse:
     NUNCA devuelve importes (D18.5: el Agente 2 no debe tenerlos). La
     consulta no los selecciona y LeadSessionResponse no tiene dónde
     ponerlos.
+
+    Las reglas del plazo (reglas_negocio, paso13) solo se leen si D18.7
+    permite dar un plazo: así una regla rota no tumba la captura del
+    Agente 1, que también pasa por aquí en cada turno.
+
+    Excepción que puede lanzar (el adaptador la traduce a HTTP):
+      ConfiguracionIncompleta  503  configuracion_incompleta (sin log)
 
     Usa get_db_connection() (solo lectura) porque no escribe nada.
     """
@@ -437,6 +464,9 @@ def get_lead_session(lead_token: str) -> LeadSessionResponse:
         # _buscar_lead_por_token() (idempotencia de POST /leads). Así las
         # dos lecturas por token devuelven la misma oportunidad.
         #
+        # Al final, las cuatro columnas de la reforma, tomadas de
+        # COLUMNAS_CASO por nombre (usan los mismos alias l, o y p).
+        #
         # Los importes (importe_min_con_iva, importe_max_con_iva) NO se
         # seleccionan, a propósito.
         cursor.execute(
@@ -447,7 +477,8 @@ def get_lead_session(lead_token: str) -> LeadSessionResponse:
                    p.id IS NOT NULL AS tiene_presupuesto,
                    p.requiere_aprobacion,
                    p.motivo_gate,
-                   count(*) OVER () AS filas
+                   count(*) OVER () AS filas,
+                   """ + COLUMNAS_REFORMA_SESION_SQL + """
             FROM leads l
             LEFT JOIN oportunidades o ON o.lead_id = l.id
             LEFT JOIN presupuestos p ON p.oportunidad_id = o.id
@@ -457,33 +488,55 @@ def get_lead_session(lead_token: str) -> LeadSessionResponse:
             """,
             (lead_token,),
         )
+        # La única fila (o None si no hay lead con ese token).
         fila = cursor.fetchone()
+
+        # Sin filas: no hay ningún lead con ese token. Se cierra el cursor
+        # y se responde sin leer nada más.
+        if fila is None:
+            cursor.close()
+            return LeadSessionResponse(
+                existe=False,
+                lead_id=None,
+                oportunidad_id=None,
+                estado_oportunidad=None,
+                # presupuesto va siempre como objeto, nunca como None.
+                presupuesto=PresupuestoSesion(
+                    existe=False, requiere_aprobacion=None, motivo_gate=None
+                ),
+                # Sin lead no hay reforma que describir ni plazo.
+                reforma=None,
+                plazo_orientativo=None,
+            )
+
+        # "Desempaquetado": reparte los once valores de la fila en once
+        # variables, en el mismo orden que el SELECT (las cuatro últimas,
+        # en el orden de NOMBRES_REFORMA_SESION).
+        (
+            lead_id,
+            oportunidad_id,
+            estado,
+            tiene_presupuesto,
+            requiere_aprobacion,
+            motivo_gate,
+            filas,
+            tipo_reforma,
+            m2,
+            nivel_acabados,
+            cambios_estructurales,
+        ) = fila
+
+        # El plazo de D18.7: solo si se puede dar. Si no, None sin leer
+        # ninguna regla. leer_plazo lanza ConfiguracionIncompleta (503) si
+        # falta o no es válida una regla; dentro del "with" es seguro: no
+        # hay nada que confirmar y la conexión vuelve al pool igualmente.
+        if plazo_aplicable(tipo_reforma, tiene_presupuesto, requiere_aprobacion, cambios_estructurales):
+            plazo = leer_plazo(cursor, tipo_reforma)
+        # No se puede dar plazo (D18.7): None, sin leer ninguna regla.
+        else:
+            plazo = None
+        # Cerrar el cursor libera sus recursos.
         cursor.close()
-
-    # Sin filas: no hay ningún lead con ese token.
-    if fila is None:
-        return LeadSessionResponse(
-            existe=False,
-            lead_id=None,
-            oportunidad_id=None,
-            estado_oportunidad=None,
-            # presupuesto va siempre como objeto, nunca como None.
-            presupuesto=PresupuestoSesion(
-                existe=False, requiere_aprobacion=None, motivo_gate=None
-            ),
-        )
-
-    # "Desempaquetado": reparte los siete valores de la fila en siete
-    # variables, en el mismo orden que el SELECT.
-    (
-        lead_id,
-        oportunidad_id,
-        estado,
-        tiene_presupuesto,
-        requiere_aprobacion,
-        motivo_gate,
-        filas,
-    ) = fila
 
     # Aviso en consola si el lead tiene varias oportunidades. La respuesta
     # no cambia (se devuelve la primera); el aviso deja rastro de un caso
@@ -497,6 +550,7 @@ def get_lead_session(lead_token: str) -> LeadSessionResponse:
             flush=True,
         )
 
+    # La respuesta completa de un lead que existe.
     return LeadSessionResponse(
         existe=True,
         lead_id=lead_id,
@@ -513,4 +567,14 @@ def get_lead_session(lead_token: str) -> LeadSessionResponse:
             # en la lista.
             motivo_gate=motivo_gate,
         ),
+        # La reforma, con None en lo que falte en la solicitud (D4). Los
+        # textos se convierten en sus Enum (TipoReforma, NivelAcabados).
+        reforma=ReformaAviso(
+            tipo_reforma=tipo_reforma,
+            m2=m2,
+            nivel_acabados=nivel_acabados,
+            incluye_cambios_estructurales=cambios_estructurales,
+        ),
+        # El plazo decidido arriba (o None).
+        plazo_orientativo=plazo,
     )

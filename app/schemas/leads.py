@@ -47,6 +47,11 @@ from app.schemas.common import (
     TipoReforma,
 )
 
+# ReformaAviso: los cuatro datos de la reforma, el MISMO objeto "reforma"
+# que ya devuelven GET /gate-avisos y la ficha (una sola definición). Es
+# extra="forbid" y no tiene ningún importe.
+from app.schemas.aviso_gate import ReformaAviso
+
 # Caracteres de "decoración" que una persona escribe en un teléfono y que
 # no forman parte del número: espacios, guiones, puntos y paréntesis.
 # \s cubre cualquier espacio en blanco: el normal, el tabulador, el salto
@@ -389,6 +394,36 @@ class PresupuestoSesion(BaseModel):
     motivo_gate: MotivoGate | None
 
 
+class TramoSemanas(BaseModel):
+    """Un tramo de plazo orientativo, en semanas enteras: de min a max."""
+
+    # extra="forbid": un campo no declarado es un error, no se ignora.
+    model_config = ConfigDict(extra="forbid")
+
+    # Semanas mínimas y máximas (de reglas_negocio, paso13; 1 a 52).
+    min: int
+    max: int
+
+
+class PlazoOrientativo(BaseModel):
+    """
+    Plazo orientativo de ejecución que el Agente 2 puede comunicar (D18.7;
+    plan del Agente 2, Bloque B2). Solo existe para bano y cocina sin Gate
+    ni cambios estructurales; en cualquier otro caso, el campo
+    plazo_orientativo de la respuesta es null. Lo calcula el backend
+    (app/services/plazo_orientativo.py), nunca el agente.
+    """
+
+    # extra="forbid": un campo no declarado es un error, no se ignora.
+    model_config = ConfigDict(extra="forbid")
+
+    # Semanas de obra.
+    obra_semanas: TramoSemanas
+    # Semanas de fabricación de los muebles ANTES del montaje: solo en
+    # cocina; null en baño. Siempre presente (sin valor por defecto).
+    fabricacion_muebles_semanas: TramoSemanas | None
+
+
 class LeadSessionResponse(BaseModel):
     """
     Respuesta de GET /leads/session/{lead_token}.
@@ -426,3 +461,13 @@ class LeadSessionResponse(BaseModel):
     # router puede leer presupuesto.existe directamente, sin comprobar
     # antes si presupuesto es null.
     presupuesto: PresupuestoSesion
+
+    # Los datos de la reforma pedida, para el contexto del Agente 2 (P4 = A
+    # del plan del Agente 2). null solo si el lead no existe; con lead,
+    # siempre el objeto, con null en lo que falte en la solicitud (D4).
+    # Sin importes: ReformaAviso no tiene ninguno.
+    reforma: ReformaAviso | None
+
+    # El plazo que el agente puede dar, ya decidido por el backend según
+    # D18.7, o null si no se puede dar (ver PlazoOrientativo).
+    plazo_orientativo: PlazoOrientativo | None
