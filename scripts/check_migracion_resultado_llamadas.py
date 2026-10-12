@@ -299,15 +299,37 @@ try:
     cur.execute("SELECT relrowsecurity FROM pg_class WHERE oid = %s::regclass;", (TABLA,))
     comprobar("RLS sigue activado", cur.fetchone()[0] is True)
 
-    # Las filas reales: todas del Gate y sin visita cancelada. Se mira en un
-    # SAVEPOINT porque, antes de migrar, las columnas no existen (error).
-    # SQL: cuántas filas hay y cuántas no son del Gate o tienen cancelada.
+    # Las filas reales que existían al aplicar paso12: las 6 de la foto
+    # "antes" de B2-M (ids 489-494, SHA-256 41fd28cc…550b), todas del Gate y
+    # sin visita cancelada. Se mira en un SAVEPOINT porque, antes de migrar,
+    # las columnas no existen (error).
+    # Nota 2026-10-12 (Bloque C del plan del Agente 2, decisión del tutor):
+    # antes se exigía lo mismo a TODAS las filas de la tabla, y eso era el
+    # estado de un momento concreto. El uso normal del formulario lo deja de
+    # cumplir: el 12/10 se registraron dos seguimientos reales (1875 y 1877),
+    # y la suite dio 49/50 sin que nada estuviera roto. Mismo patrón que
+    # check_migracion_iva_y_seguimiento. Las filas posteriores salen solo
+    # como [INFO], con su recuento por tipo.
+    IDS_ANTES_DE_PASO12 = list(range(489, 495))
+    # SQL: de esas 6, cuántas hay, cuántas no son del Gate y cuántas tienen
+    # una visita cancelada.
     error, cuentas = ejecutar_en_savepoint(cur, [(
         f"SELECT count(*), count(*) FILTER (WHERE tipo_llamada <> 'gate'), "
-        f"count(*) FILTER (WHERE visita_cancelada_id IS NOT NULL) FROM {TABLA};", None)])
-    print(f"    filas reales (total, no-gate, con cancelada): {cuentas[0] if cuentas else error.pgerror.splitlines()[0]}")
-    comprobar("todas las filas reales con tipo_llamada 'gate' y sin visita cancelada",
-              error is None and cuentas[0][1] == 0 and cuentas[0][2] == 0)
+        f"count(*) FILTER (WHERE visita_cancelada_id IS NOT NULL) FROM {TABLA} WHERE id = ANY(%s);",
+        (IDS_ANTES_DE_PASO12,))])
+    # Se enseñan (o el error, antes de migrar).
+    print(f"    filas de antes de paso12, ids 489-494 (total, no-gate, con cancelada): "
+          f"{cuentas[0] if cuentas else error.pgerror.splitlines()[0]}")
+    # Las 6 existen, las 6 son del Gate y ninguna tiene visita cancelada.
+    comprobar("las 6 filas que existían al aplicar paso12 (ids 489-494): tipo_llamada 'gate' y sin visita cancelada",
+              error is None and cuentas[0] == (6, 0, 0), f"({cuentas[0] if cuentas else None})")
+    # SQL: las filas posteriores, por tipo, con sus ids (solo información).
+    error_post, por_tipo = ejecutar_en_savepoint(cur, [(
+        f"SELECT tipo_llamada, count(*), array_agg(id ORDER BY id) FROM {TABLA} "
+        f"WHERE NOT (id = ANY(%s)) GROUP BY tipo_llamada ORDER BY tipo_llamada;", (IDS_ANTES_DE_PASO12,))])
+    # [INFO]: no cuenta como comprobación.
+    print(f"  [INFO]  filas posteriores a paso12 (no se comprueban), por tipo: "
+          f"{por_tipo if error_post is None else error_post.pgerror.splitlines()[0]}")
 
     # ==================================================================
     print("\n" + "=" * 78)

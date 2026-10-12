@@ -499,6 +499,49 @@ B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
     que fallaba en un 15 % de las pasadas.]
 C.  Regresión (los 15 scripts que crean visitas, los de MCP y el de sesión)
     y suite completa en UNA pasada válida (regla de suspensión).
+    [Nota 2026-10-12: Bloque C CERRADO, 48/48 scripts. Suite completa en UNA
+    pasada, de 18:46:04 a 18:59:41, contra 2074452: 1,99 GB libres a las
+    18:45:18 con Docker/n8n, Chrome y Edge cerrados y el portátil enchufado;
+    Kernel-Power 506/507 entre 18:45 y 19:01: ninguno. 46 scripts desde el
+    repositorio; check_graceful_shutdown y check_mcp_connection desde copias
+    en el 8030 y el 8031 (uvicorn propio del 8031 detenido por su PID 25988,
+    el del log igual al de netstat; 8030 y 8031 libres al terminar).
+    Recuentos: aviso_gate_http 75/75, aviso_gate_service 18/18,
+    calculate_estimate_http 24/24, conexion_muerta 18/18, connection 10/10
+    tablas, create_lead_service 52 OK, disponibilidad_service 35/35,
+    estimate_service 129/129, exception_handler 32 OK,
+    ficha_oportunidad_http 69/69, ficha_oportunidad_service 40/40,
+    followup_service 34/34, followup_tasks_http 125/125, foreign_keys (sin
+    fallos, revisado a mano), gate_decisions_http 124/124,
+    gate_decisions_service 14/14, lead_session_http 69/69,
+    leads_endpoint_http 23 OK, listado_llamadas_http 109/109,
+    listado_llamadas_service 69/69, mcp_business_rules 21/21,
+    mcp_calculate_estimate 19/19, migracion_agente2 CORRECTO,
+    migracion_calculate_estimate 14/14, migracion_decisiones_gate 38/38,
+    migracion_email_lower_y_lead_token 13/13, migracion_iva_y_seguimiento
+    16/16, migracion_m2_leads 23/23, migracion_regla_seguimiento CORRECTO,
+    migracion_resultado_llamadas 49/50 en la pasada y 50/50 tras su arreglo
+    (ver abajo), migracion_umbrales_gate 17/17, migracion_visitas 28/28,
+    pool_connections y pool_transaction_state (sin fallos, revisados a
+    mano), resultados_llamada_http 183/183, resultados_llamada_service
+    37/37, rls_estado (sin fallos: el 42501 es el rechazo esperado de anon),
+    rollback_conn_cerrada 17 OK, schema_actual_ejecutable 10/10, schemas 59
+    OK, texto_agente_service 44/44, tipo_reforma_constraint CORRECTO,
+    transactional_connection 11 OK, visits_http 90/90, visits_service 16/16,
+    webhook_auth_http 15 OK, graceful_shutdown OK y mcp_connection (las dos
+    tools). Datos reales iguales antes y después (las 3 visitas, 538, 3069
+    y 3070, y reglas_negocio con 20 filas; foto con SHA-256 a2358c1a…e768).
+    Hallazgo H-C-1: check_migracion_resultado_llamadas exigía que TODAS
+    las filas reales de decisiones_gate fueran 'gate' y sin visita
+    cancelada, el estado del día de paso12; el uso del formulario el 12/10
+    añadió dos seguimientos reales (1875 y 1877) y dio 49/50. Decisión del
+    tutor: limitar la comprobación a las 6 filas que existían al aplicar
+    paso12 (ids 489-494, foto "antes" de B2-M, SHA-256 41fd28cc…550b) y
+    sacar las posteriores como [INFO] con su recuento por tipo. Repetido
+    solo ese script (19:37:21-19:37:30, 1,95 GB libres, Kernel-Power
+    ninguno entre 19:36 y 19:39): 50/50; [INFO] gate 1 (1876, la visita
+    acordada del 12/10 que creó la 3069) y seguimiento 2 (1875 y 1877).
+    Resultado del Bloque C: 48/48 scripts.]
 D.  Adenda (filas 3, 4, 6 y 10; secciones 5.3, 5.4, 5.5, 5.10; MCP; nota de
     P14), docs/Contrato_Formulario_Llamadas.md (409 hueco_ocupado),
     CLAUDE.md (con C1) y prompts/agente2_asesor.md.
