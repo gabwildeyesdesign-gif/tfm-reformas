@@ -219,6 +219,13 @@ docs/Decisiones_D26_...md) y D27 (docs/Decisiones_D27_...md) ya están en
 docs/, y los JSON saneados de los flujos de n8n en n8n/ (D27.5). No hay
 ningún bloque de backend abierto; el siguiente es 4b (D26.6).)
 Lo que sigue es la especificación completa, no el estado actual.
+(Nota 2026-10-12: desde el 2026-10-11, en la rama feat/n0-resultado-llamadas
+(pendiente de merge), POST /resultados-llamada: el resultado de TODAS las
+llamadas de administración (Gate, seguimiento y confirmación de visita), solo
+REST, sin tool MCP, noveno include_router, cabecera X-Gate-Secret. POST
+/gate-decisions pasa a ser su ALIAS con el contrato antiguo, solo Gate, hasta
+que el formulario de n8n use la ruta nueva (D26.6). Detalle en "Estado
+actual".)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -349,6 +356,16 @@ SOLO REST.
   scripts/check_webhook_auth_http.py). Solución: pasar
   PYTHONIOENCODING=utf-8 en el entorno del hijo, por ejemplo
   env=dict(os.environ, PYTHONIOENCODING="utf-8").
+- (2026-10-11) Lo mismo pasa al LEER la entrada estándar: un script de
+  Python que recibe un texto por stdin (por ejemplo, por un heredoc de Git
+  Bash) lo lee en cp1252 y rompe las tildes ("añade" -> "aÃ±ade"). Solución:
+  sys.stdin.reconfigure(encoding="utf-8") al principio del script. Pasó con
+  la herramienta de comentarios del scratchpad y rompió tildes en tres
+  scripts.
+- (2026-10-11) En Git Bash, una ruta /c/... escrita DENTRO del texto de un
+  python -c no se convierte (Python no la entiende): pasarla como argumento
+  (sys.argv). Y un heredoc muy largo con muchas comillas puede no llegar
+  entero a la terminal: escribir el script en un archivo y ejecutarlo.
 
 ## Estado actual / pendiente
 
@@ -535,6 +552,20 @@ SOLO REST.
 > tutor, y siempre con `--ff-only`. El siguiente bloque de backend es 4b
 > (registro del resultado de todas las llamadas, D26.6), y después WF3 en
 > n8n (bloque 5).
+>
+> **(Nota 2026-10-12.) Bloque actual: 4b, registro del resultado de todas las
+> llamadas** (D25.9-D25.11, D26.6), implementado y verificado en la rama
+> `feat/n0-resultado-llamadas`, **pendiente de merge** (bloques A, B1, B2-M,
+> B2, C y D cerrados; plan docs/Plan_Resultado_Llamadas.txt; contrato para el
+> formulario docs/Contrato_Formulario_Llamadas.md). OJO: la migración paso12
+> YA ESTÁ APLICADA en la base de datos real (solo expand; main sigue
+> funcionando, demostrado con sus scripts). Misma regla de siempre: no hacer
+> merge sin la confirmación explícita de Gabi, después de la revisión del
+> tutor, y siempre con `--ff-only`. Decisiones de Gabi de este bloque:
+> P1-P16 del plan y D29.1-D29.3 (su documento está en el Proyecto de
+> claude.ai, todavía no en docs/). El siguiente bloque de backend es 4c, el
+> aviso de "última llamada" (D29.2, regla horas_ultima_llamada); en n8n, el
+> formulario ampliado (conectado a WF4, D27.4) y después WF3 (bloque 5).
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -877,6 +908,17 @@ PID que el del servidor (lanzado 29852; log y netstat 28768, hijo de
 29852): el PID que vale es el del log comprobado con netstat, nunca el de
 Popen. El ejecutor no detuvo nada al ver que no coincidían; 28768 se
 detuvo después por su PID, y el lanzador terminó con él.)
+(Nota 2026-10-12, rama feat/n0-resultado-llamadas: la suite tiene ahora 44
+scripts (el tutor dijo 43): check_migracion_resultado_llamadas,
+check_resultados_llamada_service y check_resultados_llamada_http (puerto
+8028, nunca el 8000). 44/44 en UNA pasada válida el 2026-10-11, de 22:59:52
+a 23:10:48, con la regla de uso (Docker/n8n y navegador cerrados, wsl
+--shutdown, enchufado y tapa abierta, confirmado por Gabi) y sin ningún
+Kernel-Power 506/507 entre 22:58 y 23:12. Uvicorn del 8031 detenido por su
+PID 28620 (log = netstat; el lanzador 29800 terminó con él). Salida de los
+cinco scripts de P4 revisada a mano: sin fallos. Las pruebas en negativo se
+hicieron en tres tandas con commit entre ellas, cada una con su
+comprobación de 506/507.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -966,6 +1008,34 @@ sección 5.7 de la Adenda. Suite completa 41/41 en UNA pasada válida.
 (Nota 2026-10-11: "pendiente de merge" ya no es cierto: integrado en main en
 c1ba356, comprobado en GitHub.)
 
+Resultado de todas las llamadas (rama feat/n0-resultado-llamadas,
+2026-10-11 a 2026-10-12, pendiente de merge; plan 5f7d4df y 2cb01a6, B1
+c9d7332, B2-M cfb81ae y 500d203, B2 5f62f85, C c665cb4, 3c14bd7, bc30112,
+ab166ba y f0f7686, D en el commit del Bloque D): D25.9-D25.11, bloque 4b de
+D26.6. POST /resultados-llamada registra el resultado de las tres llamadas
+de la lista diaria: gate y seguimiento (visita_acordada | descartar) y
+confirmación de una visita pedida desde el chat (confirmar_hora | otra_hora |
+cliente_cancela, que pasa la oportunidad a 'perdida'). El tipo lo DEDUCE el
+backend (app/services/tipo_llamada.py, compartido con la ficha). Una sola
+fila definitiva por oportunidad (el UNIQUE se mantiene, P6). Motivo nuevo
+'sin_decision' (D29.3), solo por la ruta nueva y nunca en cliente_cancela.
+B1 renombró solo el contrato público (P3 = b): gate_decisions_service.py ->
+resultados_llamada_service.py (git mv); la tabla sigue siendo
+decisiones_gate, con COMMENT ON TABLE. POST /gate-decisions es el ALIAS con
+su contrato de siempre (registrar_decision -> registrar_resultado con
+solo_gate=True): check_gate_decisions_http 121/121 SIN tocar en B1, B2 y C.
+Migración paso12 (solo expand, APLICADA el 2026-10-11 tras "confirmo la
+migración paso12"): tipo_llamada (DEFAULT 'gate'), visita_cancelada_id
+(clave foránea doble), CHECK ampliados y nuevos; vuelta atrás escrita sin
+ejecutar. La ficha gana llamada_registrable (P9), fecha_visita_cancelada y el
+evento llamada_registrada (L-b); GET /gate-avisos admite 'sin_decision' en su
+motivo (C17, un valor más). check_migracion_resultado_llamadas 50/50 (7/50
+antes), check_resultados_llamada_service 37/37 y check_resultados_llamada_http
+160/160 (puerto 8028); quince pruebas en negativo N1-N15 (resultados exactos
+en la sección 8.5 del plan) y suite completa 44/44 en UNA pasada válida.
+Contrato y limitaciones: fila 10 y sección 5.10 de la Adenda, con notas en
+la fila 3 y en 5.5-5.9.
+
 Pendiente, PRIMERA tarea después del merge de feat/n0-gate-decisions: una
 función compartida para las conexiones directas de los scripts check_*.py
 (hoy psycopg2.connect sin keepalives ni validación con SELECT 1; tres
@@ -1036,6 +1106,27 @@ Pendientes nuevos, cada uno en su propia rama:
     (la N8 del plan del resumen, una expresión compartida cambiada, les
     pasó 40/40, 69/69, 18/18 y 75/75). Añadir esas comprobaciones, con
     valores distintos por caso.
+(Nota 2026-10-12, rama feat/n0-resultado-llamadas.) Pendientes nuevos, cada
+uno en su propia rama:
+  - scripts/check_migracion_decisiones_gate.py tiene 41/166 sentencias en
+    tramos de más de 4 sin comentario desde main (no es de esta rama; el
+    tutor pidió NO arreglarlo aquí). Comentarlo.
+  - paso12b (P13), DESPUÉS del merge: ALTER COLUMN tipo_llamada DROP DEFAULT
+    (hoy el DEFAULT 'gate' podría esconder un olvido del código).
+  - Quitar el alias POST /gate-decisions cuando el formulario de n8n use POST
+    /resultados-llamada (D26.6); con él cambian los cinco scripts que lo
+    usan para preparar datos (check_aviso_gate_http,
+    check_ficha_oportunidad_http, check_followup_tasks_http,
+    check_listado_llamadas_http, check_migracion_iva_y_seguimiento) y
+    check_gate_decisions_* pasa a probar solo la ruta nueva o se retira.
+  - En n8n (fuera del repositorio): el formulario ampliado
+    (docs/Contrato_Formulario_Llamadas.md), conectado a WF4 (D27.4); la
+    etiqueta del evento llamada_registrada en WF_ficha_oportunidad.
+  - Bloque 4c (D29.2): el aviso de "última llamada" en GET /llamadas-del-dia
+    con la regla nueva horas_ultima_llamada (propuesta 168).
+  - Copiar a docs/ el documento de D29 (está en el Proyecto de claude.ai).
+  - dump_schema.py no vuelca los COMMENT ON TABLE: el de decisiones_gate no
+    aparece en docs/schema_actual.sql.
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
@@ -1119,6 +1210,15 @@ rápida, no sustituye esa documentación. Contiene:
   /llamadas-del-dia (D26.1, 4a-2): P1-P10 decididas (P1 = b, sin B1),
   hallazgos C1-C11, pruebas en negativo N1-N11 y N-B0 con sus resultados
   exactos y bloques A, B0, B2, C y D con sus hashes.
+- Plan_Resultado_Llamadas.txt — plan del registro del resultado de todas
+  las llamadas (D25.9-D25.11, 4b): pre-decisiones con Regla de Tres, P1-P16
+  decididas, D29.1-D29.3, hallazgos C1-C18, migración paso12, pruebas en
+  negativo N1-N15 con sus resultados exactos y bloques A, B1, B2-M, B2, C y
+  D con sus hashes.
+- Contrato_Formulario_Llamadas.md — lo que necesita el formulario de n8n
+  para registrar el resultado de una llamada: la ficha, las páginas por
+  tipo, los campos de cada resultado, los motivos y qué enseñar ante cada
+  respuesta (P15; la Adenda 5.10 remite a él).
 - Plan_Ejecutor_Suite.txt — lanzador de la suite que impide la suspensión
   de Windows. APLAZADO el 2026-10-03; lo sustituye la regla de uso de este
   archivo.

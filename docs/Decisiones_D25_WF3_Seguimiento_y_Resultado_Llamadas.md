@@ -114,3 +114,14 @@
   orden de D25.12 desde el bloque 3: (3) renombrado; (4a) ficha para cualquier oportunidad y resumen de la solicitud
   en la lista diaria (dos ramas); (4b) registro del resultado de todas las llamadas + formulario; (5) WF3. Ver
   `docs/Decisiones_D26_Ficha_del_Cliente_en_la_Lista_Diaria.md`.
+- **[Nota 2026-10-12]** **4b (D25.9-D25.11): IMPLEMENTADO y verificado** en la rama `feat/n0-resultado-llamadas`,
+  **pendiente de merge** (plan `docs/Plan_Resultado_Llamadas.txt`; contrato en la fila 10 y la sección 5.10 de la
+  Adenda; contrato para el formulario, `docs/Contrato_Formulario_Llamadas.md`). Un solo concepto, "resultado de la
+  llamada" (D25.9): `POST /resultados-llamada` para los tres tipos, con `POST /gate-decisions` como alias hasta que
+  el formulario se actualice. Se renombró solo el contrato público; la tabla sigue siendo `decisiones_gate` (P3 = b,
+  la salida intermedia entre las dos de D25.9). D25.10: Gate y seguimiento comparten resultados; la confirmación
+  tiene los suyos (confirmar la hora pedida, otra hora, el cliente cancela). D25.11: cancelar pasa la oportunidad a
+  `perdida`; la regla de una fila definitiva por oportunidad se revisó y se mantiene (P6). D25.16: los 8 casos
+  (233, 234, 243, 253, 469, 586, 587 y 1523, deducidos por fecha) ya se pueden cerrar desde el formulario ampliado.
+  "Me lo pienso" sigue sin registrarse (D25.14); D29.1 lleva `aplazar` a N1 y D29.2 añade el aviso de "última
+  llamada" (bloque 4c). Siguiente: el formulario ampliado en n8n, el bloque 4c y WF3 (bloque 5).

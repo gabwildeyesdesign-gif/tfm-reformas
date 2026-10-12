@@ -10,6 +10,9 @@ Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
 P1-P16 decididas (respuestas en la nota de la sección 11). Cambia P7: motivo
 nuevo 'sin_decision' (D29.3). Nota nueva en 5.3 (D29.1 y D29.2). Bloque B1 en
 curso.]
+[Actualizado 2026-10-12: bloques A, B1, B2-M, B2, C y D CERRADOS; paso12
+APLICADA en la base de datos real; pendiente de merge (hashes en la sección
+12).]
 
 Fuentes: el encargo del Bloque A del 2026-10-11 (decisiones ya tomadas y
 pre-decisiones 1-11 del tutor), docs/Decisiones_D25_..., D26 y D27 (enteros),
@@ -1320,3 +1323,20 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
     detenido por su PID 28620 (log = netstat; lanzado 29800, que terminó con
     él); el 8000 de Gabi intacto. Salida de los cinco de P4 revisada a mano:
     sin fallos. Ningún log de la suite con [FALLO], Traceback ni HAY FALLOS.
+  (Nota 2026-10-12: HASHES de la rama feat/n0-resultado-llamadas, desde
+  main = 9153532.)
+    A     5f7d4df  plan
+          2cb01a6  decisiones (P1-P16, D29.1-D29.3)
+    B1    c9d7332  renombrado sin cambios (121/121 sin tocar, 14/14, 41/41)
+    B2-M  cfb81ae  paso12, su verificación y la vuelta atrás, sin ejecutar (7/50)
+          500d203  paso12 APLICADA y verificada (50/50, main contra la base migrada)
+    B2    5f62f85  ampliación (prueba mínima 32/32, 121/121 sin tocar)
+    C     c665cb4  C-1: scripts nuevos (37 y 159 comprobaciones; la 160 en C-2a)
+          3c14bd7  C-2a: N1-N5 y la detección de la N6
+          bc30112  C-2b: N6-N10
+          ab166ba  C-2c: N11-N15 y el CASO 11 protegido
+          f0f7686  C-3: suite 44/44
+    D     (el commit de esta nota) Adenda (fila 10, 5.10 y notas en la fila 3
+          y en 5.5-5.9), docs/Contrato_Formulario_Llamadas.md, CLAUDE.md, notas
+          en D25, D26 y el plan del resumen (C7), y este plan.
+  Pendiente de merge: lo hace Gabi tras la revisión del tutor, con --ff-only.

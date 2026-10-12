@@ -147,6 +147,14 @@ estructurales ni del nivel (C11, pendiente). Verificación: 69/69 y 109/109, onc
 **[Nota 2026-10-11, tutor]** 4a-2 ya NO está pendiente de merge: integrado en `main` en `c1ba356` (fast-forward,
 confirmado por Gabi; la rama `feat/n0-resumen-lista-diaria` ya no existe).
 
+**[Nota 2026-10-12, estado de 4b]** El bloque 4b de D26.6 está implementado y verificado en la rama
+`feat/n0-resultado-llamadas`, **pendiente de merge** (plan `docs/Plan_Resultado_Llamadas.txt`). "Una rama, dos
+commits" de D26.6 quedó así: B1 renombró sin cambios de comportamiento (`check_gate_decisions_http` 121/121 sin
+tocar el script) y B2 amplió; entre los dos, la migración paso12 (solo expand). La ruta antigua `POST
+/gate-decisions` es el alias con su contrato de siempre, y `GET /gate-avisos` no cambia salvo un valor más en su
+motivo ('sin_decision', C17 del plan). La ficha (D26.2) gana `llamada_registrable`, con la que el formulario elige
+sus páginas, y la visita cancelada de cada llamada.
+
 ## 5. Ampliación (2026-10-10, noche; aceptada por Gabi)
 
 - **D26.8 — La ficha se ve en una página de n8n servida por un Webhook (opción B).** Hueco detectado por el tutor

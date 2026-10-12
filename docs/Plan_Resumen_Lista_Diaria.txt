@@ -158,6 +158,10 @@ levanta servidor) ni escribe datos reales.
     de 'contacto' no afecta a los tres campos (C3).
     (El 2026-10-07 b) tenía 8: entre tanto, cinco solicitudes reales del
     chat de los días 4 y 7 cumplieron su plazo de 48 h.)
+    (Nota 2026-10-12, C7 de docs/Plan_Resultado_Llamadas.txt: "cinco
+    solicitudes" es inexacto. Fueron CUATRO (1524, 1526, 1527 y 1528): 1523,
+    del día 4, ya estaba entre los 8 del 2026-10-07, que son 233, 234, 243,
+    253, 469, 586, 587 y 1523, deducidos por la fecha del presupuesto.)
   - M4. texto_cliente: 1 visita en toda la tabla ('confirmada', la de la
     visita acordada por el Gate), 74 caracteres. Longitud máxima real: 74.
     Ninguna visita sale en la lista de hoy (no es 'solicitada' ni es del
