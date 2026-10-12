@@ -1340,3 +1340,12 @@ D: Adenda, CLAUDE.md, notas en D25, D26 y en el plan del resumen (C7),
           y en 5.5-5.9), docs/Contrato_Formulario_Llamadas.md, CLAUDE.md, notas
           en D25, D26 y el plan del resumen (C7), y este plan.
   Pendiente de merge: lo hace Gabi tras la revisión del tutor, con --ff-only.
+  (Nota 2026-10-12, revisión del tutor del Bloque D: procedencia de la foto
+  "después" de B2-M, que el mensaje de 500d203 remitía al chat.)
+    foto_decisiones_despues.json (scratchpad, creada el 2026-10-11 a las
+    18:18, sin cambios desde entonces):
+      SHA-256 41fd28cccfa20da4d5c2245a2c94d7f43ea1ee17e4abfa91156cfb9a7f66550b
+    Recalculado el 2026-10-12 con sha256sum: el mismo que se dio en el chat
+    de B2-M e idéntico al de foto_decisiones_antes.json (las dos fotos son el
+    mismo contenido, byte a byte). Ya constaba en Git en el mensaje de
+    5f62f85 (B2); no en el de 500d203.
