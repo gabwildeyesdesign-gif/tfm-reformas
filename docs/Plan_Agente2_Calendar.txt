@@ -512,3 +512,26 @@ P21. ¿Fechas de los scripts (C7)? Recomendación: cada script usa su propia
      borrados). Va en B5-0, antes de D31.
 P22. ¿Se acepta R5 (una solicitud sin confirmar bloquea su hueco)?
      Recomendación: sí, documentada en la Adenda 5.4.
+
+[Nota 2026-10-12, revisión del tutor de la nota de D31, aceptada por Gabi]
+Respuestas: P15-P22 = las ocho recomendaciones de arriba (bloqueo por día
++ consulta de solapes; misma función en /resultados-llamada y en el alias
+/gate-decisions; 409 con huecos_libres y sin tool nueva; rejilla solo para
+ofrecer con paso_huecos_min = 30; las visitas ya solapadas no se tocan;
+semanas propias y lejanas en los scripts, en B5-0; R5 aceptado).
+Precisiones del tutor:
+  (1) M5 ya no es actual: desde las 13:13 del 12/10 hay dos visitas
+      confirmadas más, creadas por las pruebas del formulario (oportunidad
+      1522, 14/10/2026 a las 11:00; oportunidad 234, 15/10/2026 a las
+      17:00). Se vuelve a medir en B5-0, antes de cambiar fechas.
+  (2) B5 fija por escrito y prueba el ORDEN de las comprobaciones: forma
+      (422 de Pydantic) -> 404 -> estado/Gate (409) -> reglas de fecha (503
+      y 422 de negocio) -> 409 hueco_ocupado. El mismo orden en POST
+      /visits, POST /resultados-llamada y el alias POST /gate-decisions.
+      Precisión de este plan: hoy /visits comprueba, tras las reglas de
+      fecha, la repetición (200) y el 409 visita_confirmada (Adenda 5.4);
+      los dos se quedan ANTES de hueco_ocupado (la visita propia no ocupa
+      su propio hueco, C8). Se escribe así en B5 y se pregunta si no
+      encaja.
+  (3) B5-0 no lleva pruebas en negativo propias: es un cambio mecánico; su
+      prueba son los mismos recuentos que hoy.
