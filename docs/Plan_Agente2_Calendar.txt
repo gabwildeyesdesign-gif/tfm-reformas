@@ -272,6 +272,21 @@ B2. Contexto: GET /leads/session gana "reforma" {tipo_reforma, m2,
     N1 (ALTO): copia que añade un importe -> FALLO.
     N2 (MEDIO): copia sin la condición de cambios estructurales y copia sin
     la del Gate -> FALLO cada una.
+    [Nota 2026-10-12: B2 CERRADO. Código y pruebas en e550bed:
+    check_lead_session_http 69/69 (14:16:30-14:16:50). Forma: baño
+    {obra_semanas {min, max}, fabricacion_muebles_semanas null}, cocina con
+    fabricación; null sin presupuesto, con Gate, tipo sin plazo o cambios
+    distintos de false (también sin dato, D4). Precisiones: las reglas solo
+    se leen (y el 503 solo sale) si hace falta un plazo, para no tumbar la
+    captura del Agente 1; "cambios sin Gate" solo existe con el dato puesto
+    a mano en la fila propia (CASO 13). Pruebas en negativo sobre copias de
+    app/ en el scratchpad, de una en una, con Docker/n8n y Edge cerrados
+    (1,70 GB libres a las 14:17:58): N1 importe en presupuesto 35/69
+    (14:17:58-14:18:17; 15 "sin importe", 15 claves exactas y 4 de JSON o
+    presupuesto); N2a sin la condición de cambios 67/69 (14:18:24-14:18:44;
+    los dos del CASO 13); N2b sin la del Gate 68/69 (14:18:50-14:19:10; el
+    CASO 12). Limpieza 0 en las tres. Kernel-Power 506/507 entre 14:15 y
+    14:20: ninguno. git diff -- app/ vacío al terminar.]
 B3. get_business_rules (tool MCP, sin parámetros, 3.4).
     check_mcp_business_rules: list_tools = las dos tools; 401 sin Bearer;
     claves exactas. N3 (ALTO): copia que devuelve precio_m2 -> FALLO.
