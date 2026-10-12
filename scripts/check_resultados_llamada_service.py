@@ -59,6 +59,9 @@ from app.services.condicion_seguimiento import CRITERIOS_SEGUIMIENTO
 from app.services.resultados_llamada_service import registrar_resultado_con_cursor
 from app.services.reglas_visita import ConfiguracionIncompleta
 
+# B5-0 (P21): las fechas propias de este script, en scripts/fechas_prueba.py.
+import fechas_prueba
+
 # La marca propia (dominio reservado).
 EMAIL = "check-resultado-svc@example.com"
 # Contadores.
@@ -97,7 +100,19 @@ class ConexionSinCommit(psycopg2.extensions.connection):
 # Fechas: el lunes de dentro de dos semanas (siempre futuro y laborable).
 MADRID = ZoneInfo("Europe/Madrid")
 HOY = datetime.now(MADRID).date()
-LUNES = HOY + timedelta(days=(7 - HOY.weekday()) % 7 or 7) + timedelta(days=7)
+# B5-0 (2026-10-12, P21): los días laborables del bloque de semanas lejanas
+# de este script (fechas_prueba.py). El lunes es el primero (antes, "el lunes
+# de dentro de dos semanas"); op_conf sigue en él. op_c, op_conf2 y
+# op_conf3 tienen cada una su día: antes las tres confirmaciones tenían su
+# visita pedida el lunes a las 10:00, y con D31 se solaparían entre sí.
+DIAS = fechas_prueba.Dias("check_resultados_llamada_service", HOY)
+LUNES = DIAS.siguiente()
+# Los días propios de op_c, op_conf2 y op_conf3.
+D_C, D_CONF2, D_CONF3 = DIAS.siguiente(), DIAS.siguiente(), DIAS.siguiente()
+# B5-0: ninguna visita activa AJENA en el bloque (las de este script nunca
+# se confirman: todo acaba en ROLLBACK).
+fechas_prueba.exigir_libres("check_resultados_llamada_service", EMAIL,
+                            [fechas_prueba.tramo_del_bloque("check_resultados_llamada_service", HOY)])
 
 
 def instante(dia: date, hh: int, mm: int) -> datetime:
@@ -287,15 +302,16 @@ try:
     # (resultado, oportunidad, campos, tipo, estado final, visitas esperadas)
     # Dos confirmaciones más, cada una con su visita pedida.
     op_conf2 = oportunidad("visita_agendada", gate=False, horas_presupuesto=50)
-    visita(op_conf2, "solicitada", instante(LUNES, 10, 0))
+    # B5-0: cada una en su día propio (antes, las dos el lunes).
+    visita(op_conf2, "solicitada", instante(D_CONF2, 10, 0))
     op_conf3 = oportunidad("visita_agendada", gate=False, horas_presupuesto=50)
-    visita(op_conf3, "solicitada", instante(LUNES, 10, 0))
+    visita(op_conf3, "solicitada", instante(D_CONF3, 10, 0))
     # Los cinco casos, uno por resultado.
     CINCO = [
-        ("visita_acordada", op_c, {"fecha": str(LUNES), "hora": "11:00"}, "seguimiento", "visita_agendada", ["confirmada"]),
+        ("visita_acordada", op_c, {"fecha": str(D_C), "hora": "11:00"}, "seguimiento", "visita_agendada", ["confirmada"]),
         ("descartar", op_b, {"motivo": "sin_decision"}, "seguimiento", "perdida", []),
         ("confirmar_hora", op_conf, {"fecha": str(LUNES), "hora": "10:00"}, "confirmacion_visita", "visita_agendada", ["confirmada"]),
-        ("otra_hora", op_conf2, {"fecha": str(LUNES), "hora": "17:00"}, "confirmacion_visita", "visita_agendada",
+        ("otra_hora", op_conf2, {"fecha": str(D_CONF2), "hora": "17:00"}, "confirmacion_visita", "visita_agendada",
          ["cancelada", "confirmada"]),
         ("cliente_cancela", op_conf3, {"motivo": "plazo"}, "confirmacion_visita", "perdida", ["cancelada"]),
     ]

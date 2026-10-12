@@ -78,6 +78,9 @@ import uvicorn
 # nunca se imprimen.
 from app.config import DATABASE_URL, GATE_SECRET, WEBHOOK_SECRET
 
+# B5-0 (P21): la comprobación de huecos libres, en scripts/fechas_prueba.py.
+import fechas_prueba
+
 # ----------------------------------------------------------------------
 # Constantes de la prueba
 # ----------------------------------------------------------------------
@@ -395,7 +398,18 @@ def primer_lunes_desde(dia):
 # desfases opuestos.
 HOY = datetime.now(MADRID).date()
 CAMBIO_1, CAMBIO_2 = proximos_cambios(HOY)
-LUNES_1, LUNES_2 = primer_lunes_desde(CAMBIO_1), primer_lunes_desde(CAMBIO_2)
+# B5-0 (2026-10-12, P21): el TERCER lunes tras cada cambio (antes, el
+# primero), en el mismo lado del cambio. Estas visitas tienen que estar a
+# los dos lados de un cambio de hora, así que no van al bloque lejano de
+# fechas_prueba.py; check_listado_llamadas_http usa el primer lunes (o el
+# segundo), y con D31 los dos scripts pedirían el mismo hueco.
+LUNES_1, LUNES_2 = (primer_lunes_desde(CAMBIO_1) + timedelta(days=14),
+                    primer_lunes_desde(CAMBIO_2) + timedelta(days=14))
+# B5-0: antes de crear nada, los dos huecos (08:30 de cada lunes) no pueden
+# estar ocupados por una visita AJENA: si lo están, FALLO y se para.
+fechas_prueba.exigir_libres("check_aviso_gate_http", PATRON_EMAIL, [
+    (datetime.combine(d, hora_del_dia(8, 30), tzinfo=MADRID),
+     datetime.combine(d, hora_del_dia(8, 30), tzinfo=MADRID) + timedelta(minutes=1)) for d in (LUNES_1, LUNES_2)])
 
 # ======================================================================
 # Antes de nada: el puerto tiene que estar LIBRE. Si otro proceso lo usa,

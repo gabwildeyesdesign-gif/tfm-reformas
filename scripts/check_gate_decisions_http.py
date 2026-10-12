@@ -85,6 +85,9 @@ import uvicorn
 # en el entorno de los procesos hijos; nunca se imprimen.
 from app.config import DATABASE_URL, GATE_SECRET, MCP_SECRET, WEBHOOK_SECRET
 
+# B5-0 (P21): las fechas propias de este script, en scripts/fechas_prueba.py.
+import fechas_prueba
+
 # ----------------------------------------------------------------------
 # Constantes de la prueba
 # ----------------------------------------------------------------------
@@ -615,13 +618,22 @@ def puerto_ocupado(puerto):
 # Fechas relativas a hoy (en Madrid), para que el script no caduque
 # ----------------------------------------------------------------------
 HOY = datetime.now(MADRID).date()
-# Días hasta el próximo lunes (weekday: lunes = 0). "or 7": si hoy es lunes,
-# el de la semana que viene, para que siempre sea futuro.
-LUNES = HOY + timedelta(days=(7 - HOY.weekday()) % 7 or 7)
+# B5-0 (2026-10-12, P21): el primer lunes del bloque de semanas lejanas de
+# este script (fechas_prueba.py), y no "el próximo", para no chocar con
+# visitas reales ni con otros scripts cuando se compruebe el hueco (D31).
+LUNES = fechas_prueba.lunes_de_prueba("check_gate_decisions_http", HOY)
+# B5-0: martes y miércoles de esa semana, para las dos pruebas de
+# concurrencia del CASO 8 (antes usaban horas del lunes que se solapan con
+# las visitas de otras oportunidades del script).
+MARTES, MIERCOLES = LUNES + timedelta(days=1), LUNES + timedelta(days=2)
 # El sábado de esa misma semana (lunes + 5 días).
 SABADO = LUNES + timedelta(days=5)
 # Ayer: siempre en el pasado.
 AYER = HOY - timedelta(days=1)
+# B5-0: antes de crear nada, ninguna visita activa AJENA en el bloque del
+# script (si la hay, FALLO con explicación y se para sin borrar nada).
+fechas_prueba.exigir_libres("check_gate_decisions_http", PATRON_EMAIL,
+                            [fechas_prueba.tramo_del_bloque("check_gate_decisions_http", HOY)])
 
 # ======================================================================
 # Antes de nada: nuestros dos puertos tienen que estar LIBRES. Si otro
@@ -958,7 +970,8 @@ try:
     # Lead con Gate para la primera prueba.
     _, op_c1 = lead_con_gate()
     # Un único cuerpo, que se enviará 5 veces.
-    misma = visita_acordada(op_c1, LUNES, "10:00")
+    # B5-0: el martes (antes, el lunes).
+    misma = visita_acordada(op_c1, MARTES, "10:00")
     # ThreadPoolExecutor lanza las 5 peticiones a la vez, cada una en su
     # hilo. map() devuelve las respuestas en el orden en que se LANZARON.
     with ThreadPoolExecutor(max_workers=5) as ejecutor:
@@ -984,8 +997,9 @@ try:
     # Lead con Gate para la segunda prueba.
     _, op_c2 = lead_con_gate()
     # Cinco cuerpos distintos: tres horas y dos motivos.
-    distintas = [visita_acordada(op_c2, LUNES, "08:30"), visita_acordada(op_c2, LUNES, "09:30"),
-                 visita_acordada(op_c2, LUNES, "10:30"), descartar(op_c2, "precio"), descartar(op_c2, "plazo")]
+    # B5-0: el miércoles (antes, el lunes).
+    distintas = [visita_acordada(op_c2, MIERCOLES, "08:30"), visita_acordada(op_c2, MIERCOLES, "09:30"),
+                 visita_acordada(op_c2, MIERCOLES, "10:30"), descartar(op_c2, "precio"), descartar(op_c2, "plazo")]
     # Se lanzan los 5 a la vez; map pasa cada cuerpo a decidir.
     with ThreadPoolExecutor(max_workers=5) as ejecutor:
         respuestas = list(ejecutor.map(decidir, distintas))

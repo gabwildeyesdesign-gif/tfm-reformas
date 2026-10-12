@@ -81,6 +81,9 @@ import uvicorn
 
 # Los valores del .env (solo en cabeceras; nunca se imprimen).
 from app.config import DATABASE_URL, GATE_SECRET, WEBHOOK_SECRET
+
+# B5-0 (P21): la comprobación de huecos libres, en scripts/fechas_prueba.py.
+import fechas_prueba
 # El módulo del servicio, para los cambios EN MEMORIA del CASO 13 (el
 # servidor corre en este mismo proceso, así que los ve).
 from app.services import listado_llamadas_service as servicio
@@ -544,6 +547,16 @@ LUNES_1, LUNES_2 = primer_lunes_desde(CAMBIO_1), primer_lunes_desde(CAMBIO_2)
 # salir en d), no en e).
 if LUNES_1 == DIA:
     LUNES_1 += timedelta(days=7)
+# B5-0 (2026-10-12, P21): estas fechas se quedan (ligadas al cambio de hora y
+# al próximo laborable: es lo que se prueba). Antes de crear nada, los tres
+# huecos que se piden por la API (lunes 1 a las 08:30 y a las 09:30, lunes 2
+# a las 08:30) no pueden estar ocupados por una visita AJENA: si lo están,
+# FALLO con la explicación y se para. Las visitas que se insertan por SQL no
+# pasan por la comprobación de D31 y no hace falta mirarlas.
+fechas_prueba.exigir_libres("check_listado_llamadas_http", PATRON_EMAIL, [
+    (datetime.combine(d, hora_del_dia(h, m), tzinfo=MADRID),
+     datetime.combine(d, hora_del_dia(h, m), tzinfo=MADRID) + timedelta(minutes=1))
+    for d, h, m in ((LUNES_1, 8, 30), (LUNES_1, 9, 30), (LUNES_2, 8, 30))])
 
 # ======================================================================
 # Antes de nada: el puerto tiene que estar LIBRE

@@ -86,6 +86,9 @@ import uvicorn
 
 # Los valores del .env: solo en cabeceras, nunca se imprimen.
 from app.config import DATABASE_URL, GATE_SECRET, WEBHOOK_SECRET
+
+# B5-0 (P21): las fechas propias de este script, en scripts/fechas_prueba.py.
+import fechas_prueba
 # El MISMO redondeo del cálculo, para construir los importes con IVA de
 # los presupuestos propios del CASO 5 como lo haría estimate_service.
 from app.services.estimate_service import CIEN, redondear
@@ -415,12 +418,19 @@ def puerto_ocupado(puerto):
         return s.connect_ex(("127.0.0.1", puerto)) == 0
 
 
-# Días de visita: el primer lunes a 14 días o más, y los tres siguientes
-# laborables (lunes a jueves de esa semana), siempre futuros.
+# Días de visita: el primer lunes del bloque de semanas lejanas de este
+# script, y los tres siguientes laborables (lunes a jueves de esa semana).
+# B5-0 (2026-10-12, P21): antes, "el primer lunes a 14 días o más"; ahora el
+# bloque propio (fechas_prueba.py), para no chocar con visitas reales ni con
+# otros scripts cuando se compruebe el hueco (D31). Cada oportunidad con
+# visita ya tenía su propio día.
 HOY = datetime.now(MADRID).date()
-# weekday(): lunes = 0; "(7 - weekday) % 7" son los días hasta el lunes.
-LUNES = HOY + timedelta(days=14 + (7 - (HOY + timedelta(days=14)).weekday()) % 7)
+LUNES = fechas_prueba.lunes_de_prueba("check_ficha_oportunidad_http", HOY)
 MARTES, MIERCOLES, JUEVES = (LUNES + timedelta(days=n) for n in (1, 2, 3))
+# B5-0: antes de crear nada, ninguna visita activa AJENA en el bloque (si la
+# hay, FALLO con explicación y se para sin borrar nada).
+fechas_prueba.exigir_libres("check_ficha_oportunidad_http", PATRON_EMAIL,
+                            [fechas_prueba.tramo_del_bloque("check_ficha_oportunidad_http", HOY)])
 
 # ======================================================================
 # Arranque

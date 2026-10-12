@@ -82,6 +82,9 @@ import uvicorn
 
 # Secretos y URL de la base de datos del .env (nunca se imprimen).
 from app.config import DATABASE_URL, GATE_SECRET, WEBHOOK_SECRET
+
+# B5-0 (P21): las fechas propias de este script, en scripts/fechas_prueba.py.
+import fechas_prueba
 # El módulo del servicio, para los cambios EN MEMORIA del CASO 10.
 from app.services import followup_service as servicio
 
@@ -100,6 +103,23 @@ AUTH_GATE = {"X-Gate-Secret": GATE_SECRET}
 PATRON_EMAIL = "http-followup-%@example.com"
 # Zona de Madrid.
 MADRID = ZoneInfo("Europe/Madrid")
+# B5-0 (2026-10-12, P21): los días laborables del bloque de semanas lejanas
+# de este script (fechas_prueba.py). Antes, todas las visitas se pedían el
+# mismo día ("dentro de 2 días") a las 10:00, de oportunidades distintas: con
+# D31 la segunda daría 409 hueco_ocupado. Ahora cada una tiene su día.
+HOY_B50 = datetime.now(MADRID).date()
+DIAS = fechas_prueba.Dias("check_followup_tasks_http", HOY_B50)
+# Las visitas que se insertan por SQL (insertar_visita), sin pasar por el
+# endpoint: el último viernes del bloque a las 19:00, lejos de los días que
+# da DIAS a las peticiones HTTP (los primeros del bloque). Antes, "now() +
+# 3 días", que podía caer en el mismo hueco que una petición HTTP.
+INSTANTE_SQL = datetime.combine(fechas_prueba.lunes_de_prueba("check_followup_tasks_http", HOY_B50)
+                                + timedelta(weeks=fechas_prueba.SEMANAS_POR_SCRIPT - 1, days=4),
+                                datetime.min.time().replace(hour=19), tzinfo=MADRID)
+# B5-0: antes de crear nada, ninguna visita activa AJENA en el bloque (si la
+# hay, FALLO con explicación y se para sin borrar nada).
+fechas_prueba.exigir_libres("check_followup_tasks_http", PATRON_EMAIL,
+                            [fechas_prueba.tramo_del_bloque("check_followup_tasks_http", HOY_B50)])
 # El único motivo de N0 (D25.13).
 MOTIVO = "sin_respuesta_visita"
 # Claves EXACTAS de la respuesta, copiadas del PLAN (2.6), no del código.
@@ -292,9 +312,9 @@ def insertar_visita(op, estado):
     """Inserta una visita en una oportunidad PROPIA SIN cambiar su estado."""
     # Solo sobre oportunidades propias.
     es_propia(op)
-    # SQL: la visita, dentro de 3 días, con un texto fijo.
+    # SQL: la visita, en INSTANTE_SQL (B5-0; antes, dentro de 3 días), con un texto fijo.
     escribir("INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
-             "VALUES (%s, now() + interval '3 days', %s, 'prueba del seguimiento');", (op, estado))
+             "VALUES (%s, %s, %s, 'prueba del seguimiento');", (op, INSTANTE_SQL, estado))
 
 
 # Ayuda: lo que el endpoint podría cambiar de una oportunidad.
@@ -369,21 +389,21 @@ def listado():
 
 # Ayuda: un día laborable válido para pedir una visita.
 def dia_visita():
-    """Un día laborable al menos 2 días después de hoy (en Madrid)."""
-    # Se empieza dos días después de hoy.
-    dia = datetime.now(MADRID).date() + timedelta(days=2)
-    # weekday(): sábado = 5, domingo = 6; se avanza hasta un lunes-viernes.
-    while dia.weekday() >= 5:
-        dia += timedelta(days=1)
-    return dia
+    """El siguiente día laborable del bloque del script (B5-0: uno por visita)."""
+    # Antes: hoy + 2 días, el mismo para todas.
+    return DIAS.siguiente()
 
 
 # Ayuda: pedir una visita como el Agente 2.
-def pedir_visita(token):
-    """POST /visits como el Agente 2: a las 10:00 (franja de mañana)."""
+def pedir_visita(token, dia=None):
+    """POST /visits como el Agente 2: a las 10:00 (franja de mañana).
+    dia: el día; si no se da, el siguiente del bloque (B5-0). En los hilos
+    se da desde fuera, porque DIAS no está pensado para varios hilos."""
+    # Sin día: el siguiente del bloque.
+    dia = dia or dia_visita()
     # Petición real a POST /visits con la cabecera de n8n.
     return requests.post(f"{BASE}/visits", headers=AUTH_WEBHOOK, timeout=60, json={
-        "lead_token": token, "fecha": dia_visita().isoformat(), "hora": "10:00",
+        "lead_token": token, "fecha": dia.isoformat(), "hora": "10:00",
         "texto_cliente": "Me viene bien esa hora",
     })
 
@@ -837,11 +857,13 @@ try:
     for op, token in CARRERA:
         # Barrier(2): las dos peticiones salen a la vez.
         barrera2 = threading.Barrier(2)
+        # B5-0: el día de esta visita, elegido ANTES de lanzar los hilos.
+        dia_carrera = dia_visita()
 
-        def visita_a_la_vez(t=token, b=barrera2):
+        def visita_a_la_vez(t=token, b=barrera2, d=dia_carrera):
             """Espera a la otra y pide la visita."""
             b.wait()
-            return pedir_visita(t)
+            return pedir_visita(t, d)
 
         def seguimiento_a_la_vez(o=op, b=barrera2):
             """Espera a la otra y abre el seguimiento."""

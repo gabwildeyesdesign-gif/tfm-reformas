@@ -45,6 +45,9 @@ from app.config import DATABASE_URL, WEBHOOK_SECRET
 # Los dos mensajes del filtro de D26.7 (CASO 2b), para compararlos exactos.
 from app.schemas.common import MENSAJE_EMAIL_EN_TEXTO, MENSAJE_TELEFONO_EN_TEXTO
 
+# B5-0 (P21): las fechas propias de este script, en scripts/fechas_prueba.py.
+import fechas_prueba
+
 PUERTO = 8018
 BASE = f"http://127.0.0.1:{PUERTO}"
 AUTH = {"X-Webhook-Secret": WEBHOOK_SECRET}
@@ -252,12 +255,22 @@ def logs_de(oportunidad_id, accion):
 # Fechas relativas a hoy (en Madrid)
 # ----------------------------------------------------------------------
 HOY = datetime.now(MADRID).date()
-# Días hasta el próximo lunes (weekday: lunes = 0). Si hoy es lunes, el
-# de la semana que viene, para que siempre sea futuro.
-LUNES = HOY + timedelta(days=(7 - HOY.weekday()) % 7 or 7)
+# B5-0 (2026-10-12, P21): el lunes ya no es "el próximo", sino el primero
+# del bloque de semanas lejanas de este script (fechas_prueba.py), para no
+# chocar con visitas reales ni con otros scripts cuando POST /visits
+# compruebe los huecos (D31). Sigue siendo un lunes futuro.
+LUNES = fechas_prueba.lunes_de_prueba("check_visits_http", HOY)
+# El martes y el sábado de esa semana, como antes.
 MARTES = LUNES + timedelta(days=1)
 SABADO = LUNES + timedelta(days=5)
+# B5-0: el miércoles, para la segunda prueba de concurrencia (CASO 12), que
+# antes pedía horas del lunes que se solapan con la visita de op_c1.
+MIERCOLES = LUNES + timedelta(days=2)
 AYER = HOY - timedelta(days=1)
+# B5-0: antes de crear nada, ninguna visita activa AJENA en el bloque del
+# script (si la hay, FALLO con explicación y se para sin borrar nada).
+fechas_prueba.exigir_libres("check_visits_http", PATRON_EMAIL,
+                            [fechas_prueba.tramo_del_bloque("check_visits_http", HOY)])
 
 # ======================================================================
 limpiar()
@@ -462,7 +475,8 @@ try:
     calcular(op_c2)
     horas = ["08:30", "09:00", "10:00", "11:00", "12:00"]
     with ThreadPoolExecutor(max_workers=5) as ejecutor:
-        respuestas = list(ejecutor.map(lambda h: visita(token_c2, LUNES, h), horas))
+        # B5-0: el miércoles (antes, el lunes de la visita de op_c1).
+        respuestas = list(ejecutor.map(lambda h: visita(token_c2, MIERCOLES, h), horas))
     codigos = sorted(r.status_code for r in respuestas)
     print(f"      fechas distintas x5 -> códigos {codigos}, visitas {visitas_de(op_c2)}")
     comprobar("fechas distintas x5: todas 201 (se serializan como sustituciones)", codigos == [201] * 5)

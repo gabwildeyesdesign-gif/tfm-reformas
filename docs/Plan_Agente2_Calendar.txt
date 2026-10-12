@@ -355,6 +355,37 @@ B4. Filtro D26.7 en POST /visits: MAX_TEXTO_VISITA = 300, emails y
     entre 16:22 y 16:28: ninguno. git diff -- app/ vacío al terminar.]
 B5-0. Fechas propias en los scripts que crean visitas (C7, P21), sin cambio
     de comportamiento del código: los mismos recuentos que hoy.
+    [Nota 2026-10-12: escrito SIN ejecutar (Docker/n8n abiertos).
+    Medición previa, en solo lectura (16:49:52, precisión 1 del tutor): 3
+    visitas activas, las tres 'confirmada' y futuras: 538 (oportunidad
+    1525) el martes 13/10/2026 a las 11:00, 3069 (oportunidad 1522) el
+    miércoles 14/10 a las 11:00 y 3070 (oportunidad 234) el jueves 15/10 a
+    las 17:00 (Madrid); 0 pares que se solapen; la tabla visitas solo tiene
+    esas 3 filas. scripts/fechas_prueba.py (nuevo): un bloque de 4 semanas
+    por script desde la semana +30 (tabla SCRIPTS: visits_http,
+    gate_decisions_http, resultados_llamada_http, resultados_llamada_service,
+    ficha_oportunidad_http, followup_tasks_http y disponibilidad_service),
+    Dias (un laborable por oportunidad) y exigir_libres (solo lectura; una
+    visita activa AJENA en los tramos del script -> FALLO con explicación y
+    exit 1, sin borrar nada; solo imprime [INFO] si está libre, así que no
+    cambia los recuentos). Cambios por script: el lunes del bloque en lugar
+    del "próximo"; además, cada oportunidad con visita en su propio día
+    donde antes compartían hueco (visits_http: op_c2 al miércoles;
+    gate_decisions_http: op_c1 al martes y op_c2 al miércoles;
+    resultados_llamada_http: 12 días propios, g1 a c4;
+    resultados_llamada_service: op_c, op_conf2 y op_conf3; followup: un día
+    por visita y las visitas por SQL en el último viernes del bloque). Las
+    ligadas al cambio de hora o al próximo laborable no se mueven, solo se
+    comprueban: aviso_gate_http pasa al tercer lunes tras cada cambio (listado
+    usa el primero o el segundo), listado_llamadas_http (3 huecos) y la matriz
+    del CASO 12 de resultados_llamada_http (5 huecos, próximo laborable).
+    Sin tocar: los 5 scripts que solo insertan por SQL dentro de una
+    transacción con ROLLBACK o sin pasar por los endpoints
+    (ficha_oportunidad_service, listado_llamadas_service,
+    migracion_decisiones_gate, migracion_resultado_llamadas,
+    migracion_visitas) y los dos que solo prueban el 503 con 2030-01-07
+    (visits_service, gate_decisions_service): no pasan por la comprobación
+    de D31.]
 B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
     una función, usada por /visits y, si P16 y P17 = sí, por
     /resultados-llamada y su alias.
