@@ -365,6 +365,15 @@ def decidir(op, cuerpo):
     return r.json()
 
 
+# Ayuda (B5, 2026-10-12): una marca única para los textos de visita.
+def marca_sin_cifras():
+    """32 caracteres al azar, como uuid4().hex, pero con las cifras 0-9
+    cambiadas por las letras g-p: sigue siendo única y nunca tiene la forma
+    de un teléfono que rechaza el filtro de D26.7."""
+    # str.maketrans: la tabla cifra -> letra; translate la aplica.
+    return uuid.uuid4().hex.translate(str.maketrans("0123456789", "ghijklmnop"))
+
+
 def pedir_visita(token, dia, texto):
     """POST /visits como el Agente 2, a las 10:00; tiene que dar 201."""
     # La fecha como texto ISO ("2026-10-26") y la hora en la franja de mañana.
@@ -511,12 +520,15 @@ try:
         assert r.status_code == 201, r.text
         # T6: una visita solicitada desde el chat, con un texto único.
         OP_T6, TOKEN_T6 = caso("T6")[:2]
-        TEXTO_T6 = f"TEXTO-VISITA-T6-{uuid.uuid4().hex}"
+        # B5 (2026-10-12): la marca, SIN cifras (marca_sin_cifras). Con
+        # uuid4().hex, a veces salían 9 o más cifras seguidas, y el filtro de
+        # D26.7 (B4) rechaza con razón ese texto como un teléfono (422).
+        TEXTO_T6 = f"TEXTO-VISITA-T6-{marca_sin_cifras()}"
         pedir_visita(TOKEN_T6, LUNES, TEXTO_T6)
         # T7: una visita sustituida por otra (una cancelada y otra activa).
         OP_T7, TOKEN_T7 = caso("T7")[:2]
         # Dos textos únicos: uno por visita.
-        TEXTO_T7A, TEXTO_T7B = f"TEXTO-VISITA-T7A-{uuid.uuid4().hex}", f"TEXTO-VISITA-T7B-{uuid.uuid4().hex}"
+        TEXTO_T7A, TEXTO_T7B = f"TEXTO-VISITA-T7A-{marca_sin_cifras()}", f"TEXTO-VISITA-T7B-{marca_sin_cifras()}"
         # La primera el martes; la segunda (miércoles) la sustituye.
         pedir_visita(TOKEN_T7, MARTES, TEXTO_T7A)
         assert pedir_visita(TOKEN_T7, MIERCOLES, TEXTO_T7B)["sustituye_a"] is not None

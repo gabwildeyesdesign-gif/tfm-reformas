@@ -386,6 +386,23 @@ B5-0. Fechas propias en los scripts que crean visitas (C7, P21), sin cambio
     migracion_visitas) y los dos que solo prueban el 503 con 2030-01-07
     (visits_service, gate_decisions_service): no pasan por la comprobación
     de D31.]
+    [Nota 2026-10-12: B5-0 CERRADO. Con Docker/n8n, Chrome y Edge cerrados
+    (1,98 GB libres a las 17:21:33). Los 8 scripts tocados, de uno en uno,
+    sobre dos copias en el scratchpad SIN el código de D31: d43f42b (antes
+    de B5-0) y 0a6300e (con B5-0). Mismos recuentos en las dos:
+    visits_http 65/65, gate_decisions_http 121/121, resultados_llamada_http
+    160/160, resultados_llamada_service 37/37, ficha_oportunidad_http
+    69/69, followup_tasks_http 125/125, aviso_gate_http 75/75 y
+    listado_llamadas_http 108/109 (17:21:57-17:29:11 y 17:29:47-17:37:07).
+    El fallo de listado sale IGUAL en las dos y no es de B5-0 (hallazgo
+    H-B5-1): su CASO 21 cuenta por TEXTO las visitas de la prueba, y la
+    visita real 538 (oportunidad 1525, 13/10/2026 11:00, el próximo
+    laborable de hoy) lleva el texto fijo del Gate, el mismo que la visita
+    D-gate de la prueba; sale en e) y el texto cuenta una vez donde se
+    esperaban cero. Falla en cualquier pasada mientras la 538 sea del
+    próximo laborable. Pendiente: contar solo por los ids propios (en su
+    propia rama o en el Bloque C). Ningún script encontró visitas ajenas en
+    sus tramos ([INFO] en los 8).]
 B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
     una función, usada por /visits y, si P16 y P17 = sí, por
     /resultados-llamada y su alias.
@@ -427,6 +444,36 @@ B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
     concurrencia usa 10 peticiones a la vez con DB_POOL_MAX = 10: justas.
     Pendiente para el Bloque D: Adenda 5.4, 5.5 y 5.10 y
     Contrato_Formulario_Llamadas.md (409 hueco_ocupado).]
+    [Nota 2026-10-12: B5 CERRADO (código en 4aabe11). Positivas sobre el
+    código real: check_disponibilidad_service 35/35, check_visits_service
+    16/16, check_visits_http 85/85 (antes 65), check_resultados_llamada_http
+    183/183 (antes 160) y check_gate_decisions_http 124/124 (antes 121)
+    (17:37:19-17:42:07). Concurrencia: 5 rondas de 10 oportunidades al mismo
+    hueco, en cada una un 201 y nueve 409 hueco_ocupado, ningún 500 y una
+    sola visita activa. Regresión: resultados_llamada_service 37/37,
+    gate_decisions_service 14/14, followup_tasks_http 125/125,
+    aviso_gate_http 75/75, mcp_business_rules 21/21, listado_llamadas_http
+    108/109 (H-B5-1) y ficha_oportunidad_http 42/51 la primera vez.
+    Hallazgo H-B5-2 (regresión de B4, no de D31): los textos de visita de
+    la ficha llevaban uuid4().hex, que a veces trae 9 o más cifras seguidas,
+    y el filtro de D26.7 los rechaza como teléfono (422); en 100.000
+    sorteos, 14.900 rechazos. En B4 no se ejecutó la ficha. Arreglado en el
+    script (marca_sin_cifras: las cifras cambiadas por letras; 0 rechazos
+    en 100.000) y la ficha da 69/69 (17:46:48-17:47:55). La salida de la
+    primera pasada (42/51) se sobrescribió al repetirla. Negativas sobre
+    copias de app/, de una en una: N5 sin el bloqueo -> disponibilidad
+    34/35 (pg_locks) y visits_http 80/85 (dos 201 y dos visitas activas en
+    las 5 rondas); N6 solo misma hora -> 27/35, 80/85 y 173/183; N7
+    intervalo cerrado -> 26/35, 79/85, y resultados_llamada_http se para
+    con un AssertionError en la preparación de su CASO 12 (la cita de las
+    11:00 junto a la de las 10:00 sale ocupada): exit 1, no un FALLO
+    contado, con la limpieza hecha; N8 mensaje con datos de otra visita ->
+    disponibilidad 35/35 (no la ve: S5 prueba la función del mensaje, y N8
+    añade los datos en otro sitio) y visits_http 84/85; N9 sin la
+    comprobación en /resultados-llamada -> 34/35 (S8, ast),
+    173/183 y gate_decisions_http 121/124 (17:48:23-18:02:08). Limpieza 0
+    en todas. Kernel-Power 506/507 entre 17:20 y 18:03: ninguno. git diff
+    -- app/ vacío. Las 3 visitas reales, iguales a las 18:02:19.]
 C.  Regresión (los 15 scripts que crean visitas, los de MCP y el de sesión)
     y suite completa en UNA pasada válida (regla de suspensión).
 D.  Adenda (filas 3, 4, 6 y 10; secciones 5.3, 5.4, 5.5, 5.10; MCP; nota de
