@@ -474,6 +474,29 @@ B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
     173/183 y gate_decisions_http 121/124 (17:48:23-18:02:08). Limpieza 0
     en todas. Kernel-Power 506/507 entre 17:20 y 18:03: ninguno. git diff
     -- app/ vacío. Las 3 visitas reales, iguales a las 18:02:19.]
+    [Nota 2026-10-12, revisión del tutor de B5-0/B5, aprobados con dos
+    defectos. (1) Concurrencia: la sospecha de que las rondas 2-5
+    encontraban el hueco ya ocupado no se cumplía (cada ronda pide otro
+    día, del 17 al 21/05/2027, y con N5 las cinco rondas dieron dos 201, lo
+    que solo es posible con el hueco libre); el tutor la retira y se
+    mantienen las 10 peticiones por ronda del plan (un 201 y nueve 409).
+    Aun así, check_visits_http comprueba ahora, antes de lanzar cada ronda,
+    que no hay ninguna visita activa que se solape con ese hueco (5
+    comprobaciones más): 90/90 (18:30:18-18:32:00). Con el script corregido,
+    sobre copias, de una en una: N5 85/90 (dos 201 en las 5 rondas, con el
+    hueco libre comprobado antes), N6 85/90 y N7 84/90
+    (18:33:26-18:38:27). (2) H-B5-1 resuelto: el CASO 21 de
+    check_listado_llamadas_http cuenta los textos solo en los elementos de
+    sus propias oportunidades (marca del email); 109/109 (18:32:00-18:33:15)
+    con la visita real 538 presente y el 13/10/2026 como próximo laborable.
+    2,09 GB libres a las 18:30:12, con Docker/n8n, Chrome y Edge cerrados;
+    Kernel-Power 506/507 entre 18:29 y 18:39: ninguno; git diff -- app/
+    vacío.
+    LECCIÓN (H-B5-2 y H-B5-1): cada bloque que toque visitas (su esquema,
+    su filtro, sus reglas o sus endpoints) ejecuta la regresión de TODOS
+    los scripts que crean visitas, no solo los del bloque. En B4 se cambió
+    el filtro de texto_cliente y no se ejecutó check_ficha_oportunidad_http,
+    que fallaba en un 15 % de las pasadas.]
 C.  Regresión (los 15 scripts que crean visitas, los de MCP y el de sesión)
     y suite completa en UNA pasada válida (regla de suspensión).
 D.  Adenda (filas 3, 4, 6 y 10; secciones 5.3, 5.4, 5.5, 5.10; MCP; nota de

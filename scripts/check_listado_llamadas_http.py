@@ -1276,8 +1276,22 @@ try:
               f"(aparecen: {salen})")
     # El de cada visita activa propia sale EXACTAMENTE una vez si su
     # oportunidad está en d) o e), y ninguna vez si no está.
+    # H-B5-1 (2026-10-12): se cuenta SOLO en los elementos de las
+    # oportunidades de este script. Antes se contaba en toda la respuesta, y
+    # una visita REAL del próximo laborable con el mismo texto fijo del Gate
+    # (la 538) hacía fallar la prueba por un dato ajeno. SQL: los ids de las
+    # oportunidades propias (marca del email, PROPIO).
+    OPS_PROPIAS = {f[0] for f in consultar_todas(f"SELECT id FROM oportunidades WHERE {PROPIO['oportunidades']};",
+                                                 {"patron": PATRON_EMAIL})}
+    # Los elementos de los cinco apartados cuya oportunidad es propia.
+    elementos_propios = [e for apartado in ("gates_sin_decision", "seguimientos_por_abrir", "seguimientos_abiertos",
+                                            "visitas_sin_confirmar", "visitas_proximo_laborable")
+                         for e in L.get(apartado, []) if e.get("oportunidad_id") in OPS_PROPIAS]
+    # Sus textos, en cualquier nivel.
+    textos_propios = todos_los_textos(elementos_propios)
+    # Cada texto, contado solo ahí.
     mal_contados = [op for op, t in TEXTOS_VISITA.items()
-                    if textos_respuesta.count(t) != (1 if (op in D or op in E) else 0)]
+                    if textos_propios.count(t) != (1 if (op in D or op in E) else 0)]
     comprobar(f"cada texto de visita activa propia sale una vez (o ninguna si no está en d/e): "
               f"{len(TEXTOS_VISITA)} textos", mal_contados == [], f"(mal contados: {mal_contados})")
     # Ningún elemento de a), b) o c) lleva texto_cliente (como en el CASO 2,

@@ -693,8 +693,21 @@ try:
     # viernes) a las 10:00. Las mismas diez oportunidades en todas: la que
     # ganó la ronda anterior pide como sustitución.
     for ronda in range(5):
-        # El día de esta ronda.
+        # El día de esta ronda: uno DISTINTO por ronda (del lunes al viernes de
+        # la semana siguiente), siempre a las 10:00, así que ninguna ronda
+        # reutiliza el hueco de la anterior.
         dia = LUNES + timedelta(days=7 + ronda)
+        # Revisión del tutor (2026-10-12): antes de lanzar, el hueco tiene que
+        # estar LIBRE. SQL: visitas activas que se solapan con las 10:00 de ese
+        # día (de cualquiera: si hubiera alguna, la ronda no probaría nada).
+        antes_ronda = consultar(
+            "SELECT count(*) FROM visitas WHERE estado IN ('solicitada', 'confirmada') "
+            "AND fecha_propuesta < %(ini)s + interval '1 minute' * %(dur)s "
+            "AND fecha_propuesta + interval '1 minute' * %(dur)s > %(ini)s;",
+            {"ini": esperado_madrid(dia, "10:00"), "dur": DURACION})[0]
+        # Cero: el hueco está libre y las diez compiten por él.
+        comprobar(f"ronda {ronda + 1} ({dia}): el hueco de las 10:00 está LIBRE antes de lanzar (0 visitas que se solapen)",
+                  antes_ronda == 0, f"({antes_ronda})")
         # Barrier(10): las diez peticiones salen a la vez.
         barrera = threading.Barrier(10)
 
