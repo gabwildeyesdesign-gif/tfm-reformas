@@ -1,0 +1,344 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: Agente 2 (asesor post-cálculo), resumen de la conversación (D28.1),
+filtro del texto del agente (D26.7) y Google Calendar
+
+Documento de plan · Nivel N0 · 2026-10-12 · Rama feat/n0-agente2
+(desde main = origin/main = 579fd00)
+Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+
+Fuentes leídas: CLAUDE.md; docs/Decisiones_D18, D25, D26 (sobre todo D26.7),
+D28, D29; la Adenda (tabla de la sección 1, secciones 4, 5.3, 5.4, 6 y 7);
+prompts/agente1_captura.md; n8n/README.md; docs/Informe_Decisiones_N0 (sección
+4); el código de app/ y docs/schema_actual.sql. Lo ya decidido se cita por su
+número y no se copia.
+
+Letras de ESTE plan: M = mediciones en la base de datos real, K = hechos del
+código, C = contradicciones y hallazgos, R = riesgos, N = pruebas en negativo,
+P = preguntas para Gabi (sección 9). Fuera del alcance: el bloque 4c (la
+"última llamada" se hará en n8n, D30, pendiente de redactar por el tutor).
+
+
+================================================================
+0. COMPROBACIONES HECHAS PARA ESTE PLAN (solo lectura, 2026-10-12)
+================================================================
+G1. git rev-parse main = origin/main = 579fd00. Rama feat/n0-agente2 creada
+    desde ahí; primer commit cbd2ec7 con D28 y D29 tal cual (git avisó de
+    CRLF -> LF: lo normaliza .gitattributes; el texto no cambia).
+M1. leads: 27 filas, mensaje_original NULL en las 27 (count = 0).
+M2. visitas: 1 fila, texto_cliente de 74 caracteres; 0 con más de 300;
+    0 con algo con forma de email; 0 con 9-15 dígitos seguidos tras quitar
+    espacios, puntos, guiones y paréntesis.
+M3. logs: 0 filas de 'visita_*' hoy (los scripts borran las suyas), así que
+    0 copias de texto_cliente en logs.detalle (R10 del plan de la ficha).
+M4. reglas_negocio tiene 13 claves; NINGUNA de plazos de ejecución (D18.7)
+    ni de "política de visita". Sí recargo_informe_tecnico y las 5 de franjas
+    y duración de la visita. valor es NUMERIC(10,2): un plazo cabe como dos
+    filas (mínimo y máximo en semanas), no como texto.
+K1. get_business_rules() y request_missing_information() NO existen en el
+    código (grep en app/): la única tool MCP es calculate_estimate.
+K2. GET /leads/session devuelve existe, lead_id, oportunidad_id,
+    estado_oportunidad y presupuesto {existe, requiere_aprobacion,
+    motivo_gate}: NADA de la reforma (tipo, m2, nivel, cambios). Sin eso el
+    Agente 2 no puede aplicar D18.7 ni elegir el incluye_tipico de D18.4.
+K3. Los 422 de Pydantic devuelven el texto rechazado en "input"; app/main.py
+    solo tiene manejador global para Exception (500), así que el 422 no se
+    guarda en logs, pero SÍ queda en los datos de la ejecución de n8n.
+K4. Los textos fijos de visita del sistema (resultados_llamada_service.py,
+    TEXTO_VISITA_ACORDADA y compañía) miden 74, 77 y 103 caracteres (< 300).
+
+
+================================================================
+1. CONTRADICCIONES Y HALLAZGOS
+================================================================
+C1. CLAUDE.md dice que 4b (feat/n0-resultado-llamadas) está "pendiente de
+    merge", pero main = 579fd00 contiene sus commits (8bbd98a es ancestro de
+    main) y la rama ya no existe en GitHub. Se corrige en el Bloque D.
+C2. D28.2 dice "WF2 no se toca" (sobre el ENLACE a la ficha), pero D28.1 pide
+    el resumen "visible en el email de WF2": WF2 sí cambia, en su plantilla.
+    Ver P8.
+C3. D18.4 dice que el Agente 2 recibe "datos estructurados del lead" desde la
+    base de datos, pero ningún endpoint que pueda usar se los da (K2). Ver P4.
+C4. tarifas_base tiene precio_m2. Si get_business_rules lo devolviera, el
+    Agente 2 podría calcular la cifra de un caso con Gate (rompe D18.5.1 y
+    D18.2). La tool NO devuelve precio_m2, margen, IVA ni umbrales (N3).
+C5. El modelo de datos no tiene la DIRECCIÓN de la obra: un evento de
+    calendario de visita no puede llevar dónde es. Administración la pide en
+    la llamada (hoy ya es así). Afecta a la sección 5; no se arregla aquí.
+C6. D26.7 bajar el límite de visitas.texto_cliente de 1000 a ~300 es
+    ENDURECER un CHECK que main usa: si la base de datos cambia antes que el
+    código, POST /visits de main daría 500 con textos de 301-1000. Por la
+    regla expand/contract va en una migración POSTERIOR al merge (paso13b).
+
+
+================================================================
+2. LO QUE YA EXISTE Y USARÁ EL AGENTE 2
+================================================================
+- Router de chat D18.9 (opción A) en n8n, con GET /leads/session (fila 6 de la
+  Adenda, 5.3) al inicio de cada turno. Le faltan el mensaje de 'perdida' (P6
+  del plan de /gate-decisions) y tratar 'seguimiento_pendiente' como
+  'presupuesto_enviado' (P12 del plan de create-followup-task).
+- Code node de cierre determinista (D17.6): la cifra nunca pasa por un LLM.
+- POST /visits (fila 4, 5.4): la ÚNICA escritura del Agente 2. Errores
+  {motivo, mensaje} que n8n le pasa al agente; limitación C7 (hora exacta).
+- Tool MCP en /mcp (Bearer MCP_SECRET): hoy solo calculate_estimate (K1).
+- Llaves: X-Webhook-Secret (leads, visits, leads/session) y MCP_SECRET.
+  El Agente 2 NUNCA lleva X-Gate-Secret (D18.4; CLAUDE.md, gotcha de
+  GATE_SECRET): ni ficha, ni gate-avisos, ni llamadas-del-dia, ni
+  resultados-llamada. Se comprueba en el JSON exportado (N5).
+- Ficha (fila 9) y GET /gate-avisos (fila 7): donde se verá el resumen.
+
+
+================================================================
+3. BACKEND
+================================================================
+3.1 Dónde se guarda el resumen de D28.1 (P1)
+  A. leads.mensaje_original (existe, NULL en 27/27, M1). Sin migración de
+     columna, pero el nombre dice "mensaje original", justo lo que D28.1
+     rechaza (opción B: guardar la conversación); invita a llenarlo mal.
+  B. Columna nueva leads.resumen_solicitud TEXT NULL + CHECK de longitud.
+     Un ADD COLUMN (solo expand). mensaje_original queda sin uso, documentado.
+  C. Columna en oportunidades: el resumen es de lo que pidió el cliente al
+     capturar (la solicitud = el lead); la ficha y gate-avisos ya leen el
+     contacto de la solicitud.
+  Recomendación: B.
+  Contrato: campo opcional "resumen" en POST /leads (null o 1..N caracteres
+  con el filtro de 3.2), para que el Agente 1 actual no se rompa antes de
+  cambiar su prompt (P2). Repetición con el mismo lead_token: 200 sin
+  escribir, el resumen nuevo se ignora (igual que texto_cliente en /visits).
+  Lectura: GET /gate-avisos y la ficha lo devuelven (campo nuevo, null en los
+  leads antiguos); GET /llamadas-del-dia NO (D28.1, acumulación; N4).
+
+3.2 Filtro de D26.7 (resumen y visitas.texto_cliente)
+  - Una función de validación compartida en app/schemas/common.py, usada por
+    LeadCreate.resumen y por VisitaCreate.texto_cliente (un solo sitio).
+  - Rechaza con 422 (de formato, Pydantic) un texto con forma de email o con
+    un tramo de 9-15 dígitos con separadores de teléfono (los de "Validating
+    contact data" del Agente 1). El mensaje NO repite el dato.
+  - Longitud: MAX_TEXTO_AGENTE, propuesta 300 para los dos (P3).
+  - Defensa doble como m2: longitud en Pydantic Y en CHECK; la detección de
+    emails y teléfonos solo en Pydantic (una regex en un CHECK divergiría de
+    la de Python). P3 incluye esta elección.
+  - Riesgo residual (D26.7): direcciones o datos de salud en prosa no se
+    detectan (R1). Falsos positivos posibles ("referencia 123 456 789"): el
+    agente reescribe (R2). El 422 devuelve el texto en "input" (K3), que
+    queda en la ejecución de n8n: aceptado y documentado (R3).
+
+3.3 Contexto del Agente 2 (P4)
+  A. Ampliar GET /leads/session con "reforma" {tipo_reforma, m2,
+     nivel_acabados, incluye_cambios_estructurales} (sin importes), y n8n lo
+     pone en el mensaje de sistema del Agente 2. Una consulta que ya se paga.
+  B. Que get_business_rules reciba el lead_token y devuelva todo: mezcla
+     datos del cliente con reglas generales en una tool que el modelo llama
+     cuando quiere.
+  C. Que el agente le vuelva a preguntar al cliente: repite la captura.
+  Recomendación: A. La regla D18.7 (plazo solo si bano/cocina, sin Gate y
+  sin cambios) la aplica el backend: el mismo endpoint devuelve
+  plazo_orientativo (o null), y el agente solo lo lee.
+
+3.4 get_business_rules() (D18.4, solo MCP, K1)
+  Sin parámetros (un LLM no aporta identificadores, Adenda 1.1a). Devuelve:
+  recargo_informe_tecnico, franjas y duración de la visita (para proponer una
+  hora válida, C7) e incluye_tipico de tarifas_base. NUNCA precio_m2, margen,
+  IVA ni umbrales (C4). Los plazos de D18.7 van en 3.3 (por lead).
+  Plazos: 6 filas nuevas en reglas_negocio (bano 2-3, cocina obra 2-4,
+  cocina fabricación 3-6, en semanas; M4), con su validación y 503 como las
+  otras reglas.
+
+3.5 Migraciones
+  paso13 (solo expand, antes de B2): leads.resumen_solicitud + CHECK
+  1..MAX; las 6 filas de plazos. Se aplica solo tras "confirmo la migración
+  paso13" de Gabi.
+  paso13b (DESPUÉS del merge, C6): CHECK de visitas.texto_cliente a 1..MAX
+  (M2: 0 filas lo incumplen hoy; se vuelve a medir antes).
+
+
+================================================================
+4. N8N (fuera del repositorio; Gabi lo construye, el JSON saneado va a n8n/)
+================================================================
+4.1 Router (D18.9): existe = false -> Agente 1. Con presupuesto sin Gate
+    (presupuesto_enviado, seguimiento_pendiente, visita_agendada) ->
+    Agente 2. Con Gate, 'perdida' o 'ganada' -> mensaje fijo, sin agente (P5).
+4.2 Nodo Agente 2: prompt en prompts/agente2_asesor.md (mismo criterio que
+    el Agente 1: idéntico al del nodo); límites de D18.4; texto de D18.5.1;
+    visita = solicitud (D18.5.4); confirmación explícita antes de la tool.
+    Modelo: el mismo que el Agente 1 (P9).
+4.3 Herramientas:
+    - solicitar_visita: HTTP Request Tool -> POST /visits, credencial
+      X-Webhook-Secret; lead_token por expresión desde el sessionId (nunca
+      $fromAI, D16); fecha, hora y texto_cliente por $fromAI. Ante 4xx, el
+      cuerpo vuelve al agente (5.4).
+    - get_business_rules: MCP Client Tool -> /mcp, Bearer MCP_SECRET, con
+      SOLO esa tool seleccionada (calculate_estimate fuera: D18.4 "nunca
+      calcular"). VERIFICAR en n8n 2.16.1 que el nodo permite elegir tools;
+      si no, R4 (calculate_estimate es idempotente: no cambia nada, pero se
+      documenta).
+    - Ninguna con X-Gate-Secret (N5).
+4.4 Memoria: clave sessionId + "_asesor" (D18.4). P6:
+    A. Simple Memory (en la RAM de n8n, ventana de N mensajes; se pierde al
+       reiniciar n8n). Igual que el Agente 1.
+    B. Postgres Chat Memory en Supabase: guarda conversaciones enteras en
+       nuestra base de datos, lo que D28.1 rechazó (opción B, RGPD).
+    C. Sin memoria: el agente no recordaría la hora que acaba de proponer.
+    Recomendación: A.
+4.5 Agente 1 escribe el resumen: parámetro nuevo "resumen" en
+    guardar_datos_reforma ($fromAI) y una sección del prompt: 1-3 frases,
+    máximo MAX caracteres, sin nombre, email, teléfono, dirección ni salud;
+    ante un 422 del resumen lo reescribe SIN preguntar al cliente.
+    prompts/agente1_captura.md y el nodo se cambian a la vez.
+    El Agente 2 NO amplía el resumen en N0 (P7): solo escribe texto_cliente
+    de la visita, que es su propio resumen (D26.7).
+4.6 WF2: el email muestra el resumen (C2, P8).
+
+
+================================================================
+5. GOOGLE CALENDAR
+================================================================
+Lo ya decidido en docs/: D18.6 (consultar disponibilidad es N1), Informe
+sección 4 (get_project_capacity y búsqueda de huecos reales, N1), D18.5.4
+(visita = solicitud), Adenda 5.4 ("el backend no habla con ningún
+calendario") y D25.5 ("llámame en 2 horas" nunca en el calendario de
+visitas). NO hay decisión sobre quién crea el evento, cuándo ni con qué
+visita. Pre-decisión con Regla de Tres (P10):
+  A. Ningún evento en N0: administración apunta a mano la visita confirmada.
+     Coste 0; deja fuera algo que el título del bloque anuncia.
+  B. n8n crea el evento en el flujo del formulario de llamadas, al recibir
+     201 con creado = true de POST /resultados-llamada para una visita
+     CONFIRMADA (visita_acordada, confirmar_hora, otra_hora). Determinista,
+     lo dispara una persona tras hablar con el cliente, sin agente y sin
+     backend nuevo. Una 'solicitada' nunca va al calendario.
+  C. El Agente 2 crea un evento provisional al pedir la visita: un LLM
+     escribiendo en el calendario de la empresa, una solicitud que no es
+     reserva (D18.5.4) y eventos a limpiar en cada sustitución. Rechazable.
+  (D. El backend llamando a la API de Google: OAuth en Python y services/
+  hablando con un tercero; contra la Adenda 5.4. Rechazable.)
+  Recomendación: B, con el evento mínimo: "Visita técnica #<oportunidad_id>
+  (<tipo>)", inicio y duración_visita_min, y el enlace a la ficha; sin
+  nombre, teléfono ni importes (la ficha está protegida). Depende del
+  formulario ampliado en n8n (pendiente), así que va DESPUÉS de él.
+  Cancelaciones y cambios de hora (cliente_cancela, otra_hora): hace falta
+  saber qué evento borrar sin escribir en la base de datos (D21.6). En N0,
+  borrar a mano y documentarlo; en N1, un id de evento derivado de visita_id
+  si el nodo de n8n lo admite (VERIFICAR en 2.16.1). P11.
+  Credencial: Google Calendar OAuth2 en n8n (la de Gmail ya existe; ver si
+  se puede ampliar su alcance o hace falta otra).
+
+
+================================================================
+6. RAM (8 GB): MEDIR n8n ANTES Y DESPUÉS
+================================================================
+El modelo corre en la nube (D16): lo que crece es n8n (nodos, memoria de
+chat, ejecuciones guardadas). Procedimiento, en PowerShell, mismas
+condiciones las dos veces (VS Code, uvicorn del 8000 y Docker abiertos;
+navegador solo con el chat):
+  1. Reposo: 3 tomas con 1 min entre ellas de
+       docker stats --no-stream --format "{{.Name}};{{.MemUsage}};{{.CPUPerc}}"
+     y de la memoria libre de Windows
+       (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory
+     más el proceso de WSL (Get-Process VmmemWSL, WorkingSet64), porque
+     docker stats no cuenta lo que reserva WSL.
+  2. Carga: un bucle que anota esas tres cifras cada 5 s en un CSV del
+     scratchpad mientras Gabi hace 3 conversaciones completas del guion.
+  3. Después: 5 min de reposo y otras 3 tomas (¿n8n devuelve la memoria?).
+  "Antes" = solo Agente 1 (hoy); "después" = Agente 1 + Agente 2 + memoria.
+  Criterio propuesto (P12): si la memoria libre de Windows baja de 1 GB en
+  la carga, se anota como limitación y se revisa la ventana de Simple
+  Memory y la retención de ejecuciones de n8n antes de seguir.
+
+
+================================================================
+7. BLOQUES, PRUEBAS Y PRUEBAS EN NEGATIVO
+================================================================
+Un commit al final de cada bloque, con [PARA]. Backend en esta rama: D28.1
+pide "misma migración, mismo filtro, misma prueba de prompts", y por eso el
+resumen, el filtro y el contexto del agente van juntos aunque toquen varios
+endpoints (excepción a "un endpoint por rama" que Gabi decide en P13).
+
+A.  Este plan.
+B1. Migración paso13 + check_migracion_agente2 (columna, CHECK, 6 filas;
+    antes de migrar debe FALLAR). N1: sin el CHECK.
+B2. Escritura: filtro compartido, POST /leads con resumen, POST /visits con
+    el filtro y MAX. Scripts nuevos o ampliados: check_texto_agente_service
+    (casos de emails y teléfonos con separadores, falsos positivos
+    conocidos), check_leads_endpoint_http y check_visits_http (hoy prueban
+    1000 caracteres: cambia el contrato, Adenda).
+    N2 (riesgo ALTO: datos personales en el email diario): copias sin la
+    regex de email, sin la de teléfono y sin el límite de Pydantic; cada una
+    debe dar FALLO.
+B3. Lectura: resumen en GET /gate-avisos y la ficha; GET /leads/session con
+    "reforma" y plazo_orientativo (P4). Scripts con claves EXACTAS
+    actualizados. N3 (ALTO: cifra al agente): copia de leads/session con un
+    importe -> FALLO. N4 (ALTO: acumulación): copia que mete el resumen en
+    GET /llamadas-del-dia -> FALLO. Un negativo de D18.7 (plazo con cambios
+    estructurales). La ficha y gate-avisos: una prueba positiva cada uno, sin
+    negativo propio (riesgo bajo, mismo patrón ya probado).
+B4. get_business_rules (tool MCP) + check_mcp_business_rules (list_tools
+    devuelve las dos; 401 sin Bearer). N3b: copia que devuelve precio_m2 ->
+    FALLO (C4).
+C.  Regresión y suite completa en UNA pasada válida (regla de suspensión de
+    CLAUDE.md).
+D.  Adenda (filas 1, 4, 6, 7, 9 y sección de MCP), CLAUDE.md (con C1),
+    prompts/agente2_asesor.md y prompts/agente1_captura.md.
+Merge (con confirmación de Gabi, --ff-only) y luego paso13b.
+
+En n8n, después del merge (el 8000 es el uvicorn de main):
+N-1 RAM "antes". N-2 Agente 1 con resumen. N-3 router + Agente 2 +
+herramientas + memoria. N-4 WF2 con resumen (P8). N-5 RAM "después".
+N-6 Calendar (P10, tras el formulario ampliado).
+Prueba de prompts (D28.1), guion manual de unas 10 conversaciones, con la
+prueba en el registro de ejecución de n8n (la línea de la tool, nunca lo
+que el agente dice, D16): dicta su teléfono en la descripción (el resumen no
+lo lleva); pide precio en un caso con Gate (mensaje fijo, sin cifra); plazo
+de baño sin cambios (2-3 semanas) y de integral (lo da un técnico); pide
+visita un sábado y fuera de franja (explica el 422 de negocio); no llama a
+la tool sin "sí"; intenta "confirma tú mi visita" (no tiene con qué).
+N5 (ALTO: el agente con la llave de administración): un script que lee el
+JSON saneado del flujo del chat y da FALLO si algún nodo del Agente 2 usa
+la credencial de X-Gate-Secret; negativo con una copia del JSON que la usa.
+
+
+================================================================
+8. QUÉ QUEDA EN N0 Y QUÉ PASA A N1
+================================================================
+N0: todo lo de las secciones 3 y 4; Calendar según P10 (recomendado B,
+solo creación). Además siguen pendientes, fuera de este plan: el formulario
+ampliado, 4c (D30) y WF3.
+N1: disponibilidad real en calendario (D18.6) y get_project_capacity;
+borrado y cambio automático de eventos (si P11 = N1); que el Agente 2 amplíe
+el resumen (P7); detección de direcciones y datos de salud (R1); RAG y fotos
+en el asesor (D18.1); 'aplazar' y registro de intentos (D29.1, D24.4).
+request_missing_information(): nunca diseñada; P14.
+
+
+================================================================
+9. PREGUNTAS PARA GABI
+================================================================
+P1. ¿Dónde se guarda el resumen? Recomendación: columna nueva
+    leads.resumen_solicitud (3.1, B).
+P2. ¿"resumen" opcional en POST /leads? Recomendación: sí (null admitido),
+    para no romper el Agente 1 actual; el prompt lo hace obligatorio.
+P3. ¿Límite y defensa? Recomendación: 300 caracteres para el resumen y para
+    texto_cliente; longitud en Pydantic y CHECK, emails y teléfonos solo en
+    Pydantic.
+P4. ¿Cómo recibe el Agente 2 los datos de la reforma? Recomendación: ampliar
+    GET /leads/session con "reforma" y plazo_orientativo calculado por el
+    backend (3.3, A).
+P5. ¿Qué ve en el chat un cliente con Gate, 'perdida' o 'ganada'?
+    Recomendación: mensaje fijo sin agente (D18.5.1 para el Gate).
+P6. ¿Memoria del Agente 2? Recomendación: Simple Memory, clave
+    sessionId + "_asesor" (4.4, A).
+P7. ¿El Agente 2 amplía el resumen? Recomendación: no en N0 (N1).
+P8. ¿Se cambia la plantilla de WF2 para mostrar el resumen (C2)?
+    Recomendación: sí, solo ese campo; el enlace a la ficha sigue fuera
+    (D28.2).
+P9. ¿El Agente 2 usa el mismo modelo que el Agente 1? Recomendación: sí
+    (coste de D16.7; el modelo exacto sigue pendiente de confirmar desde D16).
+P10. ¿Quién crea el evento de Calendar? Recomendación: B, n8n tras el 201 del
+    formulario para visitas confirmadas, evento mínimo (sección 5).
+P11. ¿Cancelaciones y cambios de hora en Calendar? Recomendación: a mano en
+    N0, automático en N1.
+P12. ¿Criterio de RAM? Recomendación: menos de 1 GB libre en carga =
+    limitación anotada y revisión de la memoria de n8n.
+P13. ¿Backend en una sola rama (excepción a "un endpoint por rama")?
+    Recomendación: sí, por D28.1; un commit por bloque.
+P14. ¿request_missing_information()? Recomendación: sacarla de N0 con una
+    nota en la Adenda (el Agente 1 ya pide lo que falta en la conversación).
