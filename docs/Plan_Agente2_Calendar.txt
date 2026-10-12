@@ -5,6 +5,11 @@ filtro del texto del agente (D26.7) y Google Calendar
 Documento de plan · Nivel N0 · 2026-10-12 · Rama feat/n0-agente2
 (desde main = origin/main = 579fd00)
 Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+[Actualizado 2026-10-12: revisión del tutor aceptada por Gabi sobre 3e50cd2.
+P1-P14 respondidas; P13 = NO, DOS ramas; Calendar sale de esta rama; D31
+(disponibilidad en POST /visits) entra en ella. Todo en la sección 10, que
+MANDA sobre las secciones 3-8 donde se contradigan. Sección 5 sustituida y
+sección 7 rehecha para la rama 1. Preguntas nuevas P15-P22.]
 
 Fuentes leídas: CLAUDE.md; docs/Decisiones_D18, D25, D26 (sobre todo D26.7),
 D28, D29; la Adenda (tabla de la sección 1, secciones 4, 5.3, 5.4, 6 y 7);
@@ -91,6 +96,9 @@ C6. D26.7 bajar el límite de visitas.texto_cliente de 1000 a ~300 es
 ================================================================
 3. BACKEND
 ================================================================
+[Nota 2026-10-12: 3.1, el resumen de 3.2 y 4.5-4.6 pasan a la RAMA 2
+(sección 10.2). En esta rama, el filtro de 3.2 solo se aplica a
+visitas.texto_cliente.]
 3.1 Dónde se guarda el resumen de D28.1 (P1)
   A. leads.mensaje_original (existe, NULL en 27/27, M1). Sin migración de
      columna, pero el nombre dice "mensaje original", justo lo que D28.1
@@ -145,6 +153,9 @@ C6. D26.7 bajar el límite de visitas.texto_cliente de 1000 a ~300 es
   otras reglas.
 
 3.5 Migraciones
+  [Nota 2026-10-12: en la rama 1, paso13 = las 6 filas de plazos y la regla
+  paso_huecos_min si P19 = sí; leads.resumen_solicitud va a la migración de
+  la rama 2. paso13b sigue igual.]
   paso13 (solo expand, antes de B2): leads.resumen_solicitud + CHECK
   1..MAX; las 6 filas de plazos. Se aplica solo tras "confirmo la migración
   paso13" de Gabi.
@@ -193,34 +204,16 @@ C6. D26.7 bajar el límite de visitas.texto_cliente de 1000 a ~300 es
 ================================================================
 5. GOOGLE CALENDAR
 ================================================================
-Lo ya decidido en docs/: D18.6 (consultar disponibilidad es N1), Informe
-sección 4 (get_project_capacity y búsqueda de huecos reales, N1), D18.5.4
-(visita = solicitud), Adenda 5.4 ("el backend no habla con ningún
-calendario") y D25.5 ("llámame en 2 horas" nunca en el calendario de
-visitas). NO hay decisión sobre quién crea el evento, cuándo ni con qué
-visita. Pre-decisión con Regla de Tres (P10):
-  A. Ningún evento en N0: administración apunta a mano la visita confirmada.
-     Coste 0; deja fuera algo que el título del bloque anuncia.
-  B. n8n crea el evento en el flujo del formulario de llamadas, al recibir
-     201 con creado = true de POST /resultados-llamada para una visita
-     CONFIRMADA (visita_acordada, confirmar_hora, otra_hora). Determinista,
-     lo dispara una persona tras hablar con el cliente, sin agente y sin
-     backend nuevo. Una 'solicitada' nunca va al calendario.
-  C. El Agente 2 crea un evento provisional al pedir la visita: un LLM
-     escribiendo en el calendario de la empresa, una solicitud que no es
-     reserva (D18.5.4) y eventos a limpiar en cada sustitución. Rechazable.
-  (D. El backend llamando a la API de Google: OAuth en Python y services/
-  hablando con un tercero; contra la Adenda 5.4. Rechazable.)
-  Recomendación: B, con el evento mínimo: "Visita técnica #<oportunidad_id>
-  (<tipo>)", inicio y duración_visita_min, y el enlace a la ficha; sin
-  nombre, teléfono ni importes (la ficha está protegida). Depende del
-  formulario ampliado en n8n (pendiente), así que va DESPUÉS de él.
-  Cancelaciones y cambios de hora (cliente_cancela, otra_hora): hace falta
-  saber qué evento borrar sin escribir en la base de datos (D21.6). En N0,
-  borrar a mano y documentarlo; en N1, un id de evento derivado de visita_id
-  si el nodo de n8n lo admite (VERIFICAR en 2.16.1). P11.
-  Credencial: Google Calendar OAuth2 en n8n (la de Gmail ya existe; ver si
-  se puede ampliar su alcance o hace falta otra).
+[Sustituida el 2026-10-12, revisión del tutor.] Google Calendar SALE de esta
+rama: será la Fase 2 del formulario de llamadas en n8n. Decidido: P10 = B
+(n8n crea el evento tras el 201, creado = true, de POST /resultados-llamada
+para una visita CONFIRMADA; evento mínimo, sin nombre, teléfono ni
+importes) y P11 = cancelaciones y cambios de hora a mano en N0. El análisis
+con Regla de Tres (A, B, C, D) está en 3e50cd2 (git show
+3e50cd2:docs/Plan_Agente2_Calendar.txt, sección 5); C5 (sin dirección de la
+obra) sigue valiendo para esa fase.
+La DISPONIBILIDAD (D31) sí entra en esta rama, contra la tabla visitas, sin
+Google: sección 10.3.
 
 
 ================================================================
@@ -248,52 +241,77 @@ navegador solo con el chat):
 ================================================================
 7. BLOQUES, PRUEBAS Y PRUEBAS EN NEGATIVO
 ================================================================
-Un commit al final de cada bloque, con [PARA]. Backend en esta rama: D28.1
-pide "misma migración, mismo filtro, misma prueba de prompts", y por eso el
-resumen, el filtro y el contexto del agente van juntos aunque toquen varios
-endpoints (excepción a "un endpoint por rama" que Gabi decide en P13).
+[Rehecha el 2026-10-12 SOLO para la RAMA 1 (sección 10.2). La versión
+anterior, con el resumen de D28.1, está en 3e50cd2.]
+Un commit al final de cada bloque, con [PARA]. Riesgo de cada prueba en
+negativo: ALTO = cifra o datos personales donde no deben estar, o dos
+visitas en el mismo hueco; MEDIO = una promesa errónea al cliente; BAJO =
+el resto (sin negativo propio si el patrón ya está probado en otro script).
 
-A.  Este plan.
-B1. Migración paso13 + check_migracion_agente2 (columna, CHECK, 6 filas;
-    antes de migrar debe FALLAR). N1: sin el CHECK.
-B2. Escritura: filtro compartido, POST /leads con resumen, POST /visits con
-    el filtro y MAX. Scripts nuevos o ampliados: check_texto_agente_service
-    (casos de emails y teléfonos con separadores, falsos positivos
-    conocidos), check_leads_endpoint_http y check_visits_http (hoy prueban
-    1000 caracteres: cambia el contrato, Adenda).
-    N2 (riesgo ALTO: datos personales en el email diario): copias sin la
-    regex de email, sin la de teléfono y sin el límite de Pydantic; cada una
-    debe dar FALLO.
-B3. Lectura: resumen en GET /gate-avisos y la ficha; GET /leads/session con
-    "reforma" y plazo_orientativo (P4). Scripts con claves EXACTAS
-    actualizados. N3 (ALTO: cifra al agente): copia de leads/session con un
-    importe -> FALLO. N4 (ALTO: acumulación): copia que mete el resumen en
-    GET /llamadas-del-dia -> FALLO. Un negativo de D18.7 (plazo con cambios
-    estructurales). La ficha y gate-avisos: una prueba positiva cada uno, sin
-    negativo propio (riesgo bajo, mismo patrón ya probado).
-B4. get_business_rules (tool MCP) + check_mcp_business_rules (list_tools
-    devuelve las dos; 401 sin Bearer). N3b: copia que devuelve precio_m2 ->
-    FALLO (C4).
-C.  Regresión y suite completa en UNA pasada válida (regla de suspensión de
-    CLAUDE.md).
-D.  Adenda (filas 1, 4, 6, 7, 9 y sección de MCP), CLAUDE.md (con C1),
-    prompts/agente2_asesor.md y prompts/agente1_captura.md.
-Merge (con confirmación de Gabi, --ff-only) y luego paso13b.
+A2. Esta nota (sección 10).
+B1. paso13: 6 filas de plazos (D18.7, en semanas) y, si P19 = C,
+    paso_huecos_min = 30. Validación 1..N y 503 como las otras reglas.
+    check_migracion_agente2: debe FALLAR antes de migrar. Se aplica solo
+    tras "confirmo la migración paso13". Negativo: ninguno propio (riesgo
+    BAJO: solo AÑADE filas; el "antes de migrar" ya es la prueba en vacío).
+B2. Contexto: GET /leads/session gana "reforma" {tipo_reforma, m2,
+    nivel_acabados, incluye_cambios_estructurales} y plazo_orientativo (null
+    salvo bano/cocina, sin Gate y sin cambios: D18.7, lo calcula el backend).
+    check_lead_session_http con claves EXACTAS y un caso por condición.
+    N1 (ALTO): copia que añade un importe -> FALLO.
+    N2 (MEDIO): copia sin la condición de cambios estructurales y copia sin
+    la del Gate -> FALLO cada una.
+B3. get_business_rules (tool MCP, sin parámetros, 3.4).
+    check_mcp_business_rules: list_tools = las dos tools; 401 sin Bearer;
+    claves exactas. N3 (ALTO): copia que devuelve precio_m2 -> FALLO.
+B4. Filtro D26.7 en POST /visits: MAX_TEXTO_VISITA = 300, emails y
+    teléfonos con 422 (función compartida en app/schemas/common.py, que la
+    rama 2 reutilizará). check_visits_http (hoy prueba 1000: cambia el
+    contrato) y check_texto_agente_service (separadores, falsos positivos
+    conocidos). N4 (ALTO): tres copias, sin la regex de email, sin la de
+    teléfono y sin el límite -> FALLO cada una.
+B5-0. Fechas propias en los scripts que crean visitas (C7, P21), sin cambio
+    de comportamiento del código: los mismos recuentos que hoy.
+B5. Disponibilidad (D31, sección 10.3) en app/services/reglas_visita.py:
+    una función, usada por /visits y, si P16 y P17 = sí, por
+    /resultados-llamada y su alias.
+    check_disponibilidad_service: solapes con bordes (una visita de 10:00 a
+    11:00 deja libre las 11:00 y ocupa las 10:59), días del cambio de hora
+    (25/10/2026 y 28/03/2027), franjas, inicios en el pasado nunca
+    ofrecidos, la visita propia excluida (repetición, sustitución,
+    confirmar_hora, C8).
+    check_visits_http y check_resultados_llamada_http: 409 hueco_ocupado con
+    huecos_libres; mensaje sin ids, nombres ni horas de fin ajenas; 10
+    peticiones simultáneas de 10 oportunidades al mismo hueco -> un 201,
+    nueve 409, cero 500; una solicitud que SOLAPA sin coincidir en el inicio
+    -> 409; /visits contra una confirmada de administración y al revés.
+    N5 (ALTO): sin el bloqueo -> más de un 201 o un 500 (si la carrera no se
+    reproduce en 3 repeticiones, se documenta como no detectable por este
+    medio, como la N6 de gate-avisos). N6 (ALTO): solo misma hora de inicio,
+    sin solapes -> FALLO. N7 (ALTO): intervalo cerrado [] en el borde ->
+    FALLO. N8 (ALTO): mensaje con datos de otra visita -> FALLO. N9 (ALTO):
+    /resultados-llamada sin la comprobación -> FALLO (si P16).
+C.  Regresión (los 15 scripts que crean visitas, los de MCP y el de sesión)
+    y suite completa en UNA pasada válida (regla de suspensión).
+D.  Adenda (filas 3, 4, 6 y 10; secciones 5.3, 5.4, 5.5, 5.10; MCP; nota de
+    P14), docs/Contrato_Formulario_Llamadas.md (409 hueco_ocupado),
+    CLAUDE.md (con C1) y prompts/agente2_asesor.md.
+Merge (confirmación de Gabi, --ff-only) y después paso13b (CHECK de
+texto_cliente a 1..300; medir antes).
 
-En n8n, después del merge (el 8000 es el uvicorn de main):
-N-1 RAM "antes". N-2 Agente 1 con resumen. N-3 router + Agente 2 +
-herramientas + memoria. N-4 WF2 con resumen (P8). N-5 RAM "después".
-N-6 Calendar (P10, tras el formulario ampliado).
-Prueba de prompts (D28.1), guion manual de unas 10 conversaciones, con la
-prueba en el registro de ejecución de n8n (la línea de la tool, nunca lo
-que el agente dice, D16): dicta su teléfono en la descripción (el resumen no
-lo lleva); pide precio en un caso con Gate (mensaje fijo, sin cifra); plazo
-de baño sin cambios (2-3 semanas) y de integral (lo da un técnico); pide
-visita un sábado y fuera de franja (explica el 422 de negocio); no llama a
-la tool sin "sí"; intenta "confirma tú mi visita" (no tiene con qué).
-N5 (ALTO: el agente con la llave de administración): un script que lee el
-JSON saneado del flujo del chat y da FALLO si algún nodo del Agente 2 usa
-la credencial de X-Gate-Secret; negativo con una copia del JSON que la usa.
+En n8n, después del merge (el 8000 es el uvicorn de main): N-1 RAM "antes";
+N-2 router (P5: mensaje fijo con Gate, 'perdida' y 'ganada') + Agente 2 +
+herramientas + Simple Memory; N-3 RAM "después" (criterio P12). Prueba de
+prompts, guion manual de unas 10 conversaciones, con la prueba en el
+registro de ejecución de n8n (la línea de la tool, D16): precio con Gate
+(mensaje fijo); plazo de baño sin cambios y de integral; visita un sábado y
+fuera de franja; hueco ocupado (ofrece los libres, vuelve a pedir
+confirmación y llama otra vez); dicta su teléfono en el texto de la visita
+(422 y reescribe sin preguntar); no llama a la tool sin "sí"; "confirma tú
+mi visita" (no tiene con qué).
+N10 (ALTO): script que lee el JSON saneado del flujo del chat y da FALLO si
+un nodo del Agente 2 usa la credencial de X-Gate-Secret o si el MCP Client
+expone calculate_estimate; negativo con una copia del JSON que la usa.
 
 
 ================================================================
@@ -307,6 +325,13 @@ borrado y cambio automático de eventos (si P11 = N1); que el Agente 2 amplíe
 el resumen (P7); detección de direcciones y datos de salud (R1); RAG y fotos
 en el asesor (D18.1); 'aplazar' y registro de intentos (D29.1, D24.4).
 request_missing_information(): nunca diseñada; P14.
+[Nota 2026-10-12] N0, rama 1: sección 10.2. N0, rama 2: el resumen de
+D28.1. N0, fuera del repositorio: Calendar como Fase 2 del formulario (solo
+creación, P10 = B, P11). D31 trae a N0 la comprobación de huecos contra la
+tabla visitas (revisa D18.6 en esa parte); siguen en N1 la disponibilidad
+leída de Google Calendar, la tool huecos_libres(fecha) (P18) y la
+restricción de exclusión como segunda barrera (P15).
+request_missing_information(): fuera de N0 (P14).
 
 
 ================================================================
@@ -342,3 +367,148 @@ P13. ¿Backend en una sola rama (excepción a "un endpoint por rama")?
     Recomendación: sí, por D28.1; un commit por bloque.
 P14. ¿request_missing_information()? Recomendación: sacarla de N0 con una
     nota en la Adenda (el Agente 1 ya pide lo que falta en la conversación).
+
+
+================================================================
+10. NOTA 2026-10-12: DECISIONES DEL BLOQUE A (revisión del tutor, aceptada
+    por Gabi) Y D31
+================================================================
+10.1 Respuestas
+  P1 columna nueva leads.resumen_solicitud. P2 sí. P3 300; longitud en
+  Pydantic y CHECK; emails y teléfonos solo en Pydantic. P4 A. P5 mensaje
+  fijo. P6 Simple Memory. P7 no. P8 sí. P9 sí. P10 B (Fase 2 del
+  formulario, sección 5). P11 a mano en N0. P12 aceptado. P14 fuera de N0,
+  con nota en la Adenda (Bloque D).
+  P13 = NO: dos ramas.
+
+10.2 Reparto en dos ramas
+  RAMA 1 (esta, feat/n0-agente2): contexto en GET /leads/session (reforma +
+  plazo_orientativo); filtro D26.7 sobre visits.texto_cliente (MAX 300;
+  paso13b después del merge); get_business_rules + 6 filas de plazos
+  (paso13); disponibilidad D31 (10.3). Y el Agente 2 en n8n.
+  RAMA 2 (después): resumen de D28.1 (P1, P2, P8): leads.resumen_solicitud,
+  POST /leads, ficha, GET /gate-avisos y la plantilla de WF2; y el Agente 1
+  que lo escribe (4.5).
+  Fuera de las dos: Google Calendar (Fase 2 del formulario en n8n).
+
+10.3 D31 — POST /visits comprueba que el hueco esté libre (revisa D18.6;
+     el documento lo redacta el tutor)
+  Fijado por la decisión: un solo técnico; una visita OCUPA si está
+  'solicitada' o 'confirmada'; ocupa [inicio, inicio + duracion_visita_min);
+  cuentan los SOLAPES, no solo el mismo inicio; si está ocupado, 409
+  hueco_ocupado con un mensaje que lista los huecos libres de ese día según
+  las franjas y la duración, sin datos de otros clientes.
+
+  Mediciones (solo lectura, 2026-10-12):
+  M5. Visitas: 1 en total, la 538 (oportunidad 1525), 'confirmada', el
+      13/10/2026 a las 11:00 de Madrid. 0 pares de visitas activas que se
+      solapen. duracion_visita_min = 60.
+  M6. En pg_proc, timestamptz + interval (timestamptz_pl_interval) es
+      STABLE y tstzrange(...) es IMMUTABLE: una restricción de exclusión no
+      puede calcular el fin con "+ interval"; necesitaría una columna con el
+      fin guardado. btree_gist está disponible y sin instalar (no hace falta
+      con un solo técnico). Postgres 17.6.
+  M7. 15 scripts check_*.py crean visitas (por HTTP o con INSERT directo),
+      casi todos en fechas cercanas (p. ej. "el próximo lunes" en
+      check_visits_http). La 538 es un martes a las 11:00: con D31, un
+      script que pida ese hueco recibiría 409 por un dato REAL.
+
+  C7. Con D31, los scripts dejan de ser independientes entre sí y de los
+      datos reales: dos scripts (o uno frente a una visita de Gabi) que usen
+      el mismo hueco fallarían según el orden. Se resuelve ANTES de B5
+      (B5-0, P21).
+  C8. confirmar_hora pasa a 'confirmada' una visita que ya ocupa su hueco: la
+      comprobación excluye la visita propia (y, en la sustitución de /visits
+      y en otra_hora, la que se cancela en la misma transacción).
+  C9. El alias POST /gate-decisions lo usa el formulario PUBLICADO. Si la
+      comprobación entra en /resultados-llamada y no en el alias,
+      administración podría seguir reservando dos veces desde el formulario
+      de hoy (P17).
+  R5. Una solicitud del chat bloquea su hueco aunque nadie la confirme.
+      Lo limitan la regla de una visita activa por oportunidad y que antes
+      hay que completar la captura y el cálculo. Limitación documentada.
+  R6. Una escritura a mano en la base de datos se salta cualquier
+      comprobación que no sea una restricción (ver (a)).
+
+  (a) Dos peticiones simultáneas al mismo hueco: un 201 y un 409, nunca un
+      500 ni dos 201 (P15).
+      A. Restricción de exclusión: EXCLUDE USING gist (tstzrange(inicio,
+         fin, '[)') WITH &&) WHERE estado IN ('solicitada','confirmada'). La
+         garantía la da la base de datos, también ante SQL a mano (R6).
+         Contras: exige una columna visitas.fecha_fin escrita por el código
+         (M6); expand/contract (main no la escribe: la restricción solo
+         después del merge); la violación (ExclusionViolation) hay que
+         traducirla a 409 o sale un 500, y ese 409 necesita además la
+         consulta de huecos libres; los INSERT directos de los scripts (M7)
+         tendrían que rellenarla.
+      B. Bloqueo por DÍA dentro de la transacción (pg_advisory_xact_lock con
+         una clave fija del proyecto y la fecha), tomado DESPUÉS del FOR
+         UPDATE de la oportunidad (mismo orden en los dos servicios: sin
+         interbloqueos), y luego la consulta de solapes. Se libera solo al
+         terminar la transacción (válido con Supavisor en modo Session). Sin
+         migración; el 409 sale de una consulta normal. Contra: solo protege
+         a quien toma el bloqueo (R6), así que la función compartida debe
+         ser el único camino.
+      C. SERIALIZABLE: el perdedor recibe un error de serialización que hay
+         que reintentar o acaba en 500; más complejo y difícil de probar.
+      Recomendación: B en N0; A como segunda barrera en N1, anotada con su
+      coste.
+  (b) POST /resultados-llamada (visita_acordada, otra_hora) con la MISMA
+      comprobación y la misma función (P16). Sin ella, administración puede
+      reservar dos veces el mismo hueco, justo lo que D31 quiere impedir.
+      Alternativas: solo un aviso sin bloquear (deja pasar dobles reservas)
+      o nada (dos caminos con reglas distintas). Recomendación: sí, la misma
+      función (coincide con la del tutor), con el 409 explicado en
+      Contrato_Formulario_Llamadas.md; confirmar_hora solo si su hueco choca
+      con OTRA visita activa (C8).
+  (c) Contrato de solicitar_visita y el agente ante el 409 (P18).
+      Entrada sin cambios (lead_token, fecha, hora, texto_cliente). 409:
+      {"detail": {"motivo": "hueco_ocupado", "mensaje": "...",
+      "huecos_libres": ["09:30", "12:30", ...]}}: horas de inicio de ESE
+      día, ya en el futuro; lista vacía si no queda ninguna. El agente dice
+      que esa hora no está disponible, ofrece las libres (o pide otro día si
+      la lista está vacía), vuelve a pedir confirmación y llama otra vez; un
+      segundo 409 por carrera se trata igual.
+      Alternativas: una tool de solo lectura huecos_libres(fecha) para
+      ofrecer antes de pedir (mejor experiencia, pero otra tool y otro
+      endpoint: N1); o solo el mensaje en texto (el agente tendría que sacar
+      las horas de una frase). Recomendación: el 409 con la lista; la tool,
+      N1.
+  (d) Inicios fijos o cualquier hora (C7 de la Adenda 5.4) (P19).
+      A. Cualquier HH:MM válida, y el 409 ofrece TRAMOS libres ("de 9:30 a
+         11:00"): exacto, pero el cliente elige dentro de un tramo y el
+         agente tiene que calcular el fin.
+      B. Rejilla OBLIGATORIA cada duracion_visita_min desde el inicio de la
+         franja (08:30, 09:30...): sencilla, pero cambia el contrato de
+         /visits y /resultados-llamada (422 nuevo), y la 538 (11:00) queda
+         fuera de la rejilla y ocupa dos huecos.
+      C. Rejilla solo para OFRECER: se piden horas válidas como hoy, y el 409
+         ofrece inicios cada paso_huecos_min (regla nueva, 30, en paso13) que
+         no solapen. Sin 422 nuevo; la 538 bloquea 10:30, 11:00 y 11:30.
+      Recomendación: C.
+
+10.4 Preguntas nuevas
+P15. ¿Cómo se evita la doble reserva simultánea? Recomendación: bloqueo por
+     día (pg_advisory_xact_lock) + consulta de solapes en una función
+     compartida; restricción de exclusión en N1 (10.3 a).
+P16. ¿POST /resultados-llamada (visita_acordada, otra_hora) hace la misma
+     comprobación? Recomendación: sí, con la misma función; confirmar_hora
+     solo frente a OTRAS visitas.
+P17. ¿También el alias POST /gate-decisions (formulario publicado)?
+     Recomendación: sí: es la misma función del servicio y, sin ello, el
+     formulario de hoy permite la doble reserva. Su contrato gana el 409
+     hueco_ocupado (cambia check_gate_decisions_http; nota en la Adenda 5.5).
+P18. ¿Forma del 409? Recomendación: {motivo, mensaje, huecos_libres} con las
+     horas de inicio de ese día; sin tool nueva en N0.
+P19. ¿Inicios fijos? Recomendación: rejilla solo para ofrecer, con la regla
+     nueva paso_huecos_min = 30 en paso13 (10.3 d, C).
+P20. ¿Qué pasa con visitas activas que ya se solapen (hoy 0, M5)?
+     Recomendación: no se tocan; la comprobación solo mira lo que se crea o
+     se confirma.
+P21. ¿Fechas de los scripts (C7)? Recomendación: cada script usa su propia
+     semana lejana (una tabla script -> semana en el plan, desde la semana
+     +30) y, antes de crear, comprueba que el hueco esté libre; si lo ocupa
+     una visita ajena, FALLO con explicación y nunca borra (regla de
+     borrados). Va en B5-0, antes de D31.
+P22. ¿Se acepta R5 (una solicitud sin confirmar bloquea su hueco)?
+     Recomendación: sí, documentada en la Adenda 5.4.
