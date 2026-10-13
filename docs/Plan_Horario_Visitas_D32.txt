@@ -5,6 +5,9 @@ disponibilidad AL OFRECER: consulta para el formulario y tool del Agente 2)
 Documento de plan · Nivel N0 · 2026-10-13 · Rama feat/n0-horario-visitas
 (desde main = origin/main = 258ccf3)
 Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+[Actualizado 2026-10-13: plan APROBADO por el tutor (revisión de 20ba9aa)
+con respuestas y correcciones en la sección 11, que MANDA sobre las
+secciones 1-9 donde se contradigan (P4 cambia: el modo días empieza HOY).]
 
 Fuentes leídas: CLAUDE.md; docs/Plan_Agente2_Calendar.txt (D31 en 10.3, P19,
 secciones 11 y 12); docs/Contrato_Formulario_Llamadas.md; el código de app/
@@ -116,6 +119,8 @@ C5. "Solo futuras" y "desde mañana": el modo días empieza MAÑANA (texto del
     tutor), pero validar_fecha acepta HOY a una hora posterior a now(). El
     modo un día con la fecha de hoy devuelve las horas de hoy aún futuras
     (coherente con la validación). Ver P4.
+    [Nota 2026-10-13: superado por P4 de la sección 11: el modo días
+    empieza HOY, con solo las horas posteriores a now().]
 C6. check_listado_llamadas_http inserta por SQL visitas ACTIVAS en el
     próximo día laborable REAL (E-0900, E-1000, E-ultimo...; líneas 752-772)
     mientras dura su ejecución (~1 min). Con D31 ya ocupaban hueco; con D32,
@@ -166,7 +171,7 @@ C6. check_listado_llamadas_http inserta por SQL visitas ACTIVAS en el
     siguen dando fuera_de_franja (todas quedan fuera de la franja) y el
     motivo nuevo solo sale para horas dentro de la franja pero no en la
     rejilla (10:00, 12:30, 19:00...). Mensaje: "Las visitas empiezan a horas
-    fijas: mañana 08:30, 09:45, 11:00 o 12:15; tarde 17:00 o 18:15. Las
+    fijas: mañana 08:30, 09:45, 11:00 o 12:15; tarde 17:00 o 18:15. La
     hora 10:00 no es una de ellas." (las horas, de rejilla(), nunca
     escritas).
     detail: {motivo, mensaje, horas_validas: {"manana": [...], "tarde":
@@ -232,7 +237,9 @@ C6. check_listado_llamadas_http inserta por SQL visitas ACTIVAS en el
       GET /huecos-libres?fecha=AAAA-MM-DD -> modo un día
     Cualquier otro parámetro: 422 (extra="forbid" en el modelo de la query).
 
-3.3 Modo días: los próximos dias_oferta_visita (10) días LABORABLES desde
+3.3 [Nota 2026-10-13: "desde MAÑANA" queda sustituido por "desde HOY,
+    con solo las horas posteriores a now()" (P4 de la sección 11).]
+    Modo días: los próximos dias_oferta_visita (10) días LABORABLES desde
     MAÑANA que tengan al menos una hora libre (P6, interpretación A: se
     busca más allá de los 10 primeros laborables si hay días completos,
     hasta un tope de 60 laborables, para que el desplegable tenga siempre
@@ -356,6 +363,9 @@ C6. check_listado_llamadas_http inserta por SQL visitas ACTIVAS en el
       (b) un "Form Ending" con "Redirect to URL" a la URL del propio
           formulario con ?oportunidad_id=... (una ejecución nueva que lo
           recalcula todo; se pierde el informe).
+    [Nota 2026-10-13: se elige (a), el bucle dentro de la misma ejecución;
+    (b) se descarta (pierde el informe y reinicia). Corrección 2 de la
+    sección 11.]
     El backend vale igual para las dos: cada página llama a la consulta y
     el POST final revalida todo (409 si la cogieron entre la página "Hora"
     y el envío; el formulario enseña el 409 con su lista y vuelve a "Día").
@@ -573,6 +583,9 @@ R6. El bucle de n8n (4.3): volver a una página anterior no está
     documentado. Se elige entre (a) y (b) en n8n; el backend no cambia.
 R7. C6: los scripts que insertan visitas activas en días reales cambian la
     oferta real durante su ejecución (~1 min).
+    [Nota 2026-10-13, P10 de la sección 11: la fase 2 se ejecuta con n8n
+    CERRADO, así que nadie usa el formulario ni el chat mientras existen
+    esas visitas temporales: no afecta a nadie y no se cambia.]
 R8. El LLM inventa una hora a partir de las franjas de get_business_rules
     (10:00): 422 fuera_de_rejilla con horas_validas, y el prompt le dice que
     solo ofrezca horas de consultar_huecos_libres (P9 / punto 10).
@@ -641,3 +654,49 @@ P12. Nombres de las reglas nuevas: desplazamiento_min y
 10. HASHES DE LA RAMA feat/n0-horario-visitas (desde main 258ccf3)
 ================================================================
   A   (el commit de este plan)
+
+
+================================================================
+11. NOTA 2026-10-13: REVISIÓN DEL TUTOR (plan APROBADO sobre 20ba9aa)
+================================================================
+11.1 Respuestas
+  P1  fuera_de_rejilla.
+  P2  Sí: horas_validas por franja {"manana": [...], "tarde": [...]}.
+  P3  No cambia: huecos_libres del 409 sigue siendo una lista plana.
+  P4  CAMBIA: el modo días empieza HOY (solo horas posteriores a now()), no
+      mañana. Motivo: D19.6 dice "sin antelación mínima" y POST /visits
+      acepta hoy; ofrecer menos de lo que se puede reservar rompe el
+      principio de D32. Corrige C5, 3.3 y las pruebas (T1, T2 y T4 cuentan
+      también el día de hoy; un hoy sin horas futuras, o en fin de semana,
+      no aparece).
+  P5  GET /huecos-libres (?fecha= para el modo un día).
+  P6  A: 10 días CON hueco, buscando hasta 60 laborables.
+  P7  200 con sin_horas_motivo.
+  P8  No. D19.6: sin límite de días; no es deuda (no va a pendientes).
+  P9  B: get_business_rules no devuelve la rejilla; el agente ofrece solo
+      lo de consultar_huecos_libres.
+  P10 No. La fase 2 se ejecuta con n8n cerrado: nadie usa el formulario ni
+      el chat mientras existen esas visitas temporales (R7).
+  P11 No.
+  P12 Se mantienen desplazamiento_min y dias_oferta_visita.
+
+11.2 Correcciones
+  1. Errata del mensaje de 2.3: "Las hora" -> "La hora" (corregida en 2.3).
+  2. 4.3: se elige la opción (a), bucle dentro de la misma ejecución; la (b)
+     se descarta (pierde el informe y reinicia). El 409 hueco_ocupado en el
+     formulario también vuelve a la página "Día" (cosa de n8n; se escribe en
+     el contrato, Bloque D).
+
+11.3 Ejecución (para cerrar Docker UNA sola vez)
+  Fase 1 (Docker abierto, sin nada contra la base de datos): B1 (paso14, su
+  vuelta atrás y check_migracion_d32, escrita para fallar antes), B2, B3 y
+  B4 con los scripts de 6.1 y los nuevos; un commit por bloque "(SIN
+  ejecutar)"; push al terminar la fase 1.
+  Fase 2: (1) regresión de main SIN el código de la rama (los scripts que
+  crean visitas, desde una copia de 258ccf3); (2) check_migracion_d32 FALLA;
+  (3) frase literal "confirmo la migración paso14"; (4) paso14,
+  check_migracion_d32 OK e idempotente; (5) B2, B3 y B4 positivas, T1-T4;
+  (6) N1-N14 sobre copias, de una en una; (7) C: suite completa, regresión
+  de todos los scripts que crean visitas, datos reales iguales (foto y
+  SHA-256), Kernel-Power. El Bloque D, solo después de la revisión de la
+  fase 2.
