@@ -35,6 +35,10 @@ from app.api import ficha_oportunidad as ficha_oportunidad_api
 # el 2026-10-08, el séptimo; plan docs/Plan_Endpoint_Create_Followup_Task.txt).
 from app.api import followup_tasks as followup_tasks_api
 from app.api import gate_decisions as gate_decisions_api
+# Router de GET /huecos-libres: las horas libres de visita para el formulario
+# de n8n, solo lectura (desde el 2026-10-13, el décimo; D32, plan
+# docs/Plan_Horario_Visitas_D32.txt).
+from app.api import huecos_libres as huecos_libres_api
 from app.api import leads as leads_api
 # Router de GET /llamadas-del-dia: la lista diaria de llamadas de WF3, solo
 # lectura (desde el 2026-10-07, el sexto; plan
@@ -169,6 +173,13 @@ app.include_router(ficha_oportunidad_api.router)
 # administración (X-Gate-Secret). POST /gate-decisions (cuarto router) es su
 # alias con el contrato antiguo, hasta que el formulario se actualice.
 app.include_router(resultados_llamada_api.router)
+
+# Décimo router: GET /huecos-libres (app/api/huecos_libres.py). Solo REST y
+# de SOLO LECTURA: lo llama el formulario de n8n para ofrecer solo horas
+# libres al registrar una visita (D32). Llave de administración
+# (X-Gate-Secret) en el propio router. El Agente 2 tiene la misma consulta
+# como tool MCP (consultar_huecos_libres), con las mismas funciones.
+app.include_router(huecos_libres_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna

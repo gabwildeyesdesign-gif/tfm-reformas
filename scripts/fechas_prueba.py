@@ -59,6 +59,9 @@ SCRIPTS = (
     "check_ficha_oportunidad_http",
     "check_followup_tasks_http",
     "check_disponibilidad_service",
+    # D32 (2026-10-13): los dos de GET /huecos-libres.
+    "check_huecos_libres_service",
+    "check_huecos_libres_http",
 )
 
 # Los estados de visita que ocupan un hueco (D31).
