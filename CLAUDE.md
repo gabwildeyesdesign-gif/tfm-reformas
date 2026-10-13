@@ -625,6 +625,15 @@ SOLO REST.
 > `--ff-only`. Después del merge: reiniciar el uvicorn del 8000 SIN
 > --reload, paso13b, y en n8n el Agente 2 (router, prompt, tools y memoria).
 > La rama 2 (resumen de D28.1) va después, en su propia rama.
+>
+> **(Nota 2026-10-13: el párrafo anterior está superado.)** feat/n0-agente2
+> está **integrada en `main` (9f4ddfc)**, la rama ya no existe, y el uvicorn
+> del 8000 se reinició con ese código. **paso13b APLICADA el 2026-10-13 a las
+> 20:57:21** (CHECK de texto_cliente a 1..300), en la rama corta
+> `fix/n0-paso13b`, **pendiente de merge** (solo scripts, documentación y
+> docs/schema_actual.sql; detalle en la sección 11.2 del plan). Misma regla
+> de siempre: no hacer merge sin la confirmación explícita de Gabi, y siempre
+> con `--ff-only`.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -991,6 +1000,9 @@ bloque de 4 semanas por script desde la semana +30, y exigir_libres: si una
 visita AJENA ocupa sus huecos, FALLO y se para sin borrar nada). Además,
 check_migracion_paso13b (nuevo) FALLA a propósito hasta que se aplique
 paso13b después del merge: es su prueba en negativo.)
+(Nota 2026-10-13: paso13b ya está APLICADA; check_migracion_paso13b da 6/6 y
+deja de fallar. La suite sigue teniendo 48 scripts, sin ningún fallo
+esperado.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1215,6 +1227,17 @@ Pendientes nuevos:
     GET /gate-avisos, plantilla de WF2 y el Agente 1 que lo escribe).
   - N1: la restricción de exclusión de visitas (segunda barrera de D31, con
     una columna de fin guardado) y el calendario externo.
+(Nota 2026-10-13, rama fix/n0-paso13b.) feat/n0-agente2 está integrada en
+main (9f4ddfc) y el uvicorn del 8000 ya se reinició con ese código (Gabi).
+paso13b está APLICADA el 2026-10-13 a las 20:57:21 (tras "confirmo la
+migración paso13b"): el CHECK chk_visitas_texto_cliente_longitud es ahora de
+1..300, como MAX_TEXTO_VISITA. check_migracion_paso13b 4/6 antes y 6/6
+después; check_migracion_visitas (300/301) 28/28; CASO 20 de
+check_listado_llamadas_http (300) 109/109; regresión de los scripts que
+crean visitas sin fallos; docs/schema_actual.sql regenerado. Detalle en la
+nota de la sección 11.2 del plan del Agente 2. Pendiente menor: el
+comentario de app/schemas/listado_llamadas.py sobre texto_cliente sigue
+diciendo "1..1000 caracteres".
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas

@@ -1,7 +1,7 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-10-11 16:20:43 UTC
+-- Generado por scripts/dump_schema.py el 2026-10-13 19:08:17 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
@@ -44,7 +44,7 @@ CREATE TABLE leads (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: logs   (25 filas en el momento del volcado)
+-- Tabla: logs   (28 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE logs (
     id                       SERIAL NOT NULL,
@@ -99,7 +99,7 @@ CREATE TABLE presupuestos (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: reglas_negocio   (13 filas en el momento del volcado)
+-- Tabla: reglas_negocio   (20 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE reglas_negocio (
     id                       SERIAL NOT NULL,
@@ -143,7 +143,7 @@ CREATE TABLE umbrales_gate (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: visitas   (1 filas en el momento del volcado)
+-- Tabla: visitas   (3 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE visitas (
     id                       SERIAL NOT NULL,
@@ -156,12 +156,12 @@ CREATE TABLE visitas (
     CONSTRAINT visitas_oportunidad_id_fkey FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
     CONSTRAINT visitas_pkey PRIMARY KEY (id),
     CONSTRAINT visitas_id_oportunidad_id_key UNIQUE (id, oportunidad_id),
-    CONSTRAINT chk_visitas_texto_cliente_longitud CHECK ((char_length(texto_cliente) >= 1) AND (char_length(texto_cliente) <= 1000)),
+    CONSTRAINT chk_visitas_texto_cliente_longitud CHECK ((char_length(texto_cliente) >= 1) AND (char_length(texto_cliente) <= 300)),
     CONSTRAINT visitas_estado_check CHECK ((estado)::text = ANY ((ARRAY['solicitada'::character varying, 'confirmada'::character varying, 'completada'::character varying, 'cancelada'::character varying])::text[]))
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: decisiones_gate   (6 filas en el momento del volcado)
+-- Tabla: decisiones_gate   (9 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE decisiones_gate (
     id                       SERIAL NOT NULL,

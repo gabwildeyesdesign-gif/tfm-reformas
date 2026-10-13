@@ -853,6 +853,39 @@ Precisiones del tutor:
        check_listado_llamadas_http (texto de 1.000 por SQL -> 300). Después,
        regresión de los scripts que crean visitas (lección de B5).
     6. docs/schema_actual.sql: regenerarlo con scripts/dump_schema.py.
+  [Nota 2026-10-13: paso13b APLICADA el 2026-10-13 a las 20:57:21, en la
+  rama corta fix/n0-paso13b (desde main 9f4ddfc, ya con feat/n0-agente2
+  integrada y el uvicorn del 8000 reiniciado por Gabi). Fase 2 con 2,16 GB
+  libres, Docker/n8n, Chrome y Edge cerrados y wsl --shutdown; ningún
+  Kernel-Power 506/507 entre 20:53 y 21:10. Por pasos:
+    1. check_migracion_paso13b ANTES: 4/6, exit 1 (FALLO en la definición,
+       que decía <= 1000, y en "301 caracteres -> rechazado": se aceptaba).
+    2. Frase literal de Gabi: "confirmo la migración paso13b".
+    3. Migración: FOTO ANTES 3 visitas, la más larga 77, 0 por encima de
+       300; ALTER TABLE; FOTO DESPUÉS "<= 300"; commit() ejecutado.
+    4. check_migracion_paso13b DESPUÉS: 6/6. La migración otra vez: "el
+       CHECK ya es de 1..300: no se toca nada" (exit 0, idempotente).
+    5. check_migracion_visitas 28/28 (301 rechazado, 300 y 300 "á"
+       aceptados) y check_listado_llamadas_http 109/109 (CASO 20 con 300).
+       Regresión de los scripts que crean visitas: check_visits_service
+       16/16, check_visits_http 90/90, check_disponibilidad_service 35/35,
+       check_texto_agente_service 44/44, check_resultados_llamada_service
+       37/37, check_resultados_llamada_http 183/183,
+       check_gate_decisions_service 14/14, check_gate_decisions_http
+       124/124, check_aviso_gate_http 75/75, check_ficha_oportunidad_http
+       69/69, check_followup_tasks_http 125/125,
+       check_listado_llamadas_service 69/69, check_migracion_decisiones_gate
+       38/38, check_migracion_iva_y_seguimiento 16/16 y
+       check_migracion_resultado_llamadas 50/50.
+    6. docs/schema_actual.sql regenerado: el CHECK pasa de "<= 1000" a
+       "<= 300" (el resto del diff son la fecha y los recuentos de filas);
+       check_schema_actual_ejecutable 10/10.
+  Datos reales iguales antes y después (visitas 538, 3069 y 3070
+  confirmadas; reglas_negocio 20 filas): foto con el mismo SHA-256 que en
+  el Bloque C, a2358c1a…e768. Desde ahora check_migracion_paso13b ya no
+  falla: la suite vuelve a no tener ningún fallo esperado. Queda
+  desfasado un comentario de app/schemas/listado_llamadas.py ("1..1000
+  caracteres"); no se toca en esta rama (git diff -- app/ vacío).]
 
 11.3 Pendiente después del merge, fuera de esta rama: la rama 2 (resumen
   de D28.1); los pasos de n8n del Agente 2 (sección 7) con N10; la lista de
