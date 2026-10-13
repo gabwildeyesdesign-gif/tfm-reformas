@@ -35,8 +35,8 @@ docs/Plan_Resumen_Lista_Diaria.txt, 8.2.) Cada elemento lleva el objeto
 visita, texto_cliente. Cada lead propio usa un m2 y un nivel DISTINTOS y
 cada visita propia un texto propio con la marca RUN, para que leer el dato
 de otro lead u otra visita no pase desapercibido. CASOS nuevos: 18 (valores
-del resumen en los cinco apartados), 19 (nulls), 20 (texto de 1.000
-caracteres) y 21 (ningún texto de visita ajeno al elemento). Los números son
+del resumen en los cinco apartados), 19 (nulls), 20 (texto de 300
+caracteres, el máximo desde paso13b; antes, 1.000) y 21 (ningún texto de visita ajeno al elemento). Los números son
 identificadores, no el orden de salida: 18-21 se ejecutan antes del 16.
 """
 
@@ -771,11 +771,12 @@ try:
                     f"texto E-sustituida cancelada {RUN}")
     insertar_visita(E_SUST, datetime.combine(DIA, hora_del_dia(11, 30), tzinfo=MADRID), "solicitada",
                     f"texto E-sustituida activa {RUN}")
-    # E-largo (CASO 20): texto de 1.000 caracteres EXACTOS (el máximo del
-    # CHECK) con tildes, eñe, comillas dobles y un salto de línea.
+    # E-largo (CASO 20): texto de 300 caracteres EXACTOS (el máximo del
+    # CHECK desde paso13b, 2026-10-13; antes 1.000) con tildes, eñe,
+    # comillas dobles y un salto de línea.
     base_largo = f'Texto largo {RUN}: tildes áéíóú, eñe ñÑ, comillas "dobles" y un salto\nde línea. '
-    # Se rellena con una palabra con eñe y tilde, y se corta a 1.000 justos.
-    TEXTO_LARGO = (base_largo + "ñandú " * 200)[:1000]
+    # Se rellena con una palabra con eñe y tilde, y se corta a 300 justos.
+    TEXTO_LARGO = (base_largo + "ñandú " * 200)[:300]
     E_LARGO = caso("E-largo", gate=False)[0]
     poner_estado(E_LARGO, "visita_agendada")
     insertar_visita(E_LARGO, datetime.combine(DIA, hora_del_dia(11), tzinfo=MADRID), "solicitada", TEXTO_LARGO)
@@ -1256,12 +1257,14 @@ try:
               and solicitud_coincide(e.get("solicitud"), SOLICITUDES[OP_L]), f"({e.get('solicitud')})")
 
     # ==================================================================
-    print("\nCASO 20 - texto_cliente de 1.000 caracteres con tildes, eñe, comillas y salto de línea")
+    # El título del caso, con el máximo de paso13b (300).
+    print("\nCASO 20 - texto_cliente de 300 caracteres con tildes, eñe, comillas y salto de línea")
     # ==================================================================
     # El texto llega IDÉNTICO, carácter a carácter, con su longitud máxima.
     t = E.get(E_LARGO, {}).get("texto_cliente")
     comprobar("llega idéntico (comparación exacta)", t == TEXTO_LARGO)
-    comprobar("  y mide 1.000 caracteres", isinstance(t, str) and len(t) == 1000,
+    # Y mide exactamente el máximo del CHECK (300 desde paso13b).
+    comprobar("  y mide 300 caracteres", isinstance(t, str) and len(t) == 300,
               f"({len(t) if isinstance(t, str) else t})")
 
     # ==================================================================

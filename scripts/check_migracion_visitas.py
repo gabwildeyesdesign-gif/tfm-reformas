@@ -226,12 +226,17 @@ try:
                 psycopg2.errors.NotNullViolation, None)
     debe_fallar(cur, "texto_cliente vacío -> rechazado por el CHECK", [visita("solicitada", texto="")],
                 psycopg2.errors.CheckViolation, RESTRICCION_TEXTO)
-    debe_fallar(cur, "texto_cliente de 1001 caracteres -> rechazado", [visita("solicitada", texto="x" * 1001)],
+    # (Nota 2026-10-13: desde paso13b el máximo del CHECK es 300, no 1000;
+    # D26.7, igual que MAX_TEXTO_VISITA de Pydantic. Antes probaba 1000/1001.)
+    # 301 caracteres, uno más que el máximo: el CHECK tiene que rechazarlo.
+    debe_fallar(cur, "texto_cliente de 301 caracteres -> rechazado", [visita("solicitada", texto="x" * 301)],
+                # Rechazado por ESE CHECK, no por otra restricción.
                 psycopg2.errors.CheckViolation, RESTRICCION_TEXTO)
-    debe_aceptar(cur, "texto_cliente de 1000 caracteres -> aceptado", [visita("solicitada", texto="x" * 1000)])
-    # "á" ocupa 2 bytes en UTF-8: si el CHECK contara bytes, 1000 "á"
-    # serían 2000 y se rechazarían. Cuenta caracteres, como Pydantic.
-    debe_aceptar(cur, "1000 caracteres 'á' (2000 bytes) -> aceptado: cuenta caracteres", [visita("solicitada", texto="á" * 1000)])
+    # 300 caracteres, justo el máximo: tiene que aceptarse.
+    debe_aceptar(cur, "texto_cliente de 300 caracteres -> aceptado", [visita("solicitada", texto="x" * 300)])
+    # "á" ocupa 2 bytes en UTF-8: si el CHECK contara bytes, 300 "á"
+    # serían 600 y se rechazarían. Cuenta caracteres, como Pydantic.
+    debe_aceptar(cur, "300 caracteres 'á' (600 bytes) -> aceptado: cuenta caracteres", [visita("solicitada", texto="á" * 300)])
 finally:
     # Deshace TODO: los datos de partida y cualquier resto. Va en finally
     # para que se ejecute aunque una comprobación reviente a mitad.
