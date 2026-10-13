@@ -1,0 +1,643 @@
+REFORMAS INTEGRALES AMEDIDA — TFM
+PLAN: horario de visitas D32 (rejilla de D23.5, desplazamiento y
+disponibilidad AL OFRECER: consulta para el formulario y tool del Agente 2)
+
+Documento de plan · Nivel N0 · 2026-10-13 · Rama feat/n0-horario-visitas
+(desde main = origin/main = 258ccf3)
+Estado: Bloque A (este plan, sin código) PENDIENTE DE REVISIÓN.
+
+Fuentes leídas: CLAUDE.md; docs/Plan_Agente2_Calendar.txt (D31 en 10.3, P19,
+secciones 11 y 12); docs/Contrato_Formulario_Llamadas.md; el código de app/
+(reglas_visita.py, visits_service.py, resultados_llamada_service.py,
+business_rules_service.py, app/api/visits.py, app/mcp_server/server.py,
+app/main.py); los scripts check_*.py y scripts/fechas_prueba.py; la
+documentación oficial del nodo Form de n8n (docs.n8n.io, leída el
+2026-10-13). D23.5 y D32 se citan por el texto del tutor (los documentos de
+D19-D24 siguen sin estar en docs/, ver C1). Lo ya decidido se cita por su
+número y no se copia.
+
+Letras de ESTE plan: M = mediciones en la base de datos real (solo lectura),
+K = hechos del código, C = contradicciones y hallazgos, R = riesgos, N =
+pruebas en negativo, P = preguntas para Gabi (sección 9).
+
+Este prompt SUSTITUYE a los de paso13c y D32 anteriores: la rama
+fix/n0-paso13c NO existe (ni en local ni en GitHub; git branch --list y git
+ls-remote --heads origin, 2026-10-13), así que no había nada que borrar.
+
+
+================================================================
+0. COMPROBACIONES HECHAS PARA ESTE PLAN (solo lectura, 2026-10-13)
+================================================================
+G1. git rev-parse main = origin/main = HEAD = 258ccf3. Las ramas remotas
+    son solo main. Rama feat/n0-horario-visitas creada desde ahí.
+M1. reglas_negocio: 20 filas (22:16:50). Las de visita: visita_manana_inicio
+    _min 510 (08:30), visita_manana_fin_min 810 (13:30), visita_tarde_inicio
+    _min 1020 (17:00), visita_tarde_fin_min 1200 (20:00), duracion_visita_min
+    60, paso_huecos_min 30. NO existen desplazamiento_min ni
+    dias_oferta_visita.
+M2. visitas: 3 filas, las 3 'confirmada' (0 'solicitada'): 538 (13/10 11:00,
+    ya pasada), 3069 (14/10 11:00) y 3070 (15/10 17:00). Las 3 están EN la
+    rejilla de D23.5. Visitas activas futuras: 2.
+M3. La rejilla con los valores de M1 y desplazamiento 15 (paso 75, ver 2.2)
+    da EXACTAMENTE ['08:30', '09:45', '11:00', '12:15', '17:00', '18:15'],
+    las 6 horas de D23.5 (calculada por un script del scratchpad,
+    medir_d32.py; ver la demostración a mano en 2.2).
+M4. Lista de horas escritas en los scripts y fuera de la rejilla (sección
+    6): 290 líneas encontradas por un barrido automático (horas "HH:MM",
+    time(H, M) y hora_del_dia(H, M), y menciones de paso_huecos_min), de las
+    que la sección 6 separa las que importan.
+K1. Quién lee paso_huecos_min (grep en app/ y scripts/, excluidas las
+    migraciones ya ejecutadas):
+      app/services/reglas_visita.py: CLAVE_PASO_HUECOS (línea 56), en
+        CLAVES_REGLAS (59-60), validada en leer_reglas_visita (">0") y usada
+        en huecos_libres ("minuto += reglas[CLAVE_PASO_HUECOS]").
+      INDIRECTOS, porque llaman a leer_reglas_visita, que exige las seis
+      claves: visits_service.py (192), resultados_llamada_service.py (305)
+      y business_rules_service.py (137, get_business_rules). Si la fila se
+      borrara hoy, los TRES darían 503: por eso el borrado va DESPUÉS del
+      merge (sección 5).
+      Scripts: check_disponibilidad_service (S2, S5, S6: 17, 125, 259-293,
+      386), check_visits_service (123, 129), check_visits_http (509, 524,
+      532), check_resultados_llamada_http (825, 838) y
+      check_migracion_agente2 (10, 57: comprueba que la fila existe).
+K2. Orden de comprobaciones de hoy (D31, igual en los tres caminos): forma
+    (422 Pydantic) -> 404 -> estado/Gate (409) -> reglas de fecha (503 y 422:
+    fecha_pasada, fin_de_semana, fuera_de_franja, en validar_fecha) -> las
+    de la visita propia (repetición 200, visita_confirmada, visita_cambiada,
+    misma_hora_pedida, visita_activa_existente) -> hueco_ocupado. En
+    resultados_llamada_service, visita_cambiada y misma_hora_pedida van
+    ANTES de validar_fecha (líneas 312-326) y la repetición (paso 3) antes
+    de todo lo de la fecha.
+K3. confirmar_hora exige que la hora enviada sea la pedida por el cliente
+    (inicio == fecha_pedida, C11 de 4b). Con la rejilla dentro de
+    validar_fecha, una visita 'solicitada' ANTIGUA fuera de la rejilla no
+    se podría confirmar (422): habría que usar otra_hora. Hoy hay 0
+    solicitadas (M2): no afecta a ningún dato real. Ver R3.
+K4. HuecoOcupado lleva huecos_libres (lista "HH:MM"); los adaptadores
+    (app/api/visits.py:100-105 y app/api/resultados_llamada.py) la copian
+    al detail. get_business_rules devuelve visita {dias, manana{inicio,fin},
+    tarde{inicio,fin}, duracion_min}, sin paso ni rejilla.
+K5. Puertos ya usados por los scripts: 8010, 8011, 8012, 8015, 8016, 8018,
+    8019, 8023-8026, 8028, 8029, y 8030/8031 en las copias de la suite.
+    Libres para esta rama: 8032 (HTTP) y 8033 (MCP).
+K6. n8n, nodo Form, "Define Form: Using JSON" (docs.n8n.io, 2026-10-13):
+    cada campo es un objeto con fieldLabel, fieldName, fieldType (checkbox,
+    date, dropdown, email, file, hiddenField, html, number, password, radio,
+    text, textarea), defaultValue, requiredField; las opciones de dropdown y
+    radio van en fieldOptions.values[].option (el VALOR devuelto es el texto
+    de la opción). Literal: "The HTML field doesn't support <script>,
+    <style>, or <input> elements." La documentación NO describe volver a una
+    página anterior; sí "Form Ending" con "Redirect to URL". Ver 4.3 y R6.
+
+
+================================================================
+1. CONTRADICCIONES Y HALLAZGOS
+================================================================
+C1. D23.5 (04/10) y D32 no están en docs/ (D19-D24 siguen solo en el
+    Proyecto de claude.ai, nota de CLAUDE.md del 2026-10-06). Este plan los
+    cita por el texto del tutor; copiarlos a docs/ va en el Bloque D.
+C2. D31 (12/10, plan del Agente 2, 10.3 y P19 = C) dice "se puede pedir
+    cualquier hora válida" y ofrece huecos cada 30 min sin desplazamiento.
+    D23.5 (anterior) fija 6 horas y 15 min de desplazamiento. D32 corrige
+    D31 (error reconocido por el tutor). Nota fechada "revisado por D32" en
+    10.3 y P19 de ese plan (Bloque D); el texto original no se toca.
+C3. Con la rejilla y el desplazamiento, dos horas VÁLIDAS nunca se solapan
+    sin coincidir: entre dos horas de la rejilla hay exactamente
+    duracion + desplazamiento. Los casos de los scripts que piden por la API
+    "una hora que solapa sin coincidir" (10:00 frente a 10:30, 09:01, bordes
+    09:00/11:00) ya NO se pueden hacer por la API: dan 422
+    fuera_de_rejilla. El solape parcial y el desplazamiento se prueban con
+    una visita ANTIGUA puesta por SQL fuera de la rejilla (lo que de verdad
+    puede existir: R3) y con la función pura.
+C4. La disponibilidad solo se ve al GUARDAR (409). D32 la lleva al momento
+    de OFRECER; el 409 hueco_ocupado se queda como red de seguridad frente a
+    dos reservas a la vez (no se quita, ni el bloqueo por día).
+C5. "Solo futuras" y "desde mañana": el modo días empieza MAÑANA (texto del
+    tutor), pero validar_fecha acepta HOY a una hora posterior a now(). El
+    modo un día con la fecha de hoy devuelve las horas de hoy aún futuras
+    (coherente con la validación). Ver P4.
+C6. check_listado_llamadas_http inserta por SQL visitas ACTIVAS en el
+    próximo día laborable REAL (E-0900, E-1000, E-ultimo...; líneas 752-772)
+    mientras dura su ejecución (~1 min). Con D31 ya ocupaban hueco; con D32,
+    además, el modo días y la tool las verían (una de las 10:00, fuera de
+    rejilla, quita las 09:45 y las 11:00 por el desplazamiento). Es previo a
+    esta rama y temporal; se anota (R7), no se cambia sin decisión (P10).
+
+
+================================================================
+2. LA REGLA (backend; todo en app/services/reglas_visita.py)
+================================================================
+2.1 Reglas nuevas en reglas_negocio (migración paso14, solo AÑADE; se puede
+    aplicar en la rama, como paso13, porque main no lee esas claves):
+      desplazamiento_min = 15   minutos entre el fin de una visita y el
+                                inicio de la siguiente (D23.5).
+      dias_oferta_visita = 10   días laborables con hueco que ofrece el
+                                modo días (punto 7a).
+    Validación en leer_reglas_visita, como las demás: entero, 0 <= v <=
+    1440; además desplazamiento_min >= 0 (0 es válido: sin desplazamiento)
+    y dias_oferta_visita entre 1 y 60 (60 = el tope de búsqueda de 3.3; un
+    valor mayor no tendría sentido y haría la consulta más larga). Falta o
+    inválida -> ConfiguracionIncompleta -> 503 con el log de siempre (en
+    POST /visits y /resultados-llamada) y SIN log en la consulta (es de
+    solo lectura, como el listado: 503 con [AVISO] en stderr).
+
+2.2 La rejilla: UNA función pura
+      rejilla(reglas) -> {"manana": [min, ...], "tarde": [min, ...]}
+    Para cada franja: el primer inicio es el inicio de la franja; el
+    siguiente, el anterior + duracion_visita_min + desplazamiento_min;
+    mientras inicio + duracion_visita_min <= fin de la franja (la VISITA
+    entera dentro; el desplazamiento de la última no tiene que caber).
+    Demostración con M1 (paso = 60 + 15 = 75):
+      mañana 510..810: 510 (08:30, fin 570), 585 (09:45, fin 645), 660
+        (11:00, fin 720), 735 (12:15, fin 795 <= 810); el siguiente, 810
+        (13:30), terminaría a las 870 > 810: fuera.
+      tarde 1020..1200: 1020 (17:00, fin 1080), 1095 (18:15, fin 1155 <=
+        1200); el siguiente, 1170 (19:30), terminaría a las 1230 > 1200.
+      Resultado: 08:30, 09:45, 11:00, 12:15, 17:00, 18:15 = D23.5, 6 al día.
+    Una prueba lo comprueba con los valores REALES leídos de la base de
+    datos (no escritos en el script) y otra con valores de mentira.
+    Si mañana cambia una regla (duración 90, por ejemplo), la rejilla se
+    recalcula sola; las visitas ya guardadas no se mueven (R3).
+
+2.3 Hora fuera de la rejilla: 422 de negocio, motivo NUEVO
+    "fuera_de_rejilla" (P1). Va en validar_fecha, DESPUÉS de fuera_de_franja
+    (orden: fecha_pasada -> fin_de_semana -> fuera_de_franja ->
+    fuera_de_rejilla). Así las pruebas de hoy con 08:29, 12:45, 16:59 y 19:30
+    siguen dando fuera_de_franja (todas quedan fuera de la franja) y el
+    motivo nuevo solo sale para horas dentro de la franja pero no en la
+    rejilla (10:00, 12:30, 19:00...). Mensaje: "Las visitas empiezan a horas
+    fijas: mañana 08:30, 09:45, 11:00 o 12:15; tarde 17:00 o 18:15. Las
+    hora 10:00 no es una de ellas." (las horas, de rejilla(), nunca
+    escritas).
+    detail: {motivo, mensaje, horas_validas: {"manana": [...], "tarde":
+    [...]}} (P2). Mismo sitio en los tres caminos (POST /visits, POST
+    /resultados-llamada y el alias), porque los tres llaman a validar_fecha.
+
+2.4 Solape con desplazamiento (revisa la de D31)
+    Dos visitas que empiezan en a y b CHOCAN si entre el fin de una y el
+    inicio de la otra hay MENOS de desplazamiento_min:
+      choca(a, b) <=> a < b + dur + despl  y  b < a + dur + despl
+    (cuentas en UTC, como solapa de D31; igualdad = NO choca: 09:45 tras una
+    de 08:30 deja justo 15). Sustituye a solapa(). Bloqueo por día igual que
+    D31 (pg_advisory_xact_lock(3101, AAAAMMDD), tomado después del FOR
+    UPDATE). La ventana de la consulta SQL se amplía a medianoche - (dur +
+    despl).
+
+2.5 UNA sola función de disponibilidad (prohibido calcularla en dos sitios)
+      disponibilidad(cursor, dias, ahora, reglas, excluir=()) ->
+          {dia: {"manana": ["HH:MM", ...], "tarde": [...]}, ...}
+    Hace UNA consulta (las visitas activas de todos los días pedidos, de
+    min(dias) - (dur+despl) a max(dias) + 1) y, en Python, para cada día:
+    rejilla(reglas), solo laborables, solo candidato > ahora, y sin chocar
+    con ninguna activa (salvo las de excluir). La usan:
+      - la consulta nueva, modo días y modo un día (3);
+      - la tool consultar_huecos_libres (3.5);
+      - comprobar_hueco_libre (el 409): la hora pedida tiene que estar en
+        disponibilidad(cursor, [dia], ahora, reglas, excluir)[dia]; si no,
+        409 hueco_ocupado con huecos_libres = esas mismas horas (aplanadas,
+        P3).
+    La validación de la rejilla (2.3) usa rejilla(reglas), la misma pieza
+    que usa disponibilidad. Así "cada hora ofrecida pasa la validación" es
+    cierto por construcción, y las pruebas lo comprueban por ejecución
+    (N3). Un test con ast (como la S9 del listado) comprueba que solo
+    reglas_visita.py calcula horas (ningún range ni bucle de minutos en los
+    demás archivos de app/).
+
+2.6 paso_huecos_min se retira por expand/contract
+    En la rama (B2): el código deja de leerla (sale de CLAVES_REGLAS; la
+    constante desaparece). La fila se queda en la base de datos: main la
+    sigue leyendo hasta el merge. DESPUÉS del merge (como paso13b), paso14b
+    borra la fila, tras la frase de Gabi "confirmo la migración paso14b",
+    con su comprobación que FALLA antes (la fila existe) y su vuelta atrás
+    (la reinserta con 30). En ese mismo paso cambia check_migracion_agente2
+    (hoy exige que exista). Antes de borrarla, una prueba de la rama (S en
+    B2) borra la fila DENTRO de una transacción con ConexionSinCommit y
+    ROLLBACK y comprueba que leer_reglas_visita no da ningún problema y que
+    get_business_rules responde: es la prueba de que ya nadie la lee.
+
+
+================================================================
+3. LA CONSULTA (SOLO LECTURA) Y LA TOOL
+================================================================
+3.1 Ruta: GET /huecos-libres (P5), décimo include_router, cabecera
+    X-Gate-Secret EN EL ROUTER (como la ficha, P8 de su plan), sin tool MCP
+    en esta ruta (la tool es aparte, 3.5). SET TRANSACTION ISOLATION LEVEL
+    REPEATABLE READ, READ ONLY como primera orden. Sin escribir nada: 503
+    configuracion_incompleta SIN log, con [AVISO] en stderr (como el
+    listado). 401 (sin cabecera, con WEBHOOK_SECRET o con otro valor), 422 de
+    forma (fecha que no es YYYY-MM-DD real, parámetros de más).
+
+3.2 Dos modos, por el parámetro:
+      GET /huecos-libres             -> modo días
+      GET /huecos-libres?fecha=AAAA-MM-DD -> modo un día
+    Cualquier otro parámetro: 422 (extra="forbid" en el modelo de la query).
+
+3.3 Modo días: los próximos dias_oferta_visita (10) días LABORABLES desde
+    MAÑANA que tengan al menos una hora libre (P6, interpretación A: se
+    busca más allá de los 10 primeros laborables si hay días completos,
+    hasta un tope de 60 laborables, para que el desplegable tenga siempre
+    10 días mientras los haya). Los días completos NO aparecen. Con UNA
+    consulta de visitas para toda la ventana (2.5). Respuesta EXACTA:
+
+    {
+      "modo": "dias",
+      "generado_en": "2026-10-14T09:12:03+02:00",
+      "dias": [
+        {
+          "fecha": "2026-10-15",
+          "dia_semana": "jueves",
+          "manana": ["09:45", "11:00"],
+          "tarde": ["18:15"],
+          "num_horas_libres": 3,
+          "etiqueta": "Jueves 15/10 — mañana: 09:45 · 11:00 — tarde: 18:15"
+        },
+        ...
+      ]
+    }
+
+    - fecha: ISO (YYYY-MM-DD), hora de Madrid. dia_semana: en español y en
+      minúscula ("lunes" ... "viernes"), de una tabla propia (strftime("%A")
+      depende del idioma del sistema).
+    - manana / tarde: siempre presentes; lista vacía si esa franja no tiene
+      hora libre ese día (pero el día tiene alguna en la otra).
+    - etiqueta: el texto EXACTO de la opción del desplegable, construido por
+      el backend para que n8n no lo componga (K6: el valor que devuelve el
+      dropdown es el texto de la opción, así que n8n busca el día por
+      etiqueta). Formato: "<Día> <dd>/<mm>" + " — mañana: " + horas unidas
+      por " · " (si hay) + " — tarde: " + horas (si hay). Una franja sin
+      horas no se escribe ("Jueves 15/10 — tarde: 17:00 · 18:15"). Única
+      por construcción: lleva la fecha, y el tope de 60 laborables (unas 12
+      semanas) no repite dd/mm.
+    - NUNCA datos de otras visitas: ni ids, ni oportunidad, ni cliente, ni a
+      qué hora empieza o acaba una ocupada; tampoco cuántos días se saltaron.
+      Esquema con extra="forbid".
+    - Lista vacía ("dias": []) si en 60 laborables no hay ni una hora libre:
+      200, y n8n solo ofrece "Otro día más adelante".
+
+3.4 Modo un día: las horas libres de esa fecha, recalculadas en ese momento
+    (el formulario lo llama al abrir la página "Hora"; NO reutiliza lo del
+    modo días: N8). Respuesta EXACTA:
+
+    {
+      "modo": "dia",
+      "generado_en": "2026-10-14T09:13:40+02:00",
+      "fecha": "2026-10-15",
+      "dia_semana": "jueves",
+      "manana": ["09:45", "11:00"],
+      "tarde": ["18:15"],
+      "horas": ["09:45", "11:00", "18:15"],
+      "sin_horas_motivo": null
+    }
+
+    - horas: manana + tarde en orden: las opciones de radio, tal cual.
+    - sin_horas_motivo (P7): null si hay horas; si no, "fecha_pasada",
+      "fin_de_semana" o "dia_completo". 200 en los tres casos (n8n no
+      necesita una rama de error para el bucle; la tool lo explica al
+      agente). El 422 queda solo para la FORMA (fecha que no existe,
+      formato malo).
+    - Hoy: las horas de hoy aún posteriores a now() (C5, P4).
+    - Sin máximo de antelación: la validación de POST /visits tampoco lo
+      tiene (pendiente de CLAUDE.md, "las visitas no tienen antelación
+      máxima"). Ver P8.
+
+3.5 Tool MCP consultar_huecos_libres(fecha: str | None = None)
+    Misma función de servicio que GET /huecos-libres (services/ no importa
+    fastmcp; server.py es un adaptador delgado). Sin fecha: modo días; con
+    fecha: modo un día. Devuelve los MISMOS modelos (sin "etiqueta" en la
+    tool, P9). La fecha la escribe el LLM: es un DATO, no un identificador
+    (Adenda 1.1a), y se valida: solo "YYYY-MM-DD" de un día real
+    (date.fromisoformat sobre un patrón exacto; "mañana", "15/10",
+    "2026-02-30" o "2026-10-15T10:00" -> ToolError con un texto que dice el
+    formato). La tool no lleva X-Gate-Secret (el Agente 2 nunca lo tiene,
+    N10 del plan del Agente 2): va por /mcp con su Bearer. Errores:
+    ConfiguracionIncompleta -> ToolError genérico + [AVISO], como
+    get_business_rules.
+
+
+================================================================
+4. N8N: LO QUE NECESITA EL FORMULARIO (fuera del repositorio)
+================================================================
+4.1 Página "Día" (para visita_acordada y otra_hora; confirmar_hora no
+    elige hora). n8n llama a GET /huecos-libres (modo días) y construye un
+    campo dropdown con "Using JSON":
+      fieldOptions.values = [{"option": d.etiqueta} for d in dias]
+                            + [{"option": "Otro día más adelante"}]
+    "Otro día más adelante" es un texto FIJO del contrato; no puede chocar
+    con una etiqueta (todas empiezan por el nombre de un día). Al enviar,
+    n8n busca la etiqueta elegida en la lista que ya tiene y saca su
+    "fecha". Si elige "Otro día más adelante": una página con un campo date
+    (fieldType "date") y su fecha va al modo un día.
+
+4.2 Página "Hora". n8n llama a GET /huecos-libres?fecha=... OTRA VEZ (no
+    reutiliza la del desplegable: alguien pudo coger una hora mientras
+    tanto) y construye un campo radio:
+      fieldOptions.values = [{"option": h} for h in horas]
+                            + [{"option": "Ninguna le va bien → elegir otro día"}]
+    más el textarea del informe. Si "horas" está vacía (sin_horas_motivo no
+    nulo: alguien cogió la última durante la llamada, o la fecha del
+    calendario era sábado, domingo o pasada), la página SOLO ofrece
+    "Ninguna le va bien → elegir otro día" (y n8n puede enseñar el motivo
+    en un campo html). El texto también es FIJO del contrato y no choca con
+    una hora "HH:MM".
+
+4.3 El bucle "Ninguna le va bien". Lo que necesita n8n:
+      - guardar oportunidad_id y el resultado elegido (visita_acordada u
+        otra_hora) para la vuelta (campos hiddenField o los datos de la
+        ejecución);
+      - volver a la página "Día" llamando OTRA VEZ al modo días (los datos
+        recalculados, nunca la lista de la primera vuelta);
+      - el informe escrito antes de elegir "Ninguna" se pierde salvo que n8n
+        lo pase como defaultValue del textarea de la siguiente página "Hora"
+        (defaultValue está admitido en textarea, K6).
+    La documentación de n8n NO describe volver a una página anterior del
+    mismo formulario (K6). Dos formas, a comprobar por Gabi en n8n (R6):
+      (a) conectar la rama "Ninguna" a un nodo Form ANTERIOR (bucle dentro
+          de la misma ejecución; hay que verificar que n8n lo permite);
+      (b) un "Form Ending" con "Redirect to URL" a la URL del propio
+          formulario con ?oportunidad_id=... (una ejecución nueva que lo
+          recalcula todo; se pierde el informe).
+    El backend vale igual para las dos: cada página llama a la consulta y
+    el POST final revalida todo (409 si la cogieron entre la página "Hora"
+    y el envío; el formulario enseña el 409 con su lista y vuelve a "Día").
+
+4.4 Al enviar: POST /resultados-llamada con fecha (de la etiqueta o del
+    calendario) y hora (la opción de radio). Respuestas nuevas que el
+    formulario enseña: 422 fuera_de_rejilla (no debería salir nunca si
+    usa la consulta; si sale, es un error de n8n) y el 409 hueco_ocupado de
+    siempre (alguien la cogió entre la página "Hora" y el envío).
+
+
+================================================================
+5. MIGRACIONES
+================================================================
+paso14 (en la rama, B1; solo añade dos filas; tras "confirmo la migración
+  paso14"): desplazamiento_min = 15 y dias_oferta_visita = 10, con su
+  descripción; idempotente (ON CONFLICT DO NOTHING + comprobación del
+  valor); vuelta atrás escrita sin ejecutar (DELETE de las dos filas; SOLO
+  segura antes del merge de esta rama, porque después el código las exige:
+  lo dice su cabecera). check_migracion_d32 FALLA antes (las filas no
+  existen) y da todo OK después. main no las lee: aplicarla no cambia nada
+  de main (se demuestra con la regresión del Bloque C de main antes de
+  tocar código: los scripts que crean visitas, sin cambiar).
+paso14b (DESPUÉS del merge, como paso13b; preparada y SIN aplicar en el
+  Bloque D): DELETE de paso_huecos_min, con freno --confirmo-paso14b,
+  idempotente, vuelta atrás (INSERT con 30) y check_migracion_paso14b que
+  falla antes. Con ella cambia check_migracion_agente2 (el punto 3 que hoy
+  exige la fila).
+
+
+================================================================
+6. MEDICIÓN (11): SCRIPTS CON HORAS FUERA DE LA REJILLA O CON EL PASO DE 30
+================================================================
+Barrido de M4 (archivo:línea). Regla para el Bloque B2: toda hora VÁLIDA
+que un script envía por la API pasa a una hora de la rejilla que conserve
+la intención del caso; las horas inválidas a propósito (08:29, 12:45,
+16:59, 19:30, ayer, sábado) se quedan, porque fuera_de_franja va antes que
+fuera_de_rejilla (2.3); los casos de forma (422 de Pydantic) no cambian; los
+solapes parciales y los bordes se rehacen con una visita antigua por SQL
+(C3). El efecto exacto de cada línea se enseña al ejecutar en B2 (fase 2).
+
+6.1 Cambian (envían por la API una hora válida fuera de la rejilla, o
+    esperan la rejilla de 30):
+  check_visits_http.py: 436-437 (12:30, límite de la mañana -> 12:15),
+    450-451 (17:00 y 19:00 -> 17:00 y 18:15), 464 (10:00, 5 simultáneas),
+    478 (08:30, 09:00, 10:00, 11:00, 12:00: cinco horas distintas -> las 4
+    de la mañana + 17:00), 493, 495 (10:00), 509-532 (huecos_esperados con
+    paso_huecos_min -> disponibilidad), 572-606 (A a las 10:00; 10:30 y
+    09:01 "solapa sin coincidir": se rehacen, C3), 617-627 (bordes 09:00 y
+    08:30: se rehacen con el desplazamiento), 637, 644, 649, 653, 659,
+    666-678 (10:00 y 10:30), 693-733 (rondas de concurrencia a las 10:00 y
+    la consulta "fecha_propuesta = 10:00").
+  check_gate_decisions_http.py: 780 (base_va 10:00, también usada en casos
+    válidos), 854, 913, 965, 974 (10:00), 921-929 (19:00, límite superior ->
+    18:15), 1001-1002 (09:30 y 10:30), 1057-1075 (08:30 frente a 09:00:
+    solape parcial, se rehace, C3).
+  check_resultados_llamada_http.py: 258 (confirmacion(dia, hora="10:00"),
+    la usan todos los casos k*, md, me, c*, kh*), 505, 521 (11:30), 537-596
+    (10:00 y 10:30), 657-662 (comprobación de 10:00/17:00), 696-727 (09:00,
+    10:00, 12:00), 757-762 (10:00, 17:00, 18:00), 777-791 (10:00), 825-838
+    (R31 con paso_huecos_min), 852-923 (10:00, 10:30, 11:00, 11:30: solapes
+    y bordes, se rehacen, C3).
+  check_resultados_llamada_service.py: 313 (confirmar_hora 10:00).
+  check_ficha_oportunidad_http.py: 378-381 (POST /visits 10:00) y 717 (la
+    comprobación "a las 10:00").
+  check_followup_tasks_http.py: 399-406 (POST /visits 10:00).
+  check_listado_llamadas_http.py: 738 (alias, 09:30).
+  check_disponibilidad_service.py: entero (S1, S2, S5, S6: 8-17, 125-131
+    REJILLA de 30, 158-248, 259-293, 342-392): se reescribe para rejilla(),
+    choca() y disponibilidad().
+  check_visits_service.py: 123-129 (reglas de mentira con paso 30 ->
+    desplazamiento y dias_oferta_visita).
+  check_migracion_agente2.py: 10, 57 (exige paso_huecos_min): cambia en
+    paso14b, después del merge (2.6), no en la rama.
+
+6.2 NO cambian (anotadas para que no se toquen por error):
+  - Inválidas a propósito: check_visits_http 391-396 y 402;
+    check_gate_decisions_http 862-866; check_resultados_llamada_http 493.
+  - Forma (422 de Pydantic antes de cualquier regla): check_visits_http
+    314-317; check_gate_decisions_http 798; check_resultados_llamada_http
+    422-434; check_texto_agente_service 109 (solo valida el esquema) y
+    139-143 (textos del filtro D26.7).
+  - Ya en la rejilla: check_aviso_gate_http 501, 503; check_ficha_oportunidad
+    _http 507; check_gate_decisions_service 256, 295 (08:30, prueba de 503);
+    check_resultados_llamada_service 311 (11:00), 314 (17:00) y 270 (503).
+  - Por SQL, sin pasar por la API (la rejilla no se aplica; sirven como
+    "visita antigua"): check_listado_llamadas_http 644, 651, 731, 752-757,
+    770-772 (C6); check_listado_llamadas_service 405; check_followup_tasks
+    _http 113 (19:00 por SQL); check_migracion_visitas, check_migracion
+    _paso13b y check_migracion_resultado_llamadas (2030, CHECK de la tabla).
+  - Cambio de hora, desfases, medianoches y fechas de logs (no son horas
+    de visita): el resto de las 290 líneas del barrido (check_aviso_gate_*,
+    check_ficha_oportunidad_service, check_listado_llamadas_* 186-194,
+    391-447, 504-539, 919-1076, check_visits_service 8-13 y 74-75,
+    fechas_prueba 79-84...).
+  El barrido completo (290 líneas) se guarda en el scratchpad
+  (d32_horas_scripts.txt) y su SHA-256 va en el commit del Bloque B2.
+
+
+================================================================
+7. BLOQUES, PRUEBAS Y PRUEBAS EN NEGATIVO
+================================================================
+Cada bloque con pruebas en DOS fases (regla de 8 GB de CLAUDE.md): fase 1
+código "SIN ejecutar" con Docker/n8n abiertos; fase 2 con >= 1,5 GB libres
+y Docker/n8n, Chrome, Edge y WSL cerrados. Un commit por bloque (y uno por
+fase).
+
+A.  Este plan.
+B1. Migración paso14 + check_migracion_d32 (falla antes, OK después) y la
+    regresión de main sin cambiar código (2.6, sección 5).
+B2. reglas_visita.py: rejilla(), choca() (sustituye a solapa), disponibilidad(),
+    fuera_de_rejilla en validar_fecha, comprobar_hueco_libre sobre
+    disponibilidad, leer_reglas_visita con las dos claves nuevas y SIN
+    paso_huecos_min. Los tres caminos (POST /visits, /resultados-llamada,
+    alias) solo cambian por dentro de esas funciones; los adaptadores
+    añaden horas_validas al 422 (P2). Los scripts de 6.1. Prueba S
+    "paso_huecos_min borrada en una transacción con ROLLBACK" (2.6).
+B3. GET /huecos-libres (schema, servicio, api, main.py) +
+    check_huecos_libres_service y check_huecos_libres_http (puerto 8032):
+    los dos modos, las respuestas exactas de 3.3 y 3.4, 401/422/503, nunca
+    datos de otra visita, UNA consulta (contando las execute del cursor con
+    N = 1 y N = 10: el mismo número) y su tiempo (13).
+B4. Tool consultar_huecos_libres + check_mcp_huecos_libres (puerto 8033):
+    list_tools devuelve las tres tools, la misma respuesta que la ruta para
+    la misma fecha, y la validación de la fecha.
+C.  Suite completa (48 + los nuevos), pruebas en negativo N1-N14 sobre
+    copias de una en una, regresión de TODOS los scripts que crean visitas
+    (lección de B5) con sus recuentos, datos reales iguales antes y después
+    (foto y SHA-256), Kernel-Power 506/507.
+D.  Documentación (14): Adenda 5.4, 5.10 y 5.11 (notas fechadas) y fila
+    nueva de la tabla; docs/Contrato_Formulario_Llamadas.md (la consulta, las
+    páginas "Día" y "Hora", el bucle, los textos fijos y el 422
+    fuera_de_rejilla); CLAUDE.md; nota "revisado por D32" en 10.3 y P19 del
+    plan del Agente 2; D23 y D32 copiados a docs/ si el tutor los da;
+    paso14b preparada SIN aplicar y los comandos exactos de integración.
+
+Pruebas de coherencia (el corazón de D32, en B3 y C):
+  T1. Para CADA hora de CADA día del modo días (y del modo un día): POST
+      /visits con esa fecha y hora (una oportunidad propia por hora) da 201;
+      nunca 409 ni 422. Se hace en el bloque de fechas propio
+      (fechas_prueba.py) con exigir_libres.
+  T2. Al revés: para CADA hora de la rejilla de un día propio, si POST
+      /visits da 201 es que estaba ofrecida, y si da 409/422 es que no lo
+      estaba. Excepción documentada: la propia visita de la oportunidad (C8)
+      no se excluye en la consulta (R4); T2 se hace con oportunidades SIN
+      visita activa.
+  T3. Una hora que se ocupa ENTRE la página 1 y la página 2: modo días ->
+      se elige el día D y la hora h -> otra oportunidad propia coge h (POST
+      /visits 201) -> modo un día de D: h NO aparece (y tampoco las que
+      chocarían) -> POST con h: 409 hueco_ocupado.
+  T4. El día se llena: se ocupan las 6 horas de un día propio -> ese día NO
+      aparece en el modo días y el modo un día da horas [] con
+      sin_horas_motivo "dia_completo".
+
+Pruebas en negativo (sobre copias de app/, de una en una):
+  N1.  Sin desplazamiento en el choque (choca con solo la duración): una
+       visita antigua por SQL a las 10:00 y una petición a las 11:00 da 201
+       (debe ser 409); el modo un día ofrece las 11:00.
+  N2.  Rejilla sin comprobar (validar_fecha sin fuera_de_rejilla): POST
+       /visits a las 10:00 da 201 (debe ser 422 fuera_de_rejilla).
+  N3.  Consulta y validación con dos cálculos distintos (la consulta con su
+       propio bucle de paso 30): T1 falla (ofrece 09:00, que da 422) y el
+       test de ast lo ve.
+  N4.  Hora ocupada ofrecida (disponibilidad sin mirar las 'confirmada', o
+       sin mirar las visitas): T3 y el modo un día fallan.
+  N5.  Fin de semana ofrecido (el modo días sin filtrar sábado y domingo).
+  N6.  Día completo listado (sin filtrar los días sin horas): T4 falla.
+  N7.  Datos de otra visita en la respuesta (por ejemplo, las ocupadas con
+       su oportunidad_id): las claves exactas y la búsqueda de ids propios
+       en el cuerpo lo detectan.
+  N8.  El modo un día reutiliza lo del modo días (una caché en memoria): T3
+       falla.
+  N9.  La consulta acepta WEBHOOK_SECRET o no exige X-Gate-Secret: 401.
+  N10. Una consulta a la base de datos por día en el modo días: el recuento
+       de execute con N = 10 no es igual al de N = 1.
+  N11. La tool calcula por su cuenta (no llama al servicio): el test de ast
+       y la comparación ruta = tool lo ven.
+  N12. leer_reglas_visita sigue exigiendo paso_huecos_min: la prueba de la
+       fila borrada en una transacción (2.6) da 503.
+  N13. La tool acepta una fecha mal escrita ("mañana", "2026-02-30"): debe
+       ser ToolError.
+  N14. fuera_de_rejilla ANTES de fuera_de_franja: 12:45 da fuera_de_rejilla
+       y las pruebas de 6.2 (inválidas a propósito) lo detectan.
+
+(13) Rendimiento: el modo días hace UNA consulta de visitas para toda la
+  ventana (más now() y reglas_negocio: un número de consultas FIJO,
+  independiente de N). Se mide (a) contando las execute (N10) y (b) con el
+  tiempo de la petición y EXPLAIN ANALYZE de la consulta con 300 visitas
+  propias insertadas en una transacción con ROLLBACK (ConexionSinCommit).
+  Si EXPLAIN mostrara un recorrido secuencial caro, el índice sobre
+  visitas(fecha_propuesta) WHERE estado IN (...) se propondría como P, no
+  se añade sin decisión.
+
+
+================================================================
+8. RIESGOS
+================================================================
+R1. Dos personas eligen la misma hora a la vez (administración y el Agente
+    2): la consulta no bloquea; el POST sí (bloqueo por día) y el segundo
+    recibe 409 con la lista recalculada. Es la red de seguridad de C4.
+R2. Festivos: siguen sin existir (limitación de 5.4 de la Adenda); la
+    consulta ofrece un festivo laborable.
+R3. Visitas antiguas fuera de la rejilla (hoy 0, M2; o si cambia una regla
+    y la rejilla se mueve): siguen ocupando su hueco con el desplazamiento
+    (choca() trabaja con instantes, no con la rejilla), y quitan de la
+    oferta las horas con las que chocan. Una 'solicitada' antigua fuera de
+    la rejilla no se puede confirmar con confirmar_hora (K3): otra_hora.
+R4. La consulta no excluye la propia visita de la oportunidad: para
+    otra_hora y para una sustitución desde el chat, la hora ya pedida por
+    el cliente sale ocupada. Con la rejilla solo se pierde ESA hora (que en
+    otra_hora es justo la que no se quiere). Aceptable en N0 (P11).
+R5. dias_oferta_visita grande o muchos días completos: el tope de 60
+    laborables acota el cálculo (la consulta es una sola de todas formas).
+R6. El bucle de n8n (4.3): volver a una página anterior no está
+    documentado. Se elige entre (a) y (b) en n8n; el backend no cambia.
+R7. C6: los scripts que insertan visitas activas en días reales cambian la
+    oferta real durante su ejecución (~1 min).
+R8. El LLM inventa una hora a partir de las franjas de get_business_rules
+    (10:00): 422 fuera_de_rejilla con horas_validas, y el prompt le dice que
+    solo ofrezca horas de consultar_huecos_libres (P9 / punto 10).
+
+
+================================================================
+9. PREGUNTAS PARA GABI (con recomendación)
+================================================================
+P1. Nombre del motivo del 422 de una hora fuera de la rejilla.
+    Recomendación: "fuera_de_rejilla" (corto y paralelo a fuera_de_franja).
+    Alternativas: "hora_no_ofertada", "hora_no_valida".
+P2. ¿El 422 fuera_de_rejilla lleva las horas válidas aparte?
+    Recomendación: SÍ, horas_validas {"manana": [...], "tarde": [...]}
+    (la rejilla, no la disponibilidad: es un 422 de forma de negocio, no
+    dice qué está libre), igual que el 409 lleva huecos_libres (P18 de D31).
+P3. ¿El 409 hueco_ocupado cambia de forma (huecos por franja)?
+    Recomendación: NO; huecos_libres sigue siendo una lista "HH:MM" plana
+    (el formulario y el Agente 2 ya lo esperan así; solo cambia el cálculo,
+    que ahora es disponibilidad()). Alternativa: añadir además
+    huecos_libres_por_franja.
+P4. ¿El modo un día con la fecha de HOY devuelve las horas de hoy aún
+    futuras? Recomendación: SÍ (coherente con POST /visits, que las
+    acepta). El modo días empieza mañana, como pide el tutor.
+P5. Ruta de la consulta. Recomendación: GET /huecos-libres (con ?fecha=
+    para el modo un día). Alternativas: GET /visitas/disponibilidad, GET
+    /disponibilidad-visitas.
+P6. Modo días: ¿10 días CON hueco (buscando más allá si hay días completos,
+    tope 60 laborables) o la ventana de los 10 próximos laborables sin los
+    completos (pueden salir menos de 10)? Recomendación: la primera (A): el
+    desplegable siempre tiene 10 opciones mientras haya huecos.
+P7. Modo un día sin horas (sábado, pasado, día completo): ¿200 con
+    sin_horas_motivo o 422? Recomendación: 200 con sin_horas_motivo (el
+    bucle de n8n no necesita una rama de error y el agente recibe una
+    explicación). El 422 solo para la forma.
+P8. ¿Máximo de antelación para el modo un día (y para POST /visits)?
+    Recomendación: NO en esta rama (hoy no existe y sería otra regla; si se
+    añade, en los dos sitios a la vez por la coherencia T1/T2). Queda en
+    pendientes.
+P9. (Punto 10) ¿get_business_rules sigue devolviendo la rejilla? Regla de
+    Tres:
+      A) Sí: añadir visita.horas_inicio (las 6 horas fijas). + el agente
+         puede contestar "¿a qué horas hacéis visitas?"; − puede ofrecer una
+         hora fija que está OCUPADA (la rejilla no es la disponibilidad).
+      B) No: la tool sigue con franjas y duración, y el agente ofrece SOLO
+         lo que devuelve consultar_huecos_libres. + una sola fuente de horas
+         para ofrecer; − para la pregunta general tiene que llamar a la
+         consulta.
+      C) Sustituir franjas por la rejilla en get_business_rules. − cambia el
+         contrato de una tool ya probada (B3 del Agente 2) para nada que B
+         no dé.
+    Recomendación: B. Además la tool consultar_huecos_libres NO lleva
+    "etiqueta" (es texto para el desplegable de n8n).
+P10. C6: ¿se mueven las visitas por SQL de check_listado_llamadas_http fuera
+    del próximo laborable real? Recomendación: NO en esta rama (el
+    apartado e) del listado es "el próximo laborable" por definición; el
+    efecto es temporal); anotado como R7.
+P11. R4: ¿la consulta excluye la visita propia (con un parámetro
+    oportunidad_id en la ruta y lead_token en la tool)? Recomendación: NO en
+    N0 (el agente no tiene oportunidad_id; añade un parámetro y un camino
+    más para una sola hora); anotado.
+P12. Nombres de las reglas nuevas: desplazamiento_min y
+    dias_oferta_visita (los del tutor). Recomendación: mantenerlos.
+
+
+================================================================
+10. HASHES DE LA RAMA feat/n0-horario-visitas (desde main 258ccf3)
+================================================================
+  A   (el commit de este plan)
