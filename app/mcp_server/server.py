@@ -49,12 +49,15 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken, TokenVerifier
 # Field de Pydantic: la regla "gt=0" y la descripción del parámetro de la
 # tool, dentro de Annotated (ver arriba).
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 # El secreto de la puerta /mcp, leído del .env en app/config.py.
 from app.config import MCP_SECRET
 # El esquema de la respuesta de get_business_rules (esquema de salida).
 from app.schemas.business_rules import BusinessRulesResponse
+# D32: la query de GET /huecos-libres (para validar la fecha igual) y los
+# modelos de las dos respuestas de consultar_huecos_libres.
+from app.schemas.huecos_libres import ConsultaHuecos, DiaConHuecos, HuecosDiaResponse, HuecosDiasAgente
 
 # El esquema de la respuesta del cálculo: fastmcp lo usa como esquema de
 # salida de la tool.
@@ -69,6 +72,9 @@ from app.services import business_rules_service
 # nombres iguales en este archivo, uno taparía al otro. Así se escribe
 # estimate_service.calculate_estimate(...) y queda claro cuál es cuál.
 from app.services import estimate_service
+
+# D32: el servicio de los huecos libres (el mismo que GET /huecos-libres).
+from app.services import huecos_libres_service
 
 # El rechazo por configuración (falta o no es válida una regla).
 from app.services.reglas_visita import ConfiguracionIncompleta
@@ -279,7 +285,9 @@ def get_business_rules() -> BusinessRulesResponse:
 
     - visita: días, franjas de mañana y de tarde y duración de la visita
       técnica. La visita debe EMPEZAR y TERMINAR dentro de una franja.
-      Úsalo para proponer horas válidas antes de solicitar la visita.
+      Para OFRECER horas al cliente, usa SIEMPRE consultar_huecos_libres:
+      las visitas empiezan a horas fijas y solo esa tool sabe cuáles
+      quedan libres (D32).
     - recargo_informe_tecnico_con_iva: la visita técnica es gratuita; solo
       se cobra este importe, con el IVA incluido, si el técnico tiene que
       emitir un informe (obras con cambios estructurales).
@@ -306,4 +314,64 @@ def get_business_rules() -> BusinessRulesResponse:
         )
         # "from None", como en calculate_estimate: el agente no necesita el
         # traceback, solo el mensaje.
+        raise ToolError(MENSAJE_REGLAS_NO_DISPONIBLES) from None
+
+
+# D32: mensaje del error que ve el agente si la fecha no tiene el formato.
+MENSAJE_FECHA_NO_VALIDA = (
+    "La fecha tiene que ser un día real escrito como AAAA-MM-DD (por ejemplo "
+    "2026-10-15). Calcula la fecha exacta antes de llamar a la tool."
+)
+
+
+# D32 (plan docs/Plan_Horario_Visitas_D32.txt, 3.5): la misma consulta que
+# GET /huecos-libres, con las mismas funciones del servicio. La fecha la
+# escribe el LLM: es un DATO, no un identificador (Adenda 1.1a), y se valida
+# con el mismo modelo que la query REST (formato exacto y día real). Sin
+# etiqueta en el modo días (es texto para el desplegable de n8n, P9). Dos
+# modelos posibles: fastmcp envuelve la salida en {"result": ...}.
+@mcp.tool
+def consultar_huecos_libres(
+    # None: modo días; una fecha: modo un día.
+    fecha: Annotated[str | None, Field(
+        description="Opcional. Un día concreto, AAAA-MM-DD. Sin ella, los próximos días con huecos.")] = None,
+) -> HuecosDiasAgente | HuecosDiaResponse:
+    """
+    Dice qué horas de visita técnica están LIBRES. Úsala SIEMPRE antes de
+    ofrecer horas al cliente: ofrece solo las que devuelve, tal cual.
+
+    - Sin fecha: los próximos días laborables (desde hoy) con al menos una
+      hora libre, cada uno con sus horas de mañana y de tarde.
+    - Con fecha (AAAA-MM-DD): las horas libres de ese día, por franja, y
+      "horas" con todas juntas. Si no queda ninguna, sin_horas_motivo dice
+      por qué (fecha_pasada, fin_de_semana o dia_completo): propón otro día.
+
+    Las visitas empiezan a horas fijas; nunca propongas una hora que no
+    esté en la respuesta. No contiene datos de otros clientes.
+    """
+    # La fecha, validada con el mismo modelo que la query de GET /huecos-libres.
+    try:
+        # ConsultaHuecos: formato YYYY-MM-DD exacto y un día real.
+        consulta = ConsultaHuecos(fecha=fecha)
+    # Mal escrita o imposible: error de la tool con el formato esperado.
+    except ValidationError:
+        # Sin el traceback de Pydantic: el agente solo necesita el mensaje.
+        raise ToolError(MENSAJE_FECHA_NO_VALIDA) from None
+    # El servicio; el rechazo por configuración, como en get_business_rules.
+    try:
+        # Sin fecha: modo días, sin la etiqueta del formulario.
+        if consulta.fecha is None:
+            # La respuesta del servicio (con etiqueta).
+            dias = huecos_libres_service.consultar_dias()
+            # La misma, sin la etiqueta en cada día.
+            return HuecosDiasAgente(modo=dias.modo, generado_en=dias.generado_en,
+                                    dias=[DiaConHuecos(**d.model_dump(exclude={"etiqueta"})) for d in dias.dias])
+        # Con fecha: modo un día, tal cual.
+        return huecos_libres_service.consultar_dia(consulta.fecha)
+    # Falta o no es válida una regla: [AVISO] en stderr y error genérico.
+    except ConfiguracionIncompleta as error:
+        # Nombra las claves, nunca un secreto.
+        print(f"[AVISO] tool consultar_huecos_libres: configuración incompleta: {error.faltan}",
+              file=sys.stderr, flush=True)
+        # El mismo mensaje genérico que get_business_rules.
         raise ToolError(MENSAJE_REGLAS_NO_DISPONIBLES) from None

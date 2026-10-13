@@ -9,8 +9,9 @@ prueba como lo hará el nodo MCP Client de n8n, con fastmcp.Client.
   CASO 1. Autenticación de /mcp por HTTP a pelo: 401 sin Bearer, con el
           WEBHOOK_SECRET y con el GATE_SECRET (el Agente 2 nunca lleva
           X-Gate-Secret); 200 con el MCP_SECRET.
-  CASO 2. list_tools: EXACTAMENTE las dos tools (calculate_estimate y
-          get_business_rules); get_business_rules sin parámetros.
+  CASO 2. list_tools: EXACTAMENTE las tools publicadas (calculate_estimate y
+          get_business_rules; desde D32, 2026-10-13, también
+          consultar_huecos_libres); get_business_rules sin parámetros.
   CASO 3. Llamada: claves EXACTAS en todos los niveles y valores iguales a
           los leídos aquí, aparte, de la base de datos (el recargo con IVA
           se calcula aquí con su propia cuenta, no con aplicar_iva).
@@ -245,9 +246,9 @@ async def pruebas_mcp(esperado, prohibidos):
         print("\nCASO 2 - list_tools")
         # Las tools publicadas, por nombre.
         tools = {t.name: t for t in await client.list_tools()}
-        # Exactamente las dos.
-        comprobar("exactamente calculate_estimate y get_business_rules",
-                  set(tools) == {"calculate_estimate", TOOL}, f"({sorted(tools)})")
+        # Exactamente las tres (D32 añade consultar_huecos_libres).
+        comprobar("exactamente calculate_estimate, get_business_rules y consultar_huecos_libres",
+                  set(tools) == {"calculate_estimate", TOOL, "consultar_huecos_libres"}, f"({sorted(tools)})")
         # El esquema de entrada de la tool nueva (vacío si no está).
         entrada = tools[TOOL].input_schema if TOOL in tools else {}
         # Se enseña tal cual.
