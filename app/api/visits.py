@@ -103,6 +103,13 @@ def post_visits(data: VisitaCreate, response: Response) -> VisitaResponse:
         # Se añade al detalle solo si existe el atributo.
         if huecos is not None:
             detalle["huecos_libres"] = huecos
+        # D32 (P2): solo el 422 fuera_de_rejilla tiene "horas_validas" (la
+        # rejilla por franja); FechaNoValida la tiene a None en los demás motivos.
+        validas = getattr(error, "horas_validas", None)
+        # Se añade al detalle solo si no es None.
+        if validas is not None:
+            # {"manana": [...], "tarde": [...]}.
+            detalle["horas_validas"] = validas
         # Se corta la petición con el código de la tabla y el detalle.
         raise HTTPException(status_code=CODIGO_HTTP[type(error)], detail=detalle)
 

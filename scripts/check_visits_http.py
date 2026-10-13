@@ -22,6 +22,14 @@ id_base, no entra en la comparación y se enseña aparte, como información.
 Limpieza (solo lo propio, en el orden de las claves foráneas): logs ->
 visitas -> presupuestos -> oportunidades -> leads -> clientes, todo a
 partir de los ids de los clientes de prueba.
+
+(Nota 2026-10-13, D32, plan docs/Plan_Horario_Visitas_D32.txt, 6.1.) Las
+horas válidas son las de la rejilla de D23.5 (08:30, 09:45, 11:00, 12:15,
+17:00, 18:15): toda hora que antes era válida y no está en ella cambia a una
+que conserva la intención del caso. CASO 7 añade el 422 fuera_de_rejilla.
+Los solapes parciales y los bordes (D31) ya no se pueden pedir por la API
+(C3 del plan): se prueban frente a una visita ANTIGUA puesta por SQL fuera
+de la rejilla, y los bordes con el desplazamiento.
 """
 
 import sys
@@ -394,12 +402,23 @@ try:
         ("12:45 (terminaría a las 13:45)", LUNES, "12:45", "fuera_de_franja"),
         ("16:59 (antes de la franja de tarde)", LUNES, "16:59", "fuera_de_franja"),
         ("19:30 (terminaría a las 20:30)", LUNES, "19:30", "fuera_de_franja"),
+        # D32: dentro de la franja pero fuera de la rejilla.
+        ("10:00 (dentro de la franja, fuera de la rejilla)", LUNES, "10:00", "fuera_de_rejilla"),
     ]:
         r = visita(token, fecha, hora)
         mensaje = (cuerpo(r).get("detail") or {}).get("mensaje", "") if r.status_code == 422 else ""
         comprobar(f"422 {esperado}: {nombre}", r.status_code == 422 and motivo(r) == esperado, f"({r.status_code}, {motivo(r)})")
         if esperado == "fuera_de_franja":
             comprobar("   el mensaje nombra las franjas reales", "08:30" in mensaje and "13:30" in mensaje and "17:00" in mensaje and "20:00" in mensaje, f"({mensaje[:60]}...)")
+        # D32 (P2): el 422 fuera_de_rejilla lleva horas_validas por franja.
+        if esperado == "fuera_de_rejilla":
+            # El detalle entero.
+            d422 = cuerpo(r).get("detail") or {}
+            # Claves exactas y la rejilla de D23.5.
+            comprobar("   claves exactas {motivo, mensaje, horas_validas} y la rejilla de D23.5",
+                      set(d422) == {"motivo", "mensaje", "horas_validas"}
+                      and d422.get("horas_validas") == {"manana": ["08:30", "09:45", "11:00", "12:15"],
+                                                        "tarde": ["17:00", "18:15"]}, f"({d422})")
     comprobar("ningún rechazo de fecha ha creado visitas", visitas_de(op) == [])
     comprobar("la oportunidad sigue en presupuesto_enviado", consultar("SELECT estado FROM oportunidades WHERE id = %s;", (op,))[0] == "presupuesto_enviado")
 
@@ -433,8 +452,10 @@ try:
     comprobar("el texto_cliente original no ha cambiado", consultar("SELECT texto_cliente FROM visitas WHERE id = %s;", (visita_1,))[0] == texto_1)
 
     # ------------------------------------------------------------------
-    print("\nCASO 10 - 201 sustitución (lunes 12:30, límite superior de la mañana)")
-    r = visita(token, LUNES, "12:30")
+    # D32: 12:15 es la última hora de la mañana de la rejilla (antes, 12:30).
+    print("\nCASO 10 - 201 sustitución (lunes 12:15, la última de la mañana)")
+    # La sustitución.
+    r = visita(token, LUNES, "12:15")
     j = cuerpo(r)
     print(f"      <- {r.status_code} {r.text}")
     visita_2 = j.get("visita_id")
@@ -447,8 +468,10 @@ try:
               and datetime.fromisoformat(sustituida[0].get("fecha_anterior", "1970-01-01T00:00:00+00:00")) == esperado_1,
               f"({sustituida})")
 
-    print("\nCASO 11 - Límites de la tarde (17:00 y 19:00, por sustitución)")
-    for hora in ("17:00", "19:00"):
+    # D32: 18:15 es la última hora de la tarde de la rejilla (antes, 19:00).
+    print("\nCASO 11 - Límites de la tarde (17:00 y 18:15, por sustitución)")
+    # Las dos horas de la tarde.
+    for hora in ("17:00", "18:15"):
         r = visita(token, MARTES, hora)
         comprobar(f"201 a las {hora} del martes", r.status_code == 201 and cuerpo(r).get("creado") is True, f"({r.status_code}, {motivo(r)})")
     activas = [v for v in visitas_de(op) if v[1] == "solicitada"]
@@ -461,7 +484,8 @@ try:
     # ThreadPoolExecutor lanza las 5 peticiones a la vez, cada una en su
     # hilo; map() devuelve las respuestas en el mismo orden.
     with ThreadPoolExecutor(max_workers=5) as ejecutor:
-        respuestas = list(ejecutor.map(lambda _: visita(token_c1, LUNES, "10:00"), range(5)))
+        # D32: 09:45 (antes 10:00, fuera de la rejilla).
+        respuestas = list(ejecutor.map(lambda _: visita(token_c1, LUNES, "09:45"), range(5)))
     codigos = sorted(r.status_code for r in respuestas)
     creados = [cuerpo(r).get("creado") for r in respuestas]
     ids = {cuerpo(r).get("visita_id") for r in respuestas}
@@ -475,7 +499,8 @@ try:
 
     token_c2, op_c2 = lead_http()
     calcular(op_c2)
-    horas = ["08:30", "09:00", "10:00", "11:00", "12:00"]
+    # D32: cinco horas distintas de la rejilla (antes 08:30, 09:00, 10:00, 11:00 y 12:00).
+    horas = ["08:30", "09:45", "11:00", "12:15", "17:00"]
     with ThreadPoolExecutor(max_workers=5) as ejecutor:
         # B5-0: el miércoles (antes, el lunes de la visita de op_c1).
         respuestas = list(ejecutor.map(lambda h: visita(token_c2, MIERCOLES, h), horas))
@@ -490,9 +515,11 @@ try:
     print("\nCASO 13 - Visita confirmada (P4)")
     visita_conf = [v for v in visitas_de(op_c1)][0][0]
     ejecutar("UPDATE visitas SET estado = 'confirmada' WHERE id = %s;", (visita_conf,))
-    r = visita(token_c1, MARTES, "10:00")
+    # D32: 09:45 (una hora de la rejilla, para llegar hasta visita_confirmada).
+    r = visita(token_c1, MARTES, "09:45")
     comprobar("409 visita_confirmada al pedir otra fecha", r.status_code == 409 and motivo(r) == "visita_confirmada", f"({r.status_code}, {motivo(r)})")
-    r = visita(token_c1, LUNES, "10:00")
+    # La misma fecha que la confirmada (lunes 09:45).
+    r = visita(token_c1, LUNES, "09:45")
     comprobar("con la MISMA fecha: 200, creado false, estado confirmada",
               r.status_code == 200 and cuerpo(r).get("estado") == "confirmada" and cuerpo(r).get("creado") is False, f"({r.status_code}, {cuerpo(r)})")
     comprobar("la confirmada sigue intacta", visitas_de(op_c1) == [(visita_conf, "confirmada")])
@@ -500,16 +527,19 @@ try:
     # ==================================================================
     # D31 (Bloque B5, 2026-10-12): el hueco tiene que estar libre.
     # ==================================================================
-    # Las reglas reales, leídas aquí aparte (franjas, duración y paso), para
-    # calcular las horas libres que se esperan sin usar el código probado.
+    # Las reglas reales, leídas aquí aparte (franjas, duración y, desde D32,
+    # desplazamiento en lugar del paso), para calcular las horas libres que
+    # se esperan sin usar el código probado.
     REGLAS_D31 = dict(
         (clave, int(valor)) for clave, valor in
         [consultar("SELECT clave, valor FROM reglas_negocio WHERE clave = %s;", (c,)) for c in (
             "visita_manana_inicio_min", "visita_manana_fin_min", "visita_tarde_inicio_min",
-            "visita_tarde_fin_min", "duracion_visita_min", "paso_huecos_min")]
+            "visita_tarde_fin_min", "duracion_visita_min", "desplazamiento_min")]
     )
     # La duración, que se usa mucho.
     DURACION = REGLAS_D31["duracion_visita_min"]
+    # D32: lo que ocupa una visita con el desplazamiento hasta la siguiente.
+    OCUPA = DURACION + REGLAS_D31["desplazamiento_min"]
 
     def minutos(hhmm):
         """'10:30' -> 630 (minutos desde medianoche)."""
@@ -520,18 +550,19 @@ try:
 
     def huecos_esperados(ocupadas):
         """Las horas de inicio libres de un día lejano (todas futuras) con
-        esas visitas ocupadas ("HH:MM"), calculadas aquí: la rejilla de cada
-        franja cada paso_huecos_min, con la visita entera dentro, y sin
-        solaparse (|inicio - ocupada| < duración) con ninguna ocupada."""
+        esas visitas ocupadas ("HH:MM"), calculadas aquí: desde D32, la
+        rejilla de cada franja cada duración + desplazamiento, con la visita
+        entera dentro, y sin chocar (|inicio - ocupada| < duración +
+        desplazamiento) con ninguna ocupada."""
         # La lista que se va llenando.
         libres = []
         # Las dos franjas, por sus claves.
         for ini, fin in (("visita_manana_inicio_min", "visita_manana_fin_min"),
                          ("visita_tarde_inicio_min", "visita_tarde_fin_min")):
             # Cada inicio posible de la franja.
-            for m in range(REGLAS_D31[ini], REGLAS_D31[fin] - DURACION + 1, REGLAS_D31["paso_huecos_min"]):
-                # Libre si no se solapa con ninguna ocupada.
-                if all(abs(m - minutos(o)) >= DURACION for o in ocupadas):
+            for m in range(REGLAS_D31[ini], REGLAS_D31[fin] - DURACION + 1, OCUPA):
+                # Libre si no choca con ninguna ocupada (D32: con el desplazamiento).
+                if all(abs(m - minutos(o)) >= OCUPA for o in ocupadas):
                     # Como "HH:MM".
                     libres.append(f"{m // 60:02d}:{m % 60:02d}")
         # Las libres, en orden.
@@ -568,63 +599,96 @@ try:
     JUEVES, VIERNES = LUNES + timedelta(days=3), LUNES + timedelta(days=4)
 
     # ------------------------------------------------------------------
-    print("\nCASO 16 - D31: hueco ocupado (409 hueco_ocupado con huecos_libres)")
-    # A pide el jueves a las 10:00: 201.
+    print("\nCASO 16 - D31/D32: hueco ocupado (409 hueco_ocupado con huecos_libres)")
+    # A pide el jueves a las 09:45 (D32: antes 10:00): 201.
     token_a, op_a = lead_http()
     # Con su presupuesto.
     calcular(op_a)
     # La visita de A.
-    r = visita(token_a, JUEVES, "10:00")
+    r = visita(token_a, JUEVES, "09:45")
     # 201.
-    comprobar("A pide el jueves 10:00 -> 201", r.status_code == 201, f"({r.status_code}, {motivo(r)})")
+    comprobar("A pide el jueves 09:45 -> 201", r.status_code == 201, f"({r.status_code}, {motivo(r)})")
     # El id de la visita de A (para comprobar que no sale en el mensaje).
     visita_a = cuerpo(r).get("visita_id")
     # B, otra oportunidad.
     token_b, op_b = lead_http()
     # Con su presupuesto.
     calcular(op_b)
-    # Lo que tiene B antes (para ver que los 409 no escriben).
+    # Lo que tiene B antes (para ver que los 409 y el 422 no escriben).
     antes_b = visitas_y_logs(op_b)
     # Las horas libres esperadas con la de A ocupada.
-    libres_10 = huecos_esperados(["10:00"])
-    # (hora pedida, descripción): la misma, dos que solapan sin coincidir.
-    for hora, que in (("10:00", "la misma hora"), ("10:30", "solapa sin coincidir en el inicio"),
-                      ("09:01", "empieza antes y termina dentro")):
-        # B pide esa hora.
-        r = visita(token_b, JUEVES, hora)
+    libres_a = huecos_esperados(["09:45"])
+    # B pide la misma hora: 409 hueco_ocupado.
+    r = visita(token_b, JUEVES, "09:45")
+    # El detalle del 409.
+    d = detalle_409(r)
+    # Se enseña.
+    print(f"      B 09:45 <- {r.status_code} {d}")
+    # 409 hueco_ocupado, con las claves exactas y la lista esperada.
+    comprobar("B 09:45 (la misma hora) -> 409 hueco_ocupado con huecos_libres exactos",
+              r.status_code == 409 and d.get("motivo") == "hueco_ocupado"
+              and set(d) == {"motivo", "mensaje", "huecos_libres"} and d.get("huecos_libres") == libres_a,
+              f"({r.status_code}, {d.get('motivo')}, {d.get('huecos_libres')})")
+    # El mensaje: sin ids, sin la hora ocupada ni su fin, sin cifras de más.
+    comprobar("el mensaje solo nombra horas libres: ni ids, ni la visita de A (09:45) ni su fin, ni el cliente",
+              mensaje_limpio(d.get("mensaje"), libres_a, [op_a, visita_a, "09:45", "10:45", "Prueba Visitas"]),
+              f"({d.get('mensaje')})")
+    # C3 del plan D32: una hora que "solapa sin coincidir" ya no se puede
+    # pedir por la API: 10:00 da 422 fuera_de_rejilla, antes de mirar el hueco.
+    r = visita(token_b, JUEVES, "10:00")
+    # 422 fuera_de_rejilla.
+    comprobar("B 10:00 (solaparía sin coincidir) -> 422 fuera_de_rejilla, no 409 (C3)",
+              r.status_code == 422 and motivo(r) == "fuera_de_rejilla", f"({r.status_code}, {motivo(r)})")
+    # Una visita ANTIGUA de otra oportunidad propia, puesta por SQL el
+    # viernes a las 10:00 (fuera de la rejilla: lo que puede existir de antes
+    # de D32, R3). Con ella sí hay solapes parciales y bordes.
+    _, op_l = lead_http()
+    # SQL: la visita antigua 'confirmada' (solo sobre una oportunidad propia).
+    ejecutar("INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
+             "VALUES (%s, %s, 'confirmada', 'visita antigua de prueba (D32)');",
+             (op_l, esperado_madrid(VIERNES, "10:00")))
+    # Las libres esperadas el viernes con la antigua de las 10:00.
+    libres_l = huecos_esperados(["10:00"])
+    # (hora pedida, descripción): una que solapa sin coincidir y una que
+    # choca solo por el desplazamiento.
+    for hora, que in (("09:45", "solapa sin coincidir en el inicio"),
+                      ("11:00", "no se solapa, pero no deja los 15 de desplazamiento")):
+        # B pide esa hora del viernes.
+        r = visita(token_b, VIERNES, hora)
         # El detalle del 409.
         d = detalle_409(r)
         # Se enseña.
-        print(f"      B {hora} <- {r.status_code} {d}")
-        # 409 hueco_ocupado, con las claves exactas y la lista esperada.
-        comprobar(f"B {hora} ({que}) -> 409 hueco_ocupado con huecos_libres exactos",
-                  r.status_code == 409 and d.get("motivo") == "hueco_ocupado"
-                  and set(d) == {"motivo", "mensaje", "huecos_libres"} and d.get("huecos_libres") == libres_10,
+        print(f"      B viernes {hora} <- {r.status_code} {d}")
+        # 409 hueco_ocupado, con la lista esperada.
+        comprobar(f"B viernes {hora} ({que}) -> 409 hueco_ocupado con huecos_libres exactos",
+                  r.status_code == 409 and d.get("motivo") == "hueco_ocupado" and d.get("huecos_libres") == libres_l,
                   f"({r.status_code}, {d.get('motivo')}, {d.get('huecos_libres')})")
-    # El último mensaje: sin ids, sin la hora ocupada ni su fin, sin cifras de más.
-    comprobar("el mensaje solo nombra horas libres: ni ids, ni la visita de A (10:00) ni su fin, ni el cliente",
-              mensaje_limpio(d.get("mensaje"), libres_10, [op_a, visita_a, "10:00", "Prueba Visitas"]),
-              f"({d.get('mensaje')})")
-    # Los 409 no han escrito nada en B.
-    comprobar("los 409 no escriben nada (visitas y logs de B iguales)", visitas_y_logs(op_b) == antes_b,
+    # Los 409 y el 422 no han escrito nada en B.
+    comprobar("los 409 y el 422 no escriben nada (visitas y logs de B iguales)", visitas_y_logs(op_b) == antes_b,
               f"({antes_b} -> {visitas_y_logs(op_b)})")
-    # B a las 11:00: justo cuando termina la de A -> 201 (borde libre).
+    # B a las 11:00 del jueves: la de A (09:45) termina a las 10:45 y deja
+    # justo los 15 de desplazamiento -> 201 (borde libre).
     r = visita(token_b, JUEVES, "11:00")
     # 201.
-    comprobar("B 11:00 (empieza cuando termina la de A) -> 201", r.status_code == 201, f"({r.status_code}, {motivo(r)})")
+    comprobar("B jueves 11:00 (justo los 15 de desplazamiento tras la de A) -> 201", r.status_code == 201,
+              f"({r.status_code}, {motivo(r)})")
     # El id, para la sustitución.
     visita_b = cuerpo(r).get("visita_id")
-    # B a las 09:00: termina justo cuando empieza la de A -> 201, y sustituye a
-    # su propia visita de las 11:00 (la propia no cuenta, C8).
-    r = visita(token_b, JUEVES, "09:00")
+    # B a las 08:30: termina 09:30 y deja justo 15 hasta la de A -> 201, y
+    # sustituye a su propia visita de las 11:00 (la propia no cuenta, C8).
+    r = visita(token_b, JUEVES, "08:30")
     # 201 con sustituye_a.
-    comprobar("B 09:00 (termina cuando empieza la de A) -> 201, sustituye a su visita de las 11:00",
+    comprobar("B 08:30 (justo los 15 hasta la de A) -> 201, sustituye a su visita de las 11:00",
               r.status_code == 201 and cuerpo(r).get("sustituye_a") == visita_b, f"({r.status_code}, {cuerpo(r)})")
-    # Una sustitución que solo se solapa con la PROPIA: B pide 08:30, que
-    # choca con su visita de las 09:00 y con ninguna otra: 201 (C8).
+    # C8 con una visita PROPIA antigua: la de B se mueve por SQL a las 09:00
+    # (fuera de la rejilla; choca con 08:30), y B pide 08:30 otra vez: solo
+    # choca con la PROPIA, que no cuenta -> 201 (sustitución).
+    ejecutar("UPDATE visitas SET fecha_propuesta = %s WHERE oportunidad_id = %s AND estado = 'solicitada';",
+             (esperado_madrid(JUEVES, "09:00"), op_b))
+    # B pide 08:30.
     r = visita(token_b, JUEVES, "08:30")
     # 201: su propia visita no ocupa.
-    comprobar("B 08:30 (solo se solapa con su PROPIA visita de las 09:00) -> 201 (C8)",
+    comprobar("B 08:30 (solo choca con su PROPIA visita antigua de las 09:00) -> 201 (C8)",
               r.status_code == 201, f"({r.status_code}, {motivo(r)})")
 
     # ------------------------------------------------------------------
@@ -633,51 +697,53 @@ try:
     token_g, op_g = lead_http(estructural=True)
     # Su presupuesto (con Gate).
     calcular(op_g)
-    # Pide el hueco de A.
-    r = visita(token_g, JUEVES, "10:00")
+    # Pide el hueco de A (09:45 desde D32).
+    r = visita(token_g, JUEVES, "09:45")
     # El motivo del Gate.
     comprobar("con Gate -> 409 presupuesto_con_gate (antes que hueco_ocupado)",
               r.status_code == 409 and motivo(r) == "presupuesto_con_gate", f"({r.status_code}, {motivo(r)})")
     # Sin presupuesto: 409 sin_presupuesto.
     token_s, _ = lead_http()
-    # Pide el hueco de A.
-    r = visita(token_s, JUEVES, "10:00")
+    # Pide el hueco de A (09:45 desde D32).
+    r = visita(token_s, JUEVES, "09:45")
     # El motivo de sin presupuesto.
     comprobar("sin presupuesto -> 409 sin_presupuesto (antes que hueco_ocupado)",
               r.status_code == 409 and motivo(r) == "sin_presupuesto", f"({r.status_code}, {motivo(r)})")
     # Token que no existe: 404.
-    r = visita(str(uuid.uuid4()), JUEVES, "10:00")
+    r = visita(str(uuid.uuid4()), JUEVES, "09:45")
     # 404.
     comprobar("token inexistente -> 404 (antes que hueco_ocupado)", r.status_code == 404, f"({r.status_code})")
     # A repite su propia hora: 200 (la repetición va antes, y lo propio no ocupa).
-    r = visita(token_a, JUEVES, "10:00")
+    r = visita(token_a, JUEVES, "09:45")
     # 200, creado false.
     comprobar("A repite su hora -> 200 creado=false (repetición antes que hueco_ocupado)",
               r.status_code == 200 and cuerpo(r).get("creado") is False, f"({r.status_code}, {motivo(r)})")
     # op_c1 tiene una visita confirmada (CASO 13): pide el hueco de A -> 409
     # visita_confirmada, no hueco_ocupado.
-    r = visita(token_c1, JUEVES, "10:00")
+    r = visita(token_c1, JUEVES, "09:45")
     # El motivo de la confirmada.
     comprobar("con visita confirmada -> 409 visita_confirmada (antes que hueco_ocupado)",
               r.status_code == 409 and motivo(r) == "visita_confirmada", f"({r.status_code}, {motivo(r)})")
 
     # ------------------------------------------------------------------
     print("\nCASO 18 - D31: /visits contra una visita CONFIRMADA por administración")
-    # La de op_c1 (lunes 10:00) está 'confirmada' (CASO 13). H pide el lunes 10:30.
+    # La de op_c1 (lunes 09:45 desde D32) está 'confirmada' (CASO 13). H pide
+    # esa misma hora (con la rejilla, un solape parcial no se puede pedir: C3).
     token_h, op_h = lead_http()
     # Con su presupuesto.
     calcular(op_h)
-    # Pide 10:30 del lunes.
-    r = visita(token_h, LUNES, "10:30")
+    # Pide las 09:45 del lunes.
+    r = visita(token_h, LUNES, "09:45")
     # El detalle.
     d = detalle_409(r)
     # Las libres de ese lunes: la confirmada de op_c1 (10:00); las demás
     # visitas del lunes son de este script y están canceladas (CASOS 8-10).
-    comprobar("H lunes 10:30 -> 409 hueco_ocupado frente a la confirmada (10:00)",
+    comprobar("H lunes 09:45 -> 409 hueco_ocupado frente a la confirmada (09:45)",
               r.status_code == 409 and d.get("motivo") == "hueco_ocupado"
-              and d.get("huecos_libres") == huecos_esperados(["10:00"]), f"({r.status_code}, {d})")
+              and d.get("huecos_libres") == huecos_esperados(["09:45"]), f"({r.status_code}, {d})")
 
     # ------------------------------------------------------------------
+    # D32: a las 09:45 (antes 10:00).
     print("\nCASO 19 - D31: concurrencia (10 oportunidades al mismo hueco, 5 rondas)")
     # Diez oportunidades sin Gate, con presupuesto.
     DIEZ = []
@@ -704,9 +770,10 @@ try:
             "SELECT count(*) FROM visitas WHERE estado IN ('solicitada', 'confirmada') "
             "AND fecha_propuesta < %(ini)s + interval '1 minute' * %(dur)s "
             "AND fecha_propuesta + interval '1 minute' * %(dur)s > %(ini)s;",
-            {"ini": esperado_madrid(dia, "10:00"), "dur": DURACION})[0]
+            # D32: "que choquen", con el desplazamiento (OCUPA).
+            {"ini": esperado_madrid(dia, "09:45"), "dur": OCUPA})[0]
         # Cero: el hueco está libre y las diez compiten por él.
-        comprobar(f"ronda {ronda + 1} ({dia}): el hueco de las 10:00 está LIBRE antes de lanzar (0 visitas que se solapen)",
+        comprobar(f"ronda {ronda + 1} ({dia}): el hueco de las 09:45 está LIBRE antes de lanzar (0 visitas que choquen)",
                   antes_ronda == 0, f"({antes_ronda})")
         # Barrier(10): las diez peticiones salen a la vez.
         barrera = threading.Barrier(10)
@@ -716,7 +783,7 @@ try:
             # Todas esperan aquí hasta que llegan las diez.
             b.wait()
             # La petición.
-            return visita(tk, d, "10:00")
+            return visita(tk, d, "09:45")
 
         # Diez hilos, uno por oportunidad.
         with ThreadPoolExecutor(max_workers=10) as grupo:
@@ -728,9 +795,9 @@ try:
         motivos_409 = {motivo(r) for r in respuestas if r.status_code == 409}
         # SQL: visitas activas a esa hora de ese día (de cualquiera).
         activas = consultar("SELECT count(*) FROM visitas WHERE estado IN ('solicitada', 'confirmada') "
-                            "AND fecha_propuesta = %s;", (esperado_madrid(dia, "10:00"),))[0]
+                            "AND fecha_propuesta = %s;", (esperado_madrid(dia, "09:45"),))[0]
         # Se enseña.
-        print(f"      ronda {ronda + 1} ({dia}): códigos {codigos}, motivos 409 {motivos_409}, activas a las 10:00: {activas}")
+        print(f"      ronda {ronda + 1} ({dia}): códigos {codigos}, motivos 409 {motivos_409}, activas a las 09:45: {activas}")
         # Un 201 y nueve 409 hueco_ocupado, ningún 500, una sola visita activa.
         comprobar(f"ronda {ronda + 1}: un 201 y nueve 409 hueco_ocupado, ningún 500, una visita activa",
                   codigos == [201] + [409] * 9 and motivos_409 == {"hueco_ocupado"} and activas == 1,

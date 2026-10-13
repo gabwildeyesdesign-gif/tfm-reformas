@@ -777,7 +777,8 @@ try:
     # Su foto antes de las peticiones.
     foto_forma = foto_op(op_forma)
     # Cada caso: (nombre, cuerpo). Todos son válidos salvo por UNA cosa.
-    base_va = visita_acordada(op_forma, LUNES, "10:00")
+    # D32: 09:45, una hora de la rejilla (antes 10:00).
+    base_va = visita_acordada(op_forma, LUNES, "09:45")
     # Un descarte válido de base.
     base_de = descartar(op_forma, "precio")
     # La lista de casos.
@@ -851,7 +852,8 @@ try:
     # Foto antes de la petición.
     foto = foto_op(op_activa)
     # 409 visita_activa_existente, y nada escrito.
-    verificar_409("visita activa ya existente (P1)", decidir(visita_acordada(op_activa, LUNES, "10:00")),
+    # D32: 09:45 (antes 10:00): tiene que pasar la rejilla para llegar a P1.
+    verificar_409("visita activa ya existente (P1)", decidir(visita_acordada(op_activa, LUNES, "09:45")),
                   op_activa, foto, "visita_activa_existente")
 
     # ------------------------------------------------------------------
@@ -864,14 +866,16 @@ try:
         ("08:29 (antes de la franja)", LUNES, "08:29", "fuera_de_franja"),
         ("12:45 (terminaría a las 13:45)", LUNES, "12:45", "fuera_de_franja"),
         ("19:30 (terminaría a las 20:30)", LUNES, "19:30", "fuera_de_franja"),
+        # D32: dentro de la franja pero fuera de la rejilla, también por el alias.
+        ("10:00 (fuera de la rejilla)", LUNES, "10:00", "fuera_de_rejilla"),
     ]:
         # La petición con esa fecha y hora.
         r = decidir(visita_acordada(op_forma, fecha, hora))
         # El 422 de NEGOCIO trae un objeto con motivo, no la lista de Pydantic.
         comprobar(f"422 {esperado}: {nombre}", r.status_code == 422 and motivo(r) == esperado,
                   f"({r.status_code}, {motivo(r)})")
-    # Los 5 rechazos no han escrito nada.
-    verificar_sin_escritura("los 5 rechazos de fecha", op_forma, foto_forma)
+    # Los 6 rechazos (5 hasta D32) no han escrito nada.
+    verificar_sin_escritura("los 6 rechazos de fecha", op_forma, foto_forma)
 
     # ------------------------------------------------------------------
     print("\nCASO 5 - 201 visita_acordada (lunes 08:30, límite inferior; informe con espacios)")
@@ -910,7 +914,8 @@ try:
     # quien lo escribió y no la de la petición que llega después.
     foto = foto_op(op_va)
     # Otra hora: 409 decision_ya_registrada, y nada escrito.
-    verificar_409("visita_acordada a otra hora", decidir(visita_acordada(op_va, LUNES, "10:00")),
+    # D32: otra hora de la rejilla (09:45; antes 10:00).
+    verificar_409("visita_acordada a otra hora", decidir(visita_acordada(op_va, LUNES, "09:45")),
                   op_va, foto, "decision_ya_registrada")
     # Foto justo antes del segundo 409.
     foto = foto_op(op_va)
@@ -918,15 +923,16 @@ try:
     verificar_409("descartar", decidir(descartar(op_va, "precio")), op_va, foto, "decision_ya_registrada")
 
     # ------------------------------------------------------------------
-    print("\nCASO 6 - 201 visita_acordada a las 19:00 (límite superior), informe de 2000 'á'")
+    # D32: 18:15 es la última hora de la tarde de la rejilla (antes 19:00).
+    print("\nCASO 6 - 201 visita_acordada a las 18:15 (la última), informe de 2000 'á'")
     # Otro lead con Gate.
     _, op_1900 = lead_con_gate()
     # Foto antes.
     foto_antes = foto_op(op_1900)
     # 2000 'á': el límite cuenta CARACTERES, no bytes (cada 'á' son 2 bytes).
-    r = decidir(visita_acordada(op_1900, LUNES, "19:00", informe="á" * 2000))
+    r = decidir(visita_acordada(op_1900, LUNES, "18:15", informe="á" * 2000))
     # Todas las comprobaciones del 201.
-    verificar_201(r, op_1900, foto_antes, "á" * 2000, "visita_acordada", fecha=LUNES, hora="19:00")
+    verificar_201(r, op_1900, foto_antes, "á" * 2000, "visita_acordada", fecha=LUNES, hora="18:15")
 
     # ------------------------------------------------------------------
     print("\nCASO 7 - 201 descartar")
@@ -962,7 +968,8 @@ try:
     # Foto justo antes del segundo 409.
     foto = foto_op(op_de)
     # visita_acordada: 409, y nada escrito.
-    verificar_409("visita_acordada", decidir(visita_acordada(op_de, LUNES, "10:00")), op_de, foto,
+    # D32: una hora de la rejilla (09:45; antes 10:00).
+    verificar_409("visita_acordada", decidir(visita_acordada(op_de, LUNES, "09:45")), op_de, foto,
                   "decision_ya_registrada")
 
     # ------------------------------------------------------------------
@@ -971,7 +978,8 @@ try:
     _, op_c1 = lead_con_gate()
     # Un único cuerpo, que se enviará 5 veces.
     # B5-0: el martes (antes, el lunes).
-    misma = visita_acordada(op_c1, MARTES, "10:00")
+    # D32: 09:45 (antes 10:00).
+    misma = visita_acordada(op_c1, MARTES, "09:45")
     # ThreadPoolExecutor lanza las 5 peticiones a la vez, cada una en su
     # hilo. map() devuelve las respuestas en el orden en que se LANZARON.
     with ThreadPoolExecutor(max_workers=5) as ejecutor:
@@ -998,8 +1006,9 @@ try:
     _, op_c2 = lead_con_gate()
     # Cinco cuerpos distintos: tres horas y dos motivos.
     # B5-0: el miércoles (antes, el lunes).
-    distintas = [visita_acordada(op_c2, MIERCOLES, "08:30"), visita_acordada(op_c2, MIERCOLES, "09:30"),
-                 visita_acordada(op_c2, MIERCOLES, "10:30"), descartar(op_c2, "precio"), descartar(op_c2, "plazo")]
+    # D32: tres horas de la rejilla (antes 08:30, 09:30 y 10:30).
+    distintas = [visita_acordada(op_c2, MIERCOLES, "08:30"), visita_acordada(op_c2, MIERCOLES, "09:45"),
+                 visita_acordada(op_c2, MIERCOLES, "11:00"), descartar(op_c2, "precio"), descartar(op_c2, "plazo")]
     # Se lanzan los 5 a la vez; map pasa cada cuerpo a decidir.
     with ThreadPoolExecutor(max_workers=5) as ejecutor:
         respuestas = list(ejecutor.map(decidir, distintas))
@@ -1054,25 +1063,27 @@ try:
     # ------------------------------------------------------------------
     # CASO 9b (Bloque B5, 2026-10-12, D31 y P17): el alias gana el 409
     # hueco_ocupado. La visita acordada de op_va (CASO 5) ocupa el lunes de
-    # 08:30 a 09:30; otro Gate pide las 09:00 de ese lunes.
+    # 08:30 a 09:30; otro Gate pide las 08:30 de ese lunes (D32: con la
+    # rejilla, un solape parcial ya no se puede pedir; antes, las 09:00).
     print("\nCASO 9b - D31: 409 hueco_ocupado también por el alias")
     # Un Gate nuevo.
     _, op_hueco = lead_con_gate()
     # Su foto antes.
     foto = foto_op(op_hueco)
-    # La petición, a una hora que se solapa con la de op_va.
-    r = decidir(visita_acordada(op_hueco, LUNES, "09:00"))
+    # La petición, a la hora de op_va.
+    r = decidir(visita_acordada(op_hueco, LUNES, "08:30"))
     # El detalle del 409, para enseñarlo y mirar su lista.
     d = cuerpo(r).get("detail") if r.status_code == 409 else {}
     # Se enseña.
     print(f"      <- {r.status_code} {d}")
     # 409 hueco_ocupado y nada escrito.
     verificar_409("visita_acordada sobre la visita de otro Gate (08:30-09:30)", r, op_hueco, foto, "hueco_ocupado")
-    # Con huecos_libres: una lista de horas en la que no están ni las 08:30 ni las 09:00.
+    # Con huecos_libres: una lista de horas sin las 08:30 y con las 09:45
+    # (08:30 + 60 + 15: el borde libre con el desplazamiento).
     libres = (d or {}).get("huecos_libres")
-    # Una lista sin las horas que se solapan con la de op_va.
-    comprobar("   con huecos_libres (lista) sin las 08:30 ni las 09:00",
-              isinstance(libres, list) and "08:30" not in libres and "09:00" not in libres and "09:30" in libres,
+    # Una lista sin la hora de op_va y con la siguiente de la rejilla.
+    comprobar("   con huecos_libres (lista) sin las 08:30 y con las 09:45",
+              isinstance(libres, list) and "08:30" not in libres and "09:45" in libres,
               f"({libres})")
 
     # ------------------------------------------------------------------

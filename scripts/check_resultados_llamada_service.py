@@ -201,7 +201,9 @@ try:
     visita(op_visita, "completada", instante(LUNES - timedelta(days=21), 10, 0))
     # Una confirmación y un estado sin llamada.
     op_conf = oportunidad("visita_agendada", gate=False, horas_presupuesto=50)
-    v_conf = visita(op_conf, "solicitada", instante(LUNES, 10, 0))
+    # D32: a las 09:45, de la rejilla (antes 10:00): confirmar_hora (S5) exige
+    # la hora pedida, y una pedida fuera de la rejilla daría 422 (K3 del plan).
+    v_conf = visita(op_conf, "solicitada", instante(LUNES, 9, 45))
     op_perdida = oportunidad("perdida", gate=False, horas_presupuesto=50)
     # (oportunidad, estado, tipo esperado, motivo esperado)
     CASOS = [
@@ -224,7 +226,7 @@ try:
     # La confirmación trae la visita pedida y su fecha.
     d = tipo_llamada.deducir_tipo_llamada(cur, op_conf, "visita_agendada", AHORA)
     comprobar("confirmación: visita_id y fecha_pedida de la 'solicitada'",
-              d.visita_id == v_conf and d.fecha_pedida == instante(LUNES, 10, 0), f"({d})")
+              d.visita_id == v_conf and d.fecha_pedida == instante(LUNES, 9, 45), f"({d})")
     # La regla de 48 h rota (nombre falso EN MEMORIA): configuracion_incompleta.
     tipo_llamada.CLAVE_SEGUIMIENTO = "regla_que_no_existe"
     d = tipo_llamada.deducir_tipo_llamada(cur, op_b, "presupuesto_enviado", AHORA)
@@ -310,7 +312,8 @@ try:
     CINCO = [
         ("visita_acordada", op_c, {"fecha": str(D_C), "hora": "11:00"}, "seguimiento", "visita_agendada", ["confirmada"]),
         ("descartar", op_b, {"motivo": "sin_decision"}, "seguimiento", "perdida", []),
-        ("confirmar_hora", op_conf, {"fecha": str(LUNES), "hora": "10:00"}, "confirmacion_visita", "visita_agendada", ["confirmada"]),
+        # D32: la hora pedida, 09:45.
+        ("confirmar_hora", op_conf, {"fecha": str(LUNES), "hora": "09:45"}, "confirmacion_visita", "visita_agendada", ["confirmada"]),
         ("otra_hora", op_conf2, {"fecha": str(D_CONF2), "hora": "17:00"}, "confirmacion_visita", "visita_agendada",
          ["cancelada", "confirmada"]),
         ("cliente_cancela", op_conf3, {"motivo": "plazo"}, "confirmacion_visita", "perdida", ["cancelada"]),

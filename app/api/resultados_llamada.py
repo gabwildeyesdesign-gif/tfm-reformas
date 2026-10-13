@@ -73,6 +73,13 @@ def http_de_rechazo(error: RechazoNegocio) -> HTTPException:
     # Lista (quizá vacía) de horas de inicio libres de ese día.
     if huecos is not None:
         detalle["huecos_libres"] = huecos
+    # D32 (P2): solo el 422 fuera_de_rejilla tiene "horas_validas" (la
+    # rejilla por franja); FechaNoValida la tiene a None en los demás motivos.
+    validas = getattr(error, "horas_validas", None)
+    # Se añade al detalle solo si no es None.
+    if validas is not None:
+        # {"manana": [...], "tarde": [...]}.
+        detalle["horas_validas"] = validas
     # type(error): la clase concreta, para buscar su código en la tabla.
     return HTTPException(status_code=CODIGO_HTTP[type(error)], detail=detalle)
 

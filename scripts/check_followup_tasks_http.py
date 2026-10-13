@@ -396,14 +396,15 @@ def dia_visita():
 
 # Ayuda: pedir una visita como el Agente 2.
 def pedir_visita(token, dia=None):
-    """POST /visits como el Agente 2: a las 10:00 (franja de mañana).
+    """POST /visits como el Agente 2: a las 09:45 (D32; antes 10:00).
     dia: el día; si no se da, el siguiente del bloque (B5-0). En los hilos
     se da desde fuera, porque DIAS no está pensado para varios hilos."""
     # Sin día: el siguiente del bloque.
     dia = dia or dia_visita()
     # Petición real a POST /visits con la cabecera de n8n.
     return requests.post(f"{BASE}/visits", headers=AUTH_WEBHOOK, timeout=60, json={
-        "lead_token": token, "fecha": dia.isoformat(), "hora": "10:00",
+        # D32: una hora de la rejilla de D23.5.
+        "lead_token": token, "fecha": dia.isoformat(), "hora": "09:45",
         "texto_cliente": "Me viene bien esa hora",
     })
 

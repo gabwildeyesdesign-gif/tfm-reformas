@@ -375,10 +375,10 @@ def marca_sin_cifras():
 
 
 def pedir_visita(token, dia, texto):
-    """POST /visits como el Agente 2, a las 10:00; tiene que dar 201."""
-    # La fecha como texto ISO ("2026-10-26") y la hora en la franja de mañana.
+    """POST /visits como el Agente 2, a las 09:45 (D32; antes 10:00); tiene que dar 201."""
+    # La fecha como texto ISO ("2026-10-26") y la hora, de la rejilla de D23.5.
     r = requests.post(f"{BASE}/visits", headers=AUTH_WEBHOOK, timeout=30, json={
-        "lead_token": token, "fecha": dia.isoformat(), "hora": "10:00", "texto_cliente": texto})
+        "lead_token": token, "fecha": dia.isoformat(), "hora": "09:45", "texto_cliente": texto})
     # 201: visita nueva o sustitución de la anterior.
     assert r.status_code == 201, r.text
     return r.json()
@@ -714,10 +714,11 @@ try:
                   f"({pares(c)})")
         # T6: visita solicitada.
         C_T6 = ficha_ok(OP_T6)
-        comprobar("T6: una visita 'solicitada' con su texto_cliente, a las 10:00 de Madrid",
+        # D32: a las 09:45 (antes 10:00).
+        comprobar("T6: una visita 'solicitada' con su texto_cliente, a las 09:45 de Madrid",
                   len(C_T6["visitas"]) == 1 and C_T6["visitas"][0]["estado_visita"] == "solicitada"
                   and C_T6["visitas"][0]["texto_cliente"] == TEXTO_T6
-                  and C_T6["visitas"][0]["fecha_visita"] == madrid(LUNES, 10, 0))
+                  and C_T6["visitas"][0]["fecha_visita"] == madrid(LUNES, 9, 45))
         comprobar("T6: historial con visita_solicitada/visita_agendada, cuadra",
                   pares(C_T6)[-1] == ("visita_solicitada", "visita_agendada") and C_T6["historial_cuadra"] is True,
                   f"({pares(C_T6)})")

@@ -549,14 +549,15 @@ if LUNES_1 == DIA:
     LUNES_1 += timedelta(days=7)
 # B5-0 (2026-10-12, P21): estas fechas se quedan (ligadas al cambio de hora y
 # al próximo laborable: es lo que se prueba). Antes de crear nada, los tres
-# huecos que se piden por la API (lunes 1 a las 08:30 y a las 09:30, lunes 2
-# a las 08:30) no pueden estar ocupados por una visita AJENA: si lo están,
+# huecos que se piden por la API (lunes 1 a las 08:30 y a las 09:45 (D32:
+# antes 09:30), lunes 2 a las 08:30) no pueden estar ocupados por una visita
+# AJENA: si lo están,
 # FALLO con la explicación y se para. Las visitas que se insertan por SQL no
 # pasan por la comprobación de D31 y no hace falta mirarlas.
 fechas_prueba.exigir_libres("check_listado_llamadas_http", PATRON_EMAIL, [
     (datetime.combine(d, hora_del_dia(h, m), tzinfo=MADRID),
      datetime.combine(d, hora_del_dia(h, m), tzinfo=MADRID) + timedelta(minutes=1))
-    for d, h, m in ((LUNES_1, 8, 30), (LUNES_1, 9, 30), (LUNES_2, 8, 30))])
+    for d, h, m in ((LUNES_1, 8, 30), (LUNES_1, 9, 45), (LUNES_2, 8, 30))])
 
 # ======================================================================
 # Antes de nada: el puerto tiene que estar LIBRE
@@ -735,7 +736,8 @@ try:
     D_GATE_CONF = caso("D-gate", gate=True)
     r = requests.post(f"{BASE}/gate-decisions", headers=AUTH_GATE, timeout=30, json={
         "oportunidad_id": D_GATE_CONF[0], "decision": "visita_acordada", "fecha": LUNES_1.isoformat(),
-        "hora": "09:30", "informe": "prueba del listado"})
+        # D32: 09:45, de la rejilla (antes 09:30).
+        "hora": "09:45", "informe": "prueba del listado"})
     assert r.status_code == 201, r.text
     # Su texto es el fijo del sistema (P2 del plan de /gate-decisions): se lee
     # por SQL de SU visita confirmada, por si saliera en algún apartado.

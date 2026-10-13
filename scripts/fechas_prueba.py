@@ -115,8 +115,11 @@ def exigir_libres(script: str, patron_propio: str, tramos: list[tuple[datetime, 
     tramos (desde, hasta) que va a usar el script. Una visita ocupa
     [inicio, inicio + duracion_visita_min), así que se solapa con un tramo si
     empieza antes de su final y termina después de su principio.
+    (Nota 2026-10-13, D32: desde paso14 una visita ocupa además
+    desplazamiento_min tras su fin, y la de prueba también; los dos lados se
+    alargan con duración + desplazamiento, como choca() de reglas_visita.)
 
-    Ajena = la de un cliente cuyo email no cumple el patrón del script. Las
+    Ajena =la de un cliente cuyo email no cumple el patrón del script. Las
     propias (de una ejecución anterior cortada) no cuentan: las borra la
     limpieza del propio script.
 
@@ -144,10 +147,20 @@ def exigir_libres(script: str, patron_propio: str, tramos: list[tuple[datetime, 
                 sys.exit(1)
             # Minutos como entero.
             duracion = int(fila[0])
+            # D32 (2026-10-13): y el desplazamiento hasta la siguiente visita.
+            # Si la fila no existe (antes de paso14), 0: el choque de D31.
+            cur.execute("SELECT valor FROM reglas_negocio WHERE clave = 'desplazamiento_min';")
+            # La fila, o None.
+            fila_despl = cur.fetchone()
+            # Lo que ocupa una visita contando el desplazamiento (D32, choca()).
+            duracion += int(fila_despl[0]) if fila_despl is not None else 0
             # Las visitas activas que tocan alguno de los tramos.
             encontradas = {}
             # Un tramo cada vez.
             for desde, hasta in tramos:
+                # D32: una visita ajena que empiece poco DESPUÉS del tramo
+                # también choca (la de prueba ocupa duración + desplazamiento
+                # desde su inicio): por eso "hasta" se alarga lo mismo.
                 # SQL: visitas activas que se solapan con el tramo, con su
                 # cliente (LEFT JOIN: un lead puede no tener cliente) y si es
                 # propia por el patrón del email.
@@ -159,7 +172,7 @@ def exigir_libres(script: str, patron_propio: str, tramos: list[tuple[datetime, 
                     JOIN leads l ON l.id = o.lead_id
                     LEFT JOIN clientes c ON c.id = l.cliente_id
                     WHERE v.estado = ANY(%(activos)s)
-                      AND v.fecha_propuesta < %(hasta)s
+                      AND v.fecha_propuesta < %(hasta)s + make_interval(mins => %(dur)s)
                       AND v.fecha_propuesta + make_interval(mins => %(dur)s) > %(desde)s;
                     """,
                     {"patron": patron_propio, "activos": list(ESTADOS_ACTIVOS), "hasta": hasta, "desde": desde,
