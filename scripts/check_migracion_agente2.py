@@ -10,6 +10,11 @@ Qué comprueba (solo LEE; la sesión es de solo lectura):
   3. paso_huecos_min (D31): existe, es un número entero de minutos entre 1 y
      1440 (un día), y su descripción no está vacía, ocupa una sola línea y
      nombra D31.
+     (Nota 2026-10-14: D32 retiró esa regla por expand/contract: el código
+     dejó de leerla y paso14b borró la fila el 2026-10-14 a las 11:27:42.
+     Desde entonces el punto 3 exige lo contrario: que la fila NO exista.
+     Son 34 comprobaciones: las 33 de los puntos 1 y 2 y una del punto 3, que
+     antes tenía cinco.)
 
 Qué NO comprueba, a propósito: el valor EXACTO de cada regla (2, 3, 30...)
 ni el número de filas de reglas_negocio. Son la foto de un momento: Gabi
@@ -52,10 +57,9 @@ PAREJAS_PLAZOS = [
 ]
 # Límites de un plazo en semanas: al menos una, como mucho un año.
 MIN_SEMANAS, MAX_SEMANAS = 1, 52
-# La regla de la rejilla de huecos (D31) y sus límites: entre 1 minuto y
-# un día entero.
+# La regla de la rejilla de huecos de D31. Desde paso14b (D32, 2026-10-14)
+# no tiene que existir; por eso ya no hay límites de valor que comprobar.
 CLAVE_PASO = "paso_huecos_min"
-MIN_PASO, MAX_PASO = 1, 1440
 
 # Contadores: comprobaciones correctas y títulos de las que fallan.
 ok = 0
@@ -152,10 +156,16 @@ for clave_min, clave_max in PAREJAS_PLAZOS:
               f"({valor_min} <= {valor_max})")
 
 # ----------------------------------------------------------------------
-# 3. Paso de la rejilla de huecos (D31)
+# 3. Paso de la rejilla de huecos (D31): retirado por D32 y paso14b
 # ----------------------------------------------------------------------
-print("\n2. Rejilla de huecos libres (D31)")
-comprobar_regla(CLAVE_PASO, MIN_PASO, MAX_PASO, "minutos", "D31")
+# El título del apartado.
+print("\n2. Rejilla de huecos libres (D31, retirada por D32 y paso14b)")
+# Se lee la fila (None si no existe).
+valor_paso, _ = leer_regla(CLAVE_PASO)
+# [INFO]: lo que hay (None es lo correcto).
+print(f"    [INFO]  {CLAVE_PASO}: valor actual {valor_paso}")
+# Tiene que NO existir: el código ya no la lee (D32) y paso14b la borró.
+comprobar(f"{CLAVE_PASO}: la fila NO existe (borrada por paso14b, D32)", valor_paso is None, f"({valor_paso})")
 
 # Se cierra la transacción de lectura.
 cn.rollback()
