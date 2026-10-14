@@ -128,6 +128,13 @@ class VisitaResponse(BaseModel):
     # hacer cuentas de husos horarios.
     fecha_propuesta: datetime
 
+    # D33 (2026-10-14): FIN de la visita, fecha_propuesta + duracion_visita_min
+    # de reglas_negocio, con el mismo formato y desfase
+    # ("2026-10-23T09:30:00+02:00"). Lo usa n8n (WF5) para el evento del
+    # calendario sin copiar la regla. Nunca es None: toda respuesta de éxito
+    # de /visits tiene visita.
+    fecha_fin_visita: datetime
+
     # Id de la visita 'solicitada' que esta ha sustituido (y que ha
     # quedado 'cancelada'), o None si no sustituye a ninguna.
     sustituye_a: int | None

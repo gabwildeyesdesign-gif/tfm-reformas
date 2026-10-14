@@ -212,6 +212,12 @@ class GateDecisionResponse(BaseModel):
     # ("2026-10-23T08:30:00+02:00"), o None si se descartó.
     fecha_propuesta: datetime | None
 
+    # D33 (2026-10-14): FIN de esa visita, fecha_propuesta +
+    # duracion_visita_min, con el mismo formato y desfase, o None si se
+    # descartó. Es la ÚNICA clave nueva del alias (P2 del plan D33): el
+    # formulario del Gate publicado la ignora, y WF5 la lee.
+    fecha_fin_visita: datetime | None
+
     # True si esta llamada ha escrito algo; False si es una repetición
     # exacta de la decisión ya registrada. El adaptador responde 201 o 200
     # según este campo.

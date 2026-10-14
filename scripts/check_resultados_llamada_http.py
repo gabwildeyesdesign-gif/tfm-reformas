@@ -23,6 +23,10 @@ nunca el 8000), crea sus propios clientes por POST /leads y
   CASO 12 la matriz lista <-> registro (pre-decisión 4 con C1)
   CASO 13 concurrencia
   CASO 14 ningún 500, 201 <-> creado, claves exactas, 0 importes
+  (D33, 2026-10-14, plan docs/Plan_Fecha_Fin_Visita_D33.txt: fecha_fin_visita
+  en cada 201 de verificar_201, en las repeticiones del CASO 9 y en el alias
+  del CASO 10: fecha_visita + la duración leída aquí de reglas_negocio, con el
+  mismo texto y desfase; null sin visita.)
 
 Las 4 preguntas: (1) escribe en tablas reales SOLO filas propias (emails
 http-resultado-<8>@example.com, tokens uuid4), con commit; envejece a mano
@@ -47,8 +51,8 @@ import time
 import uuid
 # ThreadPoolExecutor: varias peticiones a la vez (concurrencia).
 from concurrent.futures import ThreadPoolExecutor
-# Fechas en Madrid; Path para las rutas.
-from datetime import date, datetime, timedelta
+# Fechas en Madrid; Path para las rutas (timezone: el fin se suma en UTC, D33).
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -77,9 +81,11 @@ AUTH_WEBHOOK = {"X-Webhook-Secret": WEBHOOK_SECRET}
 AUTH_GATE = {"X-Gate-Secret": GATE_SECRET}
 # La marca propia.
 PATRON = "http-resultado-%@example.com"
-# Las claves EXACTAS de la respuesta (plan, 2.5).
+# Las claves EXACTAS de la respuesta (plan, 2.5; D33 añade fecha_fin_visita).
 CLAVES_RESPUESTA = {"llamada_id", "oportunidad_id", "tipo_llamada", "resultado", "motivo", "estado_oportunidad",
-                    "visita_id", "fecha_visita", "visita_cancelada_id", "creado"}
+                    "visita_id", "fecha_visita", "fecha_fin_visita", "visita_cancelada_id", "creado"}
+# D33: los resultados que dejan una visita confirmada (y, por tanto, un fin).
+CON_VISITA = ("visita_acordada", "confirmar_hora", "otra_hora")
 # Los textos fijos de las visitas confirmadas por teléfono (P2 y P8), copiados
 # del PLAN, no del código.
 TEXTO_GATE = "Visita acordada por teléfono por administración tras la revisión del Gate."
@@ -301,6 +307,25 @@ def madrid(dia: date, hh: int, mm: int) -> str:
     return datetime.combine(dia, datetime.min.time().replace(hour=hh, minute=mm), tzinfo=MADRID).isoformat()
 
 
+def fin_correcto(j, con_visita):
+    """
+    D33: True si fecha_fin_visita es la que toca. Con visita: el texto de
+    fecha_visita + DURACION minutos reales (en UTC), en Madrid, escrito igual
+    que la API (mismo formato y desfase). Sin visita: las dos claves null.
+    """
+    # Sin visita: las dos presentes y null.
+    if not con_visita:
+        return "fecha_fin_visita" in j and j["fecha_fin_visita"] is None and j.get("fecha_visita") is None
+    # Con visita y sin fecha_visita: mal (no hay de dónde partir).
+    if not j.get("fecha_visita"):
+        return False
+    # El inicio como datetime y el fin esperado, sumado en UTC.
+    inicio_v = datetime.fromisoformat(j["fecha_visita"])
+    esperado = (inicio_v.astimezone(timezone.utc) + timedelta(minutes=DURACION)).astimezone(MADRID)
+    # El mismo texto: mismo instante, desfase y formato.
+    return j.get("fecha_fin_visita") == esperado.isoformat()
+
+
 def verificar_201(titulo, r, op, foto_antes, tipo, resultado, estado, visitas, texto=None, motivo_esperado=None):
     """
     Todo lo de un 201: respuesta (claves, tipo, estado), fila, visitas, estado,
@@ -313,6 +338,9 @@ def verificar_201(titulo, r, op, foto_antes, tipo, resultado, estado, visitas, t
               r.status_code == 201 and j.get("creado") is True and j.get("tipo_llamada") == tipo
               and j.get("resultado") == resultado and j.get("estado_oportunidad") == estado and set(j) == CLAVES_RESPUESTA,
               f"({r.status_code} {r.text[:200]})")
+    # D33: el fin de la visita (o null sin visita).
+    comprobar(f"{titulo}: fecha_fin_visita " + (f"= fecha_visita + {DURACION} min" if resultado in CON_VISITA else "null"),
+              fin_correcto(j, resultado in CON_VISITA), f"({j.get('fecha_visita')} -> {j.get('fecha_fin_visita')})")
     # La fila: tipo, resultado, motivo, informe recortado.
     f = fila_resultado(op)
     comprobar(f"{titulo}: fila con tipo, resultado, motivo e informe",
@@ -363,6 +391,9 @@ D_G1, D_S1, D_S3, D_K1, D_K2, D_K3, D_K4, D_K5, D_C1, D_C2, D_C3, D_C4 = (DIAS.s
 # B5-0: antes de crear nada, ninguna visita activa AJENA en el bloque.
 fechas_prueba.exigir_libres("check_resultados_llamada_http", PATRON,
                             [fechas_prueba.tramo_del_bloque("check_resultados_llamada_http", HOY)])
+# D33: la duración REAL de la visita, leída aquí aparte (no con el código
+# probado), para el fin esperado (fin_correcto).
+DURACION = int(consultar("SELECT valor FROM reglas_negocio WHERE clave = 'duracion_visita_min';")[0][0])
 
 # El puerto tiene que estar libre: si no, se para y se avisa.
 if puerto_ocupado(PUERTO):
@@ -610,6 +641,10 @@ try:
         comprobar(f"repetición {cuerpo['resultado']} -> 200, mismo llamada_id, nada escrito, informe original",
                   r.status_code == 200 and cuerpo_de(r).get("llamada_id") is not None
                   and foto_op(op) == antes and fila_resultado(op) == fila_antes, f"({r.status_code})")
+        # D33: la repetición también trae su fin (o null sin visita).
+        comprobar(f"repetición {cuerpo['resultado']}: fecha_fin_visita correcta",
+                  fin_correcto(cuerpo_de(r), cuerpo["resultado"] in CON_VISITA),
+                  f"({cuerpo_de(r).get('fecha_visita')} -> {cuerpo_de(r).get('fecha_fin_visita')})")
         # Otro resultado sobre la misma: 409 resultado_ya_registrado.
         otro = {"resultado": "descartar", "motivo": "otro"} if cuerpo["resultado"] != "descartar" else \
                {"resultado": "descartar", "motivo": "precio"}
@@ -622,9 +657,12 @@ try:
     # El mismo descarte de Gate por el alias: su contrato y la fila con tipo gate.
     _, g5 = lead(estructural=True)
     r = pedir("POST", "/gate-decisions", {"oportunidad_id": g5, "decision": "descartar", "motivo": "precio", "informe": "x"})
-    comprobar("alias: 201 con las 8 claves de siempre y la fila con tipo_llamada 'gate'",
+    # D33 (P2): las 8 de siempre más fecha_fin_visita, null en un descarte.
+    comprobar("alias: 201 con las 8 claves de siempre más fecha_fin_visita (null) y la fila con tipo_llamada 'gate'",
               r.status_code == 201 and set(cuerpo_de(r)) == {"decision_id", "oportunidad_id", "decision", "motivo",
-                                                             "estado_oportunidad", "visita_id", "fecha_propuesta", "creado"}
+                                                             "estado_oportunidad", "visita_id", "fecha_propuesta",
+                                                             "fecha_fin_visita", "creado"}
+              and cuerpo_de(r).get("fecha_fin_visita") is None
               and (fila_resultado(g5) or ("",))[0] == "gate", f"({r.status_code} {r.text[:150]})")
     # Y su log lo escribió el servicio NUEVO: la acción de siempre con las
     # claves de B2 (tipo_llamada y estado). Una copia del servicio antiguo

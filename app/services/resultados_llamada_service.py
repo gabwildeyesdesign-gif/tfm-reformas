@@ -54,6 +54,8 @@ from app.services.reglas_visita import (
     RechazoNegocio,
     combinar_fecha_hora_madrid,
     comprobar_hueco_libre,
+    # D33: el fin de la visita para la respuesta (fecha_fin_visita).
+    fin_de_visita,
     leer_reglas_visita,
     registrar_configuracion_incompleta,
     validar_fecha,
@@ -191,7 +193,8 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
 
     Orden (plan 2.8; el del alias, Adenda 5.5):
       404 -> 409 sin_presupuesto -> [alias: 409 sin_gate] -> ¿hay resultado?
-      (igual: 200; distinto: 409) -> tipo (409 estado_no_permitido o el
+      (igual: 200, o 503 si es con visita y faltan sus reglas (D33, P1);
+      distinto: 409) -> tipo (409 estado_no_permitido o el
       criterio de b); 503 de la regla de 48 h) -> 409 resultado_no_admitido
       -> con visita: 503 -> 409 visita_cambiada / 422 misma_hora_pedida ->
       422 de fecha -> 409 visita_activa_existente -> 409 hueco_ocupado (D31)
@@ -250,9 +253,10 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
     # Va ANTES que el tipo: tras el 201 el estado ya cambió, y un reintento
     # legítimo de n8n daría 409 en vez de 200.
     previa = _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gate)
-    # Repetición exacta: se devuelve lo que ya estaba, sin escribir nada.
+    # Repetición exacta: lo que ya estaba, sin escribir nada; desde D33 es ya
+    # el par (respuesta, rechazo_diferido), por el 503 de P1.
     if previa is not None:
-        return previa, None
+        return previa
 
     # ------------------------------------------------------------------
     # 4. El tipo de llamada (409 o 503)
@@ -300,6 +304,8 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
     # ------------------------------------------------------------------
     # 6. Lo que necesita una visita (503, 409, 422)
     # ------------------------------------------------------------------
+    # D33: sin visita no se leen las reglas (y no hay fin que calcular).
+    reglas = None
     if data.resultado in CON_FECHA:
         # Reglas de visita, las MISMAS de /visits (503 con log si faltan).
         reglas, problemas = leer_reglas_visita(cursor)
@@ -350,13 +356,20 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
     # ------------------------------------------------------------------
     # 7. Escritura
     # ------------------------------------------------------------------
-    return _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id, fecha_pedida), None
+    # D33: con las reglas leídas en el paso 6 (o None), para el fin de la visita.
+    return _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id, fecha_pedida, reglas), None
 
 
 def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gate):
     """
     Si ya hay un resultado: la respuesta de la repetición (si es la MISMA
     petición) o un 409 (si es otra). Si no hay ninguno, None.
+
+    D33 (2026-10-14): la repetición devuelve el par (respuesta,
+    rechazo_diferido). Con visita, su fecha_fin_visita necesita las reglas,
+    que en este camino todavía no se han leído: se leen aquí (UNA consulta,
+    solo en este caso) y, si faltan, 503 con su log, como el 201 y como la
+    repetición de /visits (P1 del plan D33).
     """
     # SQL: el resultado previo (como mucho uno: UNIQUE (oportunidad_id)) y la
     # fecha de su visita confirmada (LEFT JOIN: puede no tener).
@@ -391,6 +404,20 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gat
     # Repetición: lo que ya estaba, sin escribir nada (el informe nuevo se
     # ignora y se conserva el original).
     if es_repeticion:
+        # D33: sin visita, no hay fin (ni lectura de reglas).
+        fin = None
+        # Con visita: las reglas de visita, para su fin.
+        if previa_fecha is not None:
+            reglas, problemas = leer_reglas_visita(cursor)
+            # Rotas: el rastro para administración y el 503 DIFERIDO (el log
+            # se confirma con el commit de quien llama), como en el paso 6.
+            if problemas:
+                registrar_configuracion_incompleta(cursor, oportunidad_id, problemas,
+                                                   ORIGEN_LOG if solo_gate else ORIGEN_LOG_NUEVO)
+                # Sin respuesta, y el 503 como rechazo diferido.
+                return None, ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIG_VISITAS, problemas)
+            # Bien: el fin, con la función compartida.
+            fin = fin_de_visita(previa_fecha, reglas)
         return ResultadoLlamadaResponse(
             llamada_id=previa_id,
             oportunidad_id=oportunidad_id,
@@ -401,9 +428,11 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gat
             visita_id=previa_visita,
             # En hora de Madrid, solo si hay fecha.
             fecha_visita=previa_fecha.astimezone(ZONA_MADRID) if previa_fecha is not None else None,
+            # D33: su fin (None sin visita).
+            fecha_fin_visita=fin,
             visita_cancelada_id=previa_cancelada,
             creado=False,
-        )
+        ), None
     # Otro resultado: definitivo (R2). El alias, con su código y su mensaje.
     if solo_gate:
         raise EstadoNoPermiteResultado(
@@ -418,10 +447,14 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gat
     )
 
 
-def _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id, fecha_pedida):
+# D33: recibe además las reglas de visita (para fecha_fin_visita).
+def _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id, fecha_pedida, reglas):
     """
     Las escrituras de un resultado nuevo (plan 2.4), con segunda barrera en
     cada UPDATE (rowcount = 1). Devuelve la respuesta (creado=True).
+
+    reglas (D33): las de visita que leyó el paso 6, para fecha_fin_visita;
+    None en descartar y cliente_cancela (no hay visita).
     """
     # Lo que se escribe, según el resultado (todo empieza vacío).
     visita_id, fecha_visita, cancelada_id = None, None, None
@@ -520,6 +553,8 @@ def _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id,
         estado_oportunidad=nuevo_estado,
         visita_id=visita_id,
         fecha_visita=fecha_visita,
+        # D33: su fin con las reglas del paso 6; None si no queda visita.
+        fecha_fin_visita=fin_de_visita(fecha_visita, reglas) if fecha_visita is not None else None,
         visita_cancelada_id=cancelada_id,
         creado=True,
     )
@@ -596,5 +631,7 @@ def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
         estado_oportunidad=resultado.estado_oportunidad,
         visita_id=resultado.visita_id,
         fecha_propuesta=resultado.fecha_visita,
+        # D33: la clave nueva, tal cual (P2 del plan D33).
+        fecha_fin_visita=resultado.fecha_fin_visita,
         creado=resultado.creado,
     )

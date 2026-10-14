@@ -16,7 +16,13 @@ y contaría como FALLO, sin confirmar nada.
       ruta nueva, "resultados_llamada"; por el alias, "gate_decisions".
   S4  los estados se importan, no se escriben (ast).
   S5  los cinco resultados, con registrar_resultado_con_cursor: su
-      respuesta y lo que escriben; un commit() dentro sería FALLO.
+      respuesta y lo que escriben; un commit() dentro sería FALLO. Desde D33
+      (2026-10-14), también fecha_fin_visita (fin = inicio + la duración
+      leída aquí de reglas_negocio; None sin visita).
+  S7  D33, P1 (plan docs/Plan_Fecha_Fin_Visita_D33.txt): la repetición de un
+      resultado CON visita lee las reglas para su fin; rotas, 503 diferido
+      con su log (ruta nueva y alias) y nada más escrito. Sin visita, la
+      repetición no las lee (200 aunque estén rotas).
 
 Las 4 preguntas: (1) escribe en tablas reales SOLO dentro de esta
 transacción, que se deshace siempre; (2) pasa su cursor al código, por eso
@@ -32,8 +38,8 @@ import ast
 import re
 # sys: consola y salida. Path: rutas.
 import sys
-# Fechas en Madrid.
-from datetime import date, datetime, timedelta
+# Fechas en Madrid (timezone: el fin esperado se suma en UTC, D33).
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -109,6 +115,8 @@ DIAS = fechas_prueba.Dias("check_resultados_llamada_service", HOY)
 LUNES = DIAS.siguiente()
 # Los días propios de op_c, op_conf2 y op_conf3.
 D_C, D_CONF2, D_CONF3 = DIAS.siguiente(), DIAS.siguiente(), DIAS.siguiente()
+# D33: los días de S7, uno por ruta (dos Gates el mismo día y hora chocarían).
+D_P1_NUEVA, D_P1_ALIAS = DIAS.siguiente(), DIAS.siguiente()
 # B5-0: ninguna visita activa AJENA en el bloque (las de este script nunca
 # se confirman: todo acaba en ROLLBACK).
 fechas_prueba.exigir_libres("check_resultados_llamada_service", EMAIL,
@@ -183,6 +191,15 @@ try:
     # SQL: el now() de la transacción (el de la deducción).
     cur.execute("SELECT now();")
     AHORA = cur.fetchone()[0]
+    # D33: la duración REAL de la visita, leída aquí aparte (no con el código
+    # probado), para el fin esperado.
+    cur.execute("SELECT valor FROM reglas_negocio WHERE clave = 'duracion_visita_min';")
+    DURACION = int(cur.fetchone()[0])
+
+    def fin_esperado(inicio_visita):
+        """D33: inicio + DURACION minutos REALES (en UTC), de vuelta a Madrid."""
+        # La suma en UTC (gotcha del reloj de pared) y el desfase de Madrid.
+        return (inicio_visita.astimezone(timezone.utc) + timedelta(minutes=DURACION)).astimezone(MADRID)
 
     # ==================================================================
     print("\nS1. deducir_tipo_llamada")
@@ -341,6 +358,21 @@ try:
         comprobar(f"{resultado}: fila ({tipo}, {resultado}) y visitas {estados_visita}",
                   fila == (tipo, resultado, "confirmada" in estados_visita, "cancelada" in estados_visita)
                   and visitas == estados_visita, f"({fila}, {visitas})")
+        # D33: con visita confirmada, su fin (mismo instante y desfase que el
+        # esperado); sin ella, fecha_visita y fecha_fin_visita None.
+        # Sin respuesta (un rechazo): FALLO contado, nunca una traza.
+        if respuesta is None:
+            fin_bien = False
+        # Con visita confirmada: el fin esperado y el mismo desfase.
+        elif "confirmada" in estados_visita:
+            fin_bien = (respuesta.fecha_visita is not None and respuesta.fecha_fin_visita == fin_esperado(respuesta.fecha_visita)
+                        and respuesta.fecha_fin_visita.utcoffset() == respuesta.fecha_visita.utcoffset())
+        # Sin visita confirmada: los dos None.
+        else:
+            fin_bien = respuesta.fecha_visita is None and respuesta.fecha_fin_visita is None
+        comprobar(f"{resultado}: fecha_fin_visita " + (f"= fecha_visita + {DURACION} min" if "confirmada" in estados_visita
+                                                       else "None, como fecha_visita"),
+                  fin_bien, f"({respuesta.fecha_visita}, {respuesta.fecha_fin_visita})")
 
     # ==================================================================
     print("\nS6. El alias llega al servicio NUEVO (ast)")
@@ -354,6 +386,81 @@ try:
     # Y no existe ningún servicio viejo al que pudiera llamar.
     comprobar("app/services/gate_decisions_service.py no existe",
               not (RAIZ_REPO / "app/services/gate_decisions_service.py").exists())
+
+    # ==================================================================
+    print("\nS7. D33, P1: la repetición con visita lee las reglas para su fin")
+    # ==================================================================
+    def contar(op):
+        """(resultados, visitas, logs de configuración incompleta) de la oportunidad."""
+        # SQL: los tres recuentos de esa oportunidad.
+        cur.execute("SELECT (SELECT count(*) FROM decisiones_gate WHERE oportunidad_id = %(op)s), "
+                    "(SELECT count(*) FROM visitas WHERE oportunidad_id = %(op)s), "
+                    "(SELECT count(*) FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %(op)s "
+                    "AND accion = 'visita_configuracion_incompleta');", {"op": op})
+        # La única fila: la tupla de los tres recuentos.
+        return cur.fetchone()
+
+    # Las dos ayudas de S7: romper y restaurar los nombres de las reglas.
+    def romper_reglas():
+        """Un nombre de regla falso EN MEMORIA (la fila real no se toca), como en S3."""
+        # La duración con un nombre que no existe, también dentro de la tupla.
+        reglas_visita.CLAVE_DURACION = "regla_de_visita_que_no_existe"
+        reglas_visita.CLAVES_REGLAS = tuple(reglas_visita.CLAVE_DURACION if c == CLAVE_DURACION_REAL else c
+                                            for c in CLAVES_REGLAS_REAL)
+
+    # Deshace romper_reglas().
+    def restaurar_reglas():
+        """Los nombres reales otra vez (también en el finally, por si acaso)."""
+        # Los dos, a la vez.
+        reglas_visita.CLAVE_DURACION, reglas_visita.CLAVES_REGLAS = CLAVE_DURACION_REAL, CLAVES_REGLAS_REAL
+
+    # Una por ruta: (nombre, solo_gate, origen del log, día).
+    for nombre, solo_gate, origen, dia in (("ruta nueva", False, "resultados_llamada", D_P1_NUEVA),
+                                           ("alias", True, "gate_decisions", D_P1_ALIAS)):
+        # Un Gate con su visita acordada (con las reglas bien).
+        op = oportunidad("pendiente_aprobacion", gate=True)
+        data = ResultadoLlamadaCreate(oportunidad_id=op, resultado="visita_acordada", fecha=str(dia),
+                                      hora="09:45", informe="prueba D33")
+        # El registro de partida (con las reglas bien): el 201.
+        primera, _ = registrar_resultado_con_cursor(cur, data, solo_gate)
+        # Sin el 201 no hay repetición que probar: se cuenta como FALLO.
+        comprobar(f"{nombre}: el registro de partida es nuevo (creado)", primera is not None and primera.creado,
+                  f"({primera})")
+        # Los recuentos justo antes de la repetición.
+        antes = contar(op)
+        # La MISMA petición con las reglas rotas: una repetición que las necesita.
+        romper_reglas()
+        respuesta, rechazo = registrar_resultado_con_cursor(cur, data, solo_gate)
+        restaurar_reglas()
+        # Tiene que salir el 503 diferido, sin respuesta.
+        comprobar(f"{nombre}: repetición con las reglas rotas -> ConfiguracionIncompleta diferido, sin respuesta",
+                  respuesta is None and isinstance(rechazo, ConfiguracionIncompleta), f"({respuesta}, {rechazo})")
+        # SQL: el log de esa oportunidad, con su origen.
+        cur.execute("SELECT detalle FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %s "
+                    "AND accion = 'visita_configuracion_incompleta';", (op,))
+        logs = [f[0] for f in cur.fetchall()]
+        # Un log más y ni un resultado ni una visita más.
+        comprobar(f"{nombre}: 1 log con origen '{origen}' y nada más escrito",
+                  len(logs) == 1 and logs[0].get("origen") == origen and contar(op) == (antes[0], antes[1], antes[2] + 1),
+                  f"({logs}, {antes} -> {contar(op)})")
+        # Con las reglas bien: repetición con el mismo fin que el registro.
+        respuesta, rechazo = registrar_resultado_con_cursor(cur, data, solo_gate)
+        comprobar(f"{nombre}: con las reglas bien, repetición (creado False) con el mismo fecha_fin_visita",
+                  rechazo is None and respuesta is not None and respuesta.creado is False and primera is not None
+                  and respuesta.fecha_fin_visita == primera.fecha_fin_visita == fin_esperado(primera.fecha_visita),
+                  f"({respuesta}, {rechazo})")
+    # Sin visita (descartar): la repetición no lee las reglas.
+    op = oportunidad("pendiente_aprobacion", gate=True)
+    data = ResultadoLlamadaCreate(oportunidad_id=op, resultado="descartar", motivo="precio", informe="prueba D33")
+    registrar_resultado_con_cursor(cur, data)
+    # La repetición con las reglas rotas.
+    romper_reglas()
+    respuesta, rechazo = registrar_resultado_con_cursor(cur, data)
+    restaurar_reglas()
+    # Sin visita no se leen: repetición normal, sin fin y sin log.
+    comprobar("descartar: repetición con las reglas rotas -> repetición (creado False), fin None, ningún log",
+              rechazo is None and respuesta is not None and respuesta.creado is False
+              and respuesta.fecha_fin_visita is None and contar(op)[2] == 0, f"({respuesta}, {rechazo})")
 finally:
     # Siempre: nombres reales en memoria y ROLLBACK de todo.
     tipo_llamada.CLAVE_SEGUIMIENTO = CLAVE_SEG_REAL

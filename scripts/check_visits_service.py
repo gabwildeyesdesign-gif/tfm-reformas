@@ -22,6 +22,11 @@ Bloque D:
       no se toca ninguna fila compartida de reglas_negocio. Debe salir
       ConfiguracionIncompleta, el log debe CONSERVARSE (el rechazo se lanza
       después del commit), y no debe crearse ninguna visita.
+
+D33 (2026-10-14, plan docs/Plan_Fecha_Fin_Visita_D33.txt):
+  1b. fin_de_visita() con duraciones distintas de la real y cruzando el
+      cambio de hora (sin base de datos), y con ast: sin números escritos en
+      la función, y los dos servicios la usan sin sumar por su cuenta.
 """
 
 import sys
@@ -83,6 +88,60 @@ for dia, hora, desfase, utc_esperado in CASOS:
     comprobar(f"{dia}: desfase {desfase}", resultado.utcoffset() == desfase, f"(obtenido {resultado.utcoffset()})")
     comprobar(f"{dia}: en UTC {utc_esperado}", en_utc == utc_esperado)
     comprobar(f"{dia}: la hora local sigue siendo {hora:%H:%M}", (resultado.hour, resultado.minute) == (hora.hour, hora.minute))
+
+# D33: la sección nueva, con su cabecera.
+print("\n" + "=" * 78)
+print("1b. D33: fin_de_visita() (función pura) y quién la usa (ast)")
+print("=" * 78)
+# D33 (2026-10-14, plan docs/Plan_Fecha_Fin_Visita_D33.txt): fecha_fin_visita
+# = inicio + duracion_visita_min. Duraciones DISTINTAS de la real (60): una
+# copia con un 60 fijo pasaría las pruebas HTTP, pero no estas. Lo esperado
+# está escrito a mano, no calculado con el código probado.
+# (inicio en Madrid, duración en minutos, fin esperado como lo escribe la API)
+CASOS_FIN = [
+    # Verano (+02:00), la duración de hoy.
+    (combinar_fecha_hora_madrid(date(2026, 10, 16), time(11, 0)), 60, "2026-10-16T12:00:00+02:00"),
+    # Invierno (+01:00), una duración rara (47).
+    (combinar_fecha_hora_madrid(date(2026, 10, 26), time(8, 30)), 47, "2026-10-26T09:17:00+01:00"),
+    # La última de la tarde con 90.
+    (combinar_fecha_hora_madrid(date(2026, 10, 16), time(18, 15)), 90, "2026-10-16T19:45:00+02:00"),
+    # Cruza el cambio de hora (25/10/2026, 03:00 -> 02:00): 01:30+02:00 más
+    # 90 min REALES son las 02:00+01:00. Una suma "de reloj de pared" daría
+    # 03:00+01:00, una hora de más (no pasa en la franja, pero es la regla).
+    (combinar_fecha_hora_madrid(date(2026, 10, 25), time(1, 30)), 90, "2026-10-25T02:00:00+01:00"),
+]
+# Cada caso, con unas reglas que solo tienen la duración (la función no
+# necesita más).
+for inicio_caso, minutos_caso, esperado_caso in CASOS_FIN:
+    # isoformat(): el mismo texto que escribe la API ("...T12:00:00+02:00").
+    obtenido = reglas_visita.fin_de_visita(inicio_caso, {reglas_visita.CLAVE_DURACION: minutos_caso}).isoformat()
+    # Mismo texto: mismo instante, mismo desfase y mismo formato.
+    comprobar(f"{inicio_caso.isoformat()} + {minutos_caso} min -> {esperado_caso}", obtenido == esperado_caso,
+              f"(obtenido {obtenido})")
+
+# ast: estructura, sin ejecutar nada.
+import ast
+
+# El árbol de reglas_visita.py y, dentro, la función fin_de_visita.
+arbol_reglas = ast.parse((RAIZ_REPO / "app/services/reglas_visita.py").read_text(encoding="utf-8"))
+funcion_fin = [n for n in arbol_reglas.body if isinstance(n, ast.FunctionDef) and n.name == "fin_de_visita"]
+# Los números enteros escritos dentro de su cuerpo (bool es un int: se excluye).
+numeros = [n.value for f in funcion_fin for n in ast.walk(f)
+           if isinstance(n, ast.Constant) and isinstance(n.value, int) and not isinstance(n.value, bool)]
+comprobar("ast: fin_de_visita existe y no tiene ningún número escrito (nunca un 60)",
+          len(funcion_fin) == 1 and numeros == [], f"({len(funcion_fin)} funciones, números {numeros})")
+# Los dos servicios: ni una suma propia (timedelta) y fin_de_visita en sus dos respuestas.
+for archivo_servicio in ("app/services/visits_service.py", "app/services/resultados_llamada_service.py"):
+    # El árbol del servicio.
+    arbol_servicio = ast.parse((RAIZ_REPO / archivo_servicio).read_text(encoding="utf-8"))
+    # Cualquier nombre o atributo "timedelta".
+    sumas = [n for n in ast.walk(arbol_servicio) if (isinstance(n, ast.Name) and n.id == "timedelta")
+             or (isinstance(n, ast.Attribute) and n.attr == "timedelta")]
+    # Las llamadas a fin_de_visita (dos: la repetición y la escritura).
+    llamadas = [n for n in ast.walk(arbol_servicio) if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name) and n.func.id == "fin_de_visita"]
+    comprobar(f"ast: {archivo_servicio} no usa timedelta y llama 2 veces a fin_de_visita",
+              sumas == [] and len(llamadas) == 2, f"({len(sumas)} timedelta, {len(llamadas)} llamadas)")
 
 print("\n" + "=" * 78)
 print("2a. leer_reglas_visita() CON UN CURSOR DE MENTIRA (sin base de datos)")

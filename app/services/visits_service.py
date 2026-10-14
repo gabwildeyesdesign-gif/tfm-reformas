@@ -26,6 +26,8 @@ from app.services.reglas_visita import (
     RechazoNegocio,
     combinar_fecha_hora_madrid,
     comprobar_hueco_libre,
+    # D33: el fin de la visita para la respuesta (fecha_fin_visita).
+    fin_de_visita,
     leer_reglas_visita,
     registrar_configuracion_incompleta,
     validar_fecha,
@@ -234,6 +236,9 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
                         visita_id=activa_id,
                         estado=activa_estado,
                         fecha_propuesta=activa_fecha.astimezone(ZONA_MADRID),
+                        # D33: su fin, con las reglas YA leídas en el paso 3
+                        # (ninguna consulta nueva).
+                        fecha_fin_visita=fin_de_visita(activa_fecha, reglas),
                         sustituye_a=None,
                         creado=False,
                     )
@@ -318,6 +323,8 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
                 visita_id=visita_id,
                 estado=estado_visita,
                 fecha_propuesta=fecha_madrid,
+                # D33: su fin, con las mismas reglas del paso 3.
+                fecha_fin_visita=fin_de_visita(fecha_madrid, reglas),
                 sustituye_a=sustituye_a,
                 creado=True,
             )

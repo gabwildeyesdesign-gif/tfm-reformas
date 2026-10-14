@@ -1,0 +1,162 @@
+================================================================
+PLAN — D33: fecha_fin_visita en POST /visits y POST /resultados-llamada
+Rama: feat/n0-fecha-fin-visita (desde main = f81f6ac)
+Fecha: 2026-10-14
+================================================================
+
+1. CONTEXTO
+================================================================
+Decisión D33 del tutor (2026-10-14; su documento lo tiene el tutor en el
+Proyecto de claude.ai, todavía no en docs/): n8n copiará cada visita a
+Google Calendar con un subflujo, WF5_calendario_visita. Las 'solicitada'
+(pedidas por el cliente desde el chat, POST /visits) irán como PENDIENTES y
+las 'confirmada' (formulario de llamadas, POST /resultados-llamada y su alias
+POST /gate-decisions) como confirmadas. La base de datos sigue siendo la
+fuente de verdad (D31).
+
+Para la hora de FIN del evento, n8n no debe copiar la regla
+duracion_visita_min: la da el backend, en un campo nuevo de la respuesta.
+
+Encargo (literal en lo esencial):
+  1. POST /resultados-llamada y su alias: en el 201 y el 200,
+     fecha_fin_visita = fecha_visita + duracion_visita_min, con el mismo
+     formato y desfase ("2026-10-16T12:00:00+02:00"); null cuando
+     fecha_visita es null (descartar, cliente_cancela).
+  2. POST /visits: el mismo campo en su respuesta.
+  3. La duración, de la MISMA lectura de reglas_negocio que ya hace la
+     validación de esa petición (sin consultas nuevas si ya está leída).
+     Nunca un 60 escrito en el código.
+  4. Pruebas: el campo en visita_acordada, confirmar_hora, otra_hora y POST
+     /visits; null en descartar y cliente_cancela; negativa sobre una COPIA
+     que sume mal la duración (FALLO contado). Regresión de TODOS los
+     scripts que crean visitas y suite completa.
+  5. Documentación: docs/Contrato_Formulario_Llamadas.md (sección 4), la
+     Adenda (5.4 y 5.10) y CLAUDE.md.
+
+2. LO LEÍDO (fuente: el código de main = f81f6ac)
+================================================================
+- app/services/visits_service.py: leer_reglas_visita(cursor) se llama en el
+  paso 3, ANTES de la repetición (paso 5) y de la escritura (paso 6). Las
+  dos respuestas (200 y 201) tienen ya "reglas" a mano: ninguna consulta
+  nueva.
+- app/services/resultados_llamada_service.py: la repetición (paso 3,
+  _repeticion_o_rechazo) va ANTES de leer las reglas (paso 6, solo con
+  visita). El 201 con visita tiene "reglas"; el 200 NO (ver P1).
+- app/services/reglas_visita.py: choca() ya suma minutos en UTC por el
+  gotcha del "reloj de pared" de CLAUDE.md.
+- Respuestas con claves EXACTAS en los scripts: check_gate_decisions_http
+  (CLAVES_RESPUESTA, 8 claves) y check_resultados_llamada_http
+  (CLAVES_RESPUESTA de la ruta nueva y el CASO 10 del alias). Ningún otro
+  script compara las claves de estas tres respuestas (búsqueda con grep,
+  2026-10-14).
+
+3. CONTRADICCIONES Y DECISIONES (Rule of Three)
+================================================================
+P1. La repetición (200) de POST /resultados-llamada no tiene las reglas
+    leídas. El encargo dice "sin consultas nuevas SI YA ESTÁ LEÍDA"; en
+    este camino no lo está.
+    (a) Leer las reglas SOLO en una repetición con visita y, si faltan o son
+        inválidas, 503 configuracion_incompleta con su log (rechazo
+        diferido, el mismo mecanismo y mensaje del paso 6; origen
+        "resultados_llamada" o "gate_decisions").
+        + Mismo comportamiento que /visits, donde la repetición ya va
+          después de leer las reglas (un 503 con log si están rotas).
+        + Una consulta más, solo en ese camino (reintentos de n8n).
+        - Cambia un caso límite: una repetición con las reglas rotas daba
+          200 y ahora da 503 (también por el alias).
+    (b) Subir la lectura de reglas antes de la repetición para todo
+        resultado con fecha.
+        - Cambia el orden documentado (Adenda 5.10, plan 2.8): el 503 iría
+          por delante de resultado_ya_registrado, del tipo y de
+          resultado_no_admitido.
+    (c) fecha_fin_visita null en las repeticiones.
+        - Silencioso: WF5 crearía (o actualizaría) un evento sin fin.
+    ELEGIDA (a), pendiente de la revisión del tutor. Una repetición SIN
+    visita (descartar, cliente_cancela) no lee nada: sigue dando 200 aunque
+    las reglas estén rotas (S7 de check_resultados_llamada_service).
+
+P2. El alias POST /gate-decisions "conserva su contrato de siempre" (D26.6;
+    check_gate_decisions_http 121/121 sin tocar en 4b). El encargo pide el
+    campo también en él.
+    (a) Añadirlo (el encargo). El formulario del Gate PUBLICADO usa el alias,
+        así que WF5 necesita ahí el fin de las visitas acordadas del Gate.
+        Añadir una clave no rompe a quien lee el JSON (n8n ignora las que no
+        usa).
+        - check_gate_decisions_http (8 -> 9 claves) y el CASO 10 de
+          check_resultados_llamada_http cambian.
+    (b) No añadirlo: WF5 tendría que esperar a que el formulario use la ruta
+        nueva, o calcular el fin él mismo (justo lo que D33 prohíbe).
+    ELEGIDA (a), la del encargo; se señala porque contradice la frase "su
+    contrato de siempre" de CLAUDE.md y de la Adenda 5.10.
+
+P3. Limitación (no es una bifurcación con alternativa razonable en N0): el
+    fin se calcula con la duracion_visita_min VIGENTE, no con la que había
+    al crear la visita (la tabla visitas no guarda el fin). Si
+    administración cambia la duración, el 200 de una repetición, y el
+    evento que WF5 actualice con él, tendrá el fin nuevo. Arreglarlo es la
+    columna de fin guardado de N1 (ya anotada para la segunda barrera de
+    D31). Se escribe en la Adenda.
+
+4. DISEÑO
+================================================================
+- reglas_visita.py: fin_de_visita(inicio, reglas) -> datetime. La ÚNICA suma
+  de la duración para la respuesta: (inicio en UTC + timedelta(minutes=
+  reglas[CLAVE_DURACION])) de vuelta a Europe/Madrid. Sin números escritos.
+- Esquemas: VisitaResponse.fecha_fin_visita: datetime (nunca None);
+  ResultadoLlamadaResponse.fecha_fin_visita y
+  GateDecisionResponse.fecha_fin_visita: datetime | None. Pydantic los
+  escribe como fecha_visita/fecha_propuesta ("...T12:00:00+02:00").
+- visits_service.py: las dos respuestas, con las reglas del paso 3.
+- resultados_llamada_service.py: _repeticion_o_rechazo devuelve el par
+  (respuesta, rechazo_diferido) por P1; _escribir recibe las reglas del paso
+  6 (None sin visita); registrar_decision copia el campo al alias.
+- Sin migración, sin consulta nueva en los 201 ni en el 200 de /visits.
+
+5. PRUEBAS
+================================================================
+Positivas (cada script lee la duración REAL de reglas_negocio por su cuenta
+y calcula el fin esperado sumando en UTC; nunca con el código probado):
+  - check_visits_service, 1b: fin_de_visita con 60, 47 y 90 min, en verano,
+    invierno y cruzando el cambio de hora del 25/10/2026 (01:30+02:00 + 90 =
+    02:00+01:00), con lo esperado escrito a mano; ast: la función no tiene
+    números escritos, y los dos servicios no usan timedelta y la llaman 2
+    veces cada uno.
+  - check_visits_http: CASOS 8 (201), 9 (200), 10 (sustitución: el fin de
+    la NUEVA) y 13 (200 de una confirmada); CASO 20, el fin en TODAS las
+    respuestas de éxito.
+  - check_resultados_llamada_http: claves exactas con fecha_fin_visita;
+    verificar_201 en los cinco resultados (fin en visita_acordada,
+    confirmar_hora y otra_hora; null en descartar y cliente_cancela);
+    repeticiones del CASO 9; alias (CASO 10) con 9 claves y null.
+  - check_gate_decisions_http: 9 claves; fin en cada 201 de visita_acordada
+    y null en descartar; las dos repeticiones (verificar_200).
+  - check_resultados_llamada_service: S5 (los cinco, sobre el objeto) y S7
+    (P1: repetición con las reglas rotas en memoria -> 503 diferido con un
+    log y nada más, ruta nueva y alias; con las reglas bien, el mismo fin;
+    descartar no las lee).
+Negativas (sobre COPIAS de app/, de una en una):
+  N1. fin_de_visita suma mal: duración + desplazamiento (la del encargo).
+  N2. fin_de_visita con un 60 escrito (pasa las HTTP con la regla real:
+      solo la 1b lo ve; por eso existe).
+  N3. Suma "de reloj de pared" (inicio + timedelta sin pasar a UTC):
+      mutante equivalente en las franjas reales; solo el caso del cambio de
+      hora de la 1b lo ve.
+  N4. P1 sin hacer: la repetición devuelve fecha_fin_visita null (el CASO 9
+      y la S7 lo ven).
+Regresión: TODOS los scripts que crean visitas (regla del 2026-10-12) y la
+suite completa en UNA pasada, con la regla de uso y Kernel-Power 506/507.
+Datos reales iguales antes y después (foto y SHA-256 de las filas que no
+son de prueba).
+
+6. EJECUCIÓN EN DOS FASES (regla del 2026-10-12)
+================================================================
+Fase 1 (Docker/n8n abiertos): código, scripts y este plan, con sus
+comentarios medidos; ast.parse; commit "SIN ejecutar". Nada contra la base
+de datos.
+Fase 2 (cuando Gabi lo diga): memoria libre >= 1,5 GB y sin chrome, msedge
+ni docker/vmmem; foto de datos reales; positivas; N1-N4; regresión y suite;
+foto otra vez. Después, Bloque D (documentación) y push.
+
+7. RESULTADOS Y HASHES
+================================================================
+(se rellenan en la fase 2)

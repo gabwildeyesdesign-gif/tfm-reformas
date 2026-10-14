@@ -16,6 +16,10 @@ Qué hace, en pocas palabras:
      forma, estado, fecha, efectos, repeticiones, decisión ya registrada,
      concurrencia y regresión cruzada con /visits y /leads/session.
   5. Borra SOLO lo suyo y comprueba que no ha tocado nada ajeno.
+  (D33, 2026-10-14, plan docs/Plan_Fecha_Fin_Visita_D33.txt, P2: la respuesta
+  tiene una clave más, fecha_fin_visita = fecha_propuesta + la duración leída
+  aquí de reglas_negocio, con el mismo texto y desfase; null al descartar. Se
+  comprueba en cada 201 y en las dos repeticiones.)
 
 Marca propia de los datos: emails http-gate-<8 caracteres>@example.com
 (dominio reservado), con tokens uuid4 nuevos en cada ejecución.
@@ -60,7 +64,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 # date/datetime/time/timedelta: fechas y horas. "time" se renombra a
 # hora_del_dia para no chocar con el módulo time de arriba.
-from datetime import datetime, time as hora_del_dia, timedelta
+from datetime import datetime, time as hora_del_dia, timedelta, timezone
 # Path: rutas de archivos independientes del sistema operativo.
 from pathlib import Path
 # ZoneInfo: la zona horaria oficial Europe/Madrid (con cambio de hora).
@@ -114,6 +118,8 @@ CLAVES_RESPUESTA = {
     # Las 8 claves, separadas por comas; un set ({...}) no tiene orden ni repetidos.
     "decision_id", "oportunidad_id", "decision", "motivo",
     "estado_oportunidad", "visita_id", "fecha_propuesta", "creado",
+    # D33 (P2): la novena, el fin de la visita.
+    "fecha_fin_visita",
 }
 
 # ----------------------------------------------------------------------
@@ -398,6 +404,26 @@ def esperado_madrid(fecha, hora):
     return datetime.combine(fecha, hora_del_dia(h, m), tzinfo=MADRID)
 
 
+# fin_correcto (D33): se usa en verificar_201 y en verificar_200.
+def fin_correcto(j, con_visita):
+    """
+    True si fecha_fin_visita es la que toca. Con visita: el texto de
+    fecha_propuesta + DURACION minutos reales (en UTC), en Madrid, escrito
+    igual que la API. Sin visita: las dos claves null.
+    """
+    # Sin visita: las dos presentes y null.
+    if not con_visita:
+        return "fecha_fin_visita" in j and j["fecha_fin_visita"] is None and j.get("fecha_propuesta") is None
+    # Con visita y sin fecha_propuesta: mal.
+    if not j.get("fecha_propuesta"):
+        return False
+    # El inicio y el fin esperado, sumado en UTC y de vuelta a Madrid.
+    inicio_v = datetime.fromisoformat(j["fecha_propuesta"])
+    esperado = (inicio_v.astimezone(timezone.utc) + timedelta(minutes=DURACION)).astimezone(MADRID)
+    # El mismo texto: mismo instante, desfase y formato.
+    return j.get("fecha_fin_visita") == esperado.isoformat()
+
+
 # claves_con_importe: recorre el JSON entero buscando importes.
 def claves_con_importe(objeto, ruta=""):
     """Rutas de todas las claves que contienen "importe", a cualquier nivel
@@ -476,7 +502,7 @@ def verificar_201(r, op, foto_antes, informe_enviado, decision, motivo_esperado=
               r.status_code == 201 and j.get("creado") is True and j.get("decision") == decision
               and j.get("oportunidad_id") == op, f"({r.status_code}, {r.text[:160]})")
     # 2. Las claves EXACTAS del contrato, ni una más ni una menos.
-    comprobar("la respuesta tiene exactamente las 8 claves del contrato", set(j) == CLAVES_RESPUESTA,
+    comprobar("la respuesta tiene exactamente las 9 claves del contrato (D33: fecha_fin_visita)", set(j) == CLAVES_RESPUESTA,
               f"(sobran {set(j) - CLAVES_RESPUESTA}, faltan {CLAVES_RESPUESTA - set(j)})")
     # 3. Ninguna clave de importes, a ningún nivel.
     comprobar("la respuesta no tiene ninguna clave de importes", not claves_con_importe(j), f"({claves_con_importe(j)})")
@@ -544,6 +570,9 @@ def verificar_201(r, op, foto_antes, informe_enviado, decision, motivo_esperado=
         # Mismo instante y mismo desfase (+02:00 o +01:00).
         comprobar("fecha_propuesta de la respuesta = la pedida, en Madrid con su desfase",
                   recibido == esperado and recibido.utcoffset() == esperado.utcoffset(), f"({j.get('fecha_propuesta')})")
+        # D33: y su fin, la duración real después, con el mismo desfase.
+        comprobar(f"fecha_fin_visita = fecha_propuesta + {DURACION} min, mismo formato y desfase",
+                  fin_correcto(j, True), f"({j.get('fecha_propuesta')} -> {j.get('fecha_fin_visita')})")
         # El log apunta a la misma visita y guarda la misma fecha.
         comprobar("el log enlaza la visita y su fecha",
                   len(logs) == 1 and logs[0].get("visita_id") == j.get("visita_id")
@@ -554,8 +583,9 @@ def verificar_201(r, op, foto_antes, informe_enviado, decision, motivo_esperado=
         # 9b. Descartar: sin visita en la respuesta, ni en la BD, ni en el log.
         n_visitas = consultar("SELECT count(*) FROM visitas WHERE oportunidad_id = %s;", (op,))[0]
         # Sin visita en la respuesta, con su motivo, y 0 visitas en la base de datos.
-        comprobar("descartar: visita_id y fecha_propuesta null, motivo en la respuesta, 0 visitas",
-                  j.get("visita_id") is None and j.get("fecha_propuesta") is None
+        # D33: también fecha_fin_visita null (fin_correcto con False).
+        comprobar("descartar: visita_id, fecha_propuesta y fecha_fin_visita null, motivo en la respuesta, 0 visitas",
+                  j.get("visita_id") is None and j.get("fecha_propuesta") is None and fin_correcto(j, False)
                   and j.get("motivo") == motivo_esperado and n_visitas == 0, f"({n_visitas} visitas)")
         # El log lleva el motivo y no tiene visita.
         comprobar("el log lleva el motivo y visita_id null",
@@ -577,14 +607,18 @@ def verificar_sin_escritura(titulo, op, foto_antes):
 
 
 # verificar_200: se llama tras cada repetición.
-def verificar_200(r, op, foto_antes, decision_id):
-    """Repetición: 200, creado=false, mismo decision_id, y NADA escrito."""
+def verificar_200(r, op, foto_antes, decision_id, con_visita=False):
+    """Repetición: 200, creado=false, mismo decision_id, y NADA escrito.
+    con_visita (D33): si la decisión repetida dejó una visita (para su fin)."""
     # El JSON de la respuesta.
     j = cuerpo(r)
     # Código 200, creado=false y el mismo decision_id que el 201 original.
     comprobar("200, creado=false, mismo decision_id",
               r.status_code == 200 and j.get("creado") is False and j.get("decision_id") == decision_id,
               f"({r.status_code}, {r.text[:160]})")
+    # D33: la repetición también trae su fin (o null sin visita).
+    comprobar("200: fecha_fin_visita " + (f"= fecha_propuesta + {DURACION} min" if con_visita else "null"),
+              fin_correcto(j, con_visita), f"({j.get('fecha_propuesta')} -> {j.get('fecha_fin_visita')})")
     # Y nada escrito.
     verificar_sin_escritura("repetición", op, foto_antes)
     # El caso concreto que pide el plan (P5): fecha_ultimo_contacto, con su
@@ -651,6 +685,9 @@ for p in (PUERTO, PUERTO_ARRANQUE):
 limpiar()
 # Foto de lo ajeno: id_base y recuento por tabla.
 FOTO = foto_ajena()
+# D33: la duración REAL de la visita, leída aquí aparte (no con el código
+# probado), para el fin esperado (fin_correcto). [0]: el único valor.
+DURACION = int(consultar("SELECT valor FROM reglas_negocio WHERE clave = 'duracion_visita_min';")[0])
 # Se enseña la foto en la salida ("=" * 78 repite el signo 78 veces).
 print("=" * 78)
 print("FOTO DE LO AJENO AL EMPEZAR (tabla: id_base, filas ajenas con id <= id_base)")
@@ -903,7 +940,8 @@ try:
     # La misma decisión, fecha y hora, con otro informe.
     r = decidir(visita_acordada(op_va, LUNES, "08:30", informe="Otro informe distinto, que debe ignorarse."))
     # 200, mismo id y nada escrito.
-    verificar_200(r, op_va, foto_tras_201, decision_va)
+    # D33: con visita (su fin).
+    verificar_200(r, op_va, foto_tras_201, decision_va, con_visita=True)
     # El informe guardado sigue siendo el primero.
     comprobar("el informe ORIGINAL sigue intacto", foto_op(op_va)[6] == informe_va.strip())
 

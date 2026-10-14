@@ -214,6 +214,10 @@ class ResultadoLlamadaResponse(BaseModel):
     visita_id: int | None
     # Su inicio en hora de Madrid con su desfase, o None.
     fecha_visita: datetime | None
+    # D33 (2026-10-14): su FIN, fecha_visita + duracion_visita_min, con el
+    # mismo formato y desfase; None cuando fecha_visita es None (descartar,
+    # cliente_cancela). Para el evento de Google Calendar de WF5 (n8n).
+    fecha_fin_visita: datetime | None
     # La visita 'solicitada' cancelada (otra_hora, cliente_cancela), o None.
     visita_cancelada_id: int | None
     # True si se escribió algo (201); False en una repetición (200).

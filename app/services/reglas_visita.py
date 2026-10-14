@@ -478,6 +478,23 @@ def choca(inicio_a: datetime, inicio_b: datetime, duracion_min: int, desplazamie
     return a < b + ocupa and b < a + ocupa
 
 
+def fin_de_visita(inicio: datetime, reglas: dict[str, int]) -> datetime:
+    """
+    D33 (2026-10-14): la hora de FIN de una visita que empieza en inicio,
+    en hora de Madrid con su desfase: inicio + duracion_visita_min. La
+    devuelven POST /visits y POST /resultados-llamada (y su alias) como
+    fecha_fin_visita, para que n8n (WF5, Google Calendar) no copie la regla.
+
+    reglas: las de leer_reglas_visita, ya comprobadas (duración > 0). Es el
+    ÚNICO sitio que suma la duración para la respuesta; nunca un número
+    escrito a mano.
+    """
+    # La suma, en UTC: sumar minutos a una hora de Madrid con su zona es una
+    # suma "de reloj de pared" (gotcha de CLAUDE.md); en UTC es una duración
+    # real. Después, de vuelta a Madrid, con el desfase de ESE instante.
+    return (inicio.astimezone(timezone.utc) + timedelta(minutes=reglas[CLAVE_DURACION])).astimezone(ZONA_MADRID)
+
+
 def disponibilidad(cursor, dias: list[date], ahora: datetime, reglas: dict[str, int],
                    excluir: list[int] | tuple[int, ...] = ()) -> dict[date, dict[str, list[str]]]:
     """

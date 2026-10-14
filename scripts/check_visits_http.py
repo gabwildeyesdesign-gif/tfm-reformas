@@ -30,6 +30,12 @@ que conserva la intención del caso. CASO 7 añade el 422 fuera_de_rejilla.
 Los solapes parciales y los bordes (D31) ya no se pueden pedir por la API
 (C3 del plan): se prueban frente a una visita ANTIGUA puesta por SQL fuera
 de la rejilla, y los bordes con el desplazamiento.
+
+(Nota 2026-10-14, D33, plan docs/Plan_Fecha_Fin_Visita_D33.txt.) La
+respuesta lleva fecha_fin_visita = fecha_propuesta + la duración leída aquí
+de reglas_negocio, con el mismo texto y desfase. Se comprueba en los CASOS 8
+(201), 9 (200), 10 (sustitución) y 13 (200 de una confirmada), y el CASO 20
+la mira en TODAS las respuestas de éxito.
 """
 
 import sys
@@ -39,7 +45,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 # re: buscar las horas "HH:MM" en el mensaje del 409 hueco_ocupado (D31).
 import re
-from datetime import date, datetime, time as hora_del_dia, timedelta
+# timezone (D33): el fin esperado se suma en UTC.
+from datetime import date, datetime, time as hora_del_dia, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -73,6 +80,8 @@ cuerpos_visits = []
 # de POST /visits, para comprobar al final que 201 <-> creado=true y
 # 200 <-> creado=false en todas.
 pares_exito = []
+# D33: el cuerpo JSON de cada respuesta de ÉXITO, para el CASO 20.
+cuerpos_exito = []
 
 
 def comprobar(titulo, condicion, detalle=""):
@@ -206,6 +215,8 @@ def visita(token, fecha, hora, texto="Me viene bien a esa hora", cabeceras=AUTH,
         pass
     if r.status_code in (200, 201):
         pares_exito.append((r.status_code, cuerpo(r).get("creado"), f"{fecha} {hora}"))
+        # D33: y su cuerpo, para mirar fecha_fin_visita en todas (CASO 20).
+        cuerpos_exito.append(cuerpo(r))
     return r
 
 
@@ -227,6 +238,22 @@ def esperado_madrid(fecha, hora):
     """El instante que debe devolver el endpoint, calculado aquí por separado."""
     h, m = map(int, hora.split(":"))
     return datetime.combine(fecha, hora_del_dia(h, m), tzinfo=MADRID)
+
+
+def fin_correcto(j):
+    """
+    D33: True si fecha_fin_visita es el texto de fecha_propuesta + DURACION_D33
+    minutos reales (sumados en UTC), en Madrid, escrito igual que la API
+    (mismo formato y desfase). En /visits toda respuesta de éxito tiene visita.
+    """
+    # Sin fecha_propuesta no hay de dónde partir: mal.
+    if not j.get("fecha_propuesta"):
+        return False
+    # El inicio como datetime y el fin esperado, sumado en UTC.
+    inicio_v = datetime.fromisoformat(j["fecha_propuesta"])
+    esperado = (inicio_v.astimezone(timezone.utc) + timedelta(minutes=DURACION_D33)).astimezone(MADRID)
+    # El mismo texto: mismo instante, desfase y formato.
+    return j.get("fecha_fin_visita") == esperado.isoformat()
 
 
 def claves_con_importe(objeto, ruta=""):
@@ -285,6 +312,9 @@ fechas_prueba.exigir_libres("check_visits_http", PATRON_EMAIL,
 # ======================================================================
 limpiar()
 FOTO = foto_ajena()
+# D33: la duración REAL de la visita, leída aquí aparte (no con el código
+# probado), para el fin esperado (fin_correcto). [0]: el único valor.
+DURACION_D33 = int(consultar("SELECT valor FROM reglas_negocio WHERE clave = 'duracion_visita_min';")[0])
 print("=" * 78)
 print("FOTO DE LO AJENO AL EMPEZAR (tabla: id_base, filas ajenas con id <= id_base)")
 print("=" * 78)
@@ -434,6 +464,9 @@ try:
     recibido = datetime.fromisoformat(j["fecha_propuesta"]) if "fecha_propuesta" in j else None
     comprobar("fecha_propuesta = lunes 08:30 en Madrid, con su desfase",
               recibido == esperado_1 and recibido.utcoffset() == esperado_1.utcoffset(), f"({j.get('fecha_propuesta')})")
+    # D33: su fin, la duración real después, con el mismo texto y desfase.
+    comprobar(f"fecha_fin_visita = fecha_propuesta + {DURACION_D33} min, mismo formato y desfase", fin_correcto(j),
+              f"({j.get('fecha_propuesta')} -> {j.get('fecha_fin_visita')})")
     visita_1 = j.get("visita_id")
     fila = consultar("SELECT estado, texto_cliente, fecha_propuesta FROM visitas WHERE id = %s;", (visita_1,))
     comprobar("en la BD: 'solicitada', con texto_cliente y la misma fecha", fila is not None and fila[0] == "solicitada" and fila[1] == texto_1 and fila[2] == esperado_1)
@@ -447,6 +480,9 @@ try:
     r = visita(token, LUNES, "08:30", texto="Otro texto distinto")
     j = cuerpo(r)
     comprobar("200, mismo visita_id, creado false", r.status_code == 200 and j.get("visita_id") == visita_1 and j.get("creado") is False, f"({r.status_code}, {j})")
+    # D33: la repetición también trae su fin (el de la visita que ya existía).
+    comprobar("200: fecha_fin_visita = fecha_propuesta + la duración", fin_correcto(j),
+              f"({j.get('fecha_propuesta')} -> {j.get('fecha_fin_visita')})")
     comprobar("0 visitas nuevas", consultar("SELECT count(*) FROM visitas WHERE oportunidad_id = %s;", (op,))[0] == n_visitas)
     comprobar("0 logs nuevos", consultar("SELECT count(*) FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %s;", (op,))[0] == n_logs)
     comprobar("el texto_cliente original no ha cambiado", consultar("SELECT texto_cliente FROM visitas WHERE id = %s;", (visita_1,))[0] == texto_1)
@@ -460,6 +496,10 @@ try:
     print(f"      <- {r.status_code} {r.text}")
     visita_2 = j.get("visita_id")
     comprobar("201, sustituye_a = la anterior, creado true", r.status_code == 201 and j.get("sustituye_a") == visita_1 and j.get("creado") is True)
+    # D33: el fin es el de la visita NUEVA (12:15 + la duración), no el de la sustituida.
+    comprobar("sustitución: fecha_fin_visita de la nueva (12:15 + la duración)",
+              fin_correcto(j) and j.get("fecha_propuesta") == esperado_madrid(LUNES, "12:15").isoformat(),
+              f"({j.get('fecha_propuesta')} -> {j.get('fecha_fin_visita')})")
     comprobar("la anterior queda 'cancelada' y solo hay una activa",
               visitas_de(op) == [(visita_1, "cancelada"), (visita_2, "solicitada")], f"({visitas_de(op)})")
     sustituida = logs_de(op, "visita_sustituida")
@@ -522,6 +562,9 @@ try:
     r = visita(token_c1, LUNES, "09:45")
     comprobar("con la MISMA fecha: 200, creado false, estado confirmada",
               r.status_code == 200 and cuerpo(r).get("estado") == "confirmada" and cuerpo(r).get("creado") is False, f"({r.status_code}, {cuerpo(r)})")
+    # D33: la confirmada también trae su fin (WF5 la pone como confirmada).
+    comprobar("200 de una confirmada: fecha_fin_visita = fecha_propuesta + la duración", fin_correcto(cuerpo(r)),
+              f"({cuerpo(r).get('fecha_propuesta')} -> {cuerpo(r).get('fecha_fin_visita')})")
     comprobar("la confirmada sigue intacta", visitas_de(op_c1) == [(visita_conf, "confirmada")])
 
     # ==================================================================
@@ -802,6 +845,15 @@ try:
         comprobar(f"ronda {ronda + 1}: un 201 y nueve 409 hueco_ocupado, ningún 500, una visita activa",
                   codigos == [201] + [409] * 9 and motivos_409 == {"hueco_ocupado"} and activas == 1,
                   f"({codigos}, {motivos_409}, {activas})")
+
+    # ------------------------------------------------------------------
+    # D33: el fin en TODAS las respuestas de éxito de la ejecución.
+    print("\nCASO 20 - D33: fecha_fin_visita en todas las respuestas de éxito")
+    # Las que no lo traen bien (con su inicio y su fin, para el detalle).
+    fines_mal = [(c.get("fecha_propuesta"), c.get("fecha_fin_visita")) for c in cuerpos_exito if not fin_correcto(c)]
+    # Ninguna mal, y al menos una revisada (si no, no se ha probado nada).
+    comprobar(f"fecha_fin_visita = fecha_propuesta + {DURACION_D33} min en las {len(cuerpos_exito)} respuestas de éxito",
+              cuerpos_exito and not fines_mal, f"(mal: {fines_mal[:3]})")
 
     # ------------------------------------------------------------------
     print("\nCASO 14 - Ningún importe en ninguna respuesta de POST /visits")
