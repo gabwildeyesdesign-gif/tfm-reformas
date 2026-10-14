@@ -659,6 +659,15 @@ SOLO REST.
 > hacer merge sin la confirmación explícita de Gabi, después de la revisión
 > del tutor, y siempre con `--ff-only`. Después del merge: reiniciar el
 > uvicorn del 8000 SIN --reload (app/ cambia) y paso14b.
+>
+> **(Nota 2026-10-14, 11:30: el párrafo anterior está superado.)**
+> `feat/n0-horario-visitas` está **integrada en `main` (9d1f484)** y borrada;
+> el uvicorn del 8000 se reinició con ese código (Gabi). **paso14b APLICADA
+> el 2026-10-14 a las 11:27:42** (la fila paso_huecos_min ya no existe;
+> reglas_negocio tiene 21 filas): check_migracion_paso14b 2/3 antes y 3/3
+> después; regresión sin fallos. Detalle en la nota de la sección 13 del plan
+> D32. Queda un fallo CONOCIDO en la suite: check_migracion_agente2 (33/38)
+> exige todavía esa fila; se cambia en su propia rama.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1281,6 +1290,10 @@ diciendo "1..1000 caracteres".
     la tool consultar_huecos_libres (ofrecer SOLO sus horas).
   - Una 'solicitada' antigua fuera de la rejilla no se puede confirmar con
     confirmar_hora (K3 del plan D32; el 2026-10-13 había 0).
+(Nota 2026-10-14, 11:30.) paso14b ya está APLICADA. Pendiente nuevo, en su
+propia rama: check_migracion_agente2 (punto 3) exige la fila paso_huecos_min,
+que ya no existe (33/38 desde paso14b): que exija que NO exista, o que deje de
+mirarla, con su prueba antes y después.
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas

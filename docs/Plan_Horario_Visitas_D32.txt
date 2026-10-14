@@ -836,3 +836,30 @@ Hallazgos (sin arreglar, para la revisión del tutor):
   formulario con las páginas "Día" y "Hora" y el bucle (contrato, 4b), y el
   Agente 2 con la tool consultar_huecos_libres (prompt: ofrecer solo sus
   horas); la lista de pendientes anotados en CLAUDE.md.
+  [Nota 2026-10-14: paso14b APLICADA el 2026-10-14 a las 11:27:42, en main
+  (9d1f484, ya con feat/n0-horario-visitas integrada y el uvicorn del 8000
+  reiniciado por Gabi), con 1,64 GB libres, Docker/n8n, Chrome, Edge y WSL
+  cerrados y ningún Kernel-Power 506/507 entre 11:27 y 11:31.
+    0. grep en app/ de main: "paso_huecos" solo aparece en un comentario
+       (reglas_visita.py:56, "ya NO se lee"); "PASO_HUECOS", en ningún sitio.
+    1. check_migracion_paso14b ANTES: 2/3, exit 1 (FALLO "paso_huecos_min
+       ya no existe (30.00)").
+    2. Frase de Gabi, después de ver el fallo: "confirmo la migración
+       paso14b".
+    3. Migración: "se borrará: paso_huecos_min = 30.00", 1 fila borrada,
+       commit() ejecutado.
+    4. check_migracion_paso14b DESPUÉS: 3/3. La migración otra vez:
+       "paso_huecos_min ya no existe: no se toca nada" (idempotente).
+    5. Regresión de los que leen reglas_negocio: check_disponibilidad_service
+       60/60, check_huecos_libres_service 32/32, check_visits_service 16/16,
+       check_mcp_business_rules 21/21. check_migracion_agente2: 33/38, los 5
+       FALLOS de su punto 3 (exige la fila borrada), como se esperaba (paso 5
+       de 13.2); NO se ha cambiado (el tutor limitó este commit a la
+       documentación): queda PENDIENTE, en su propia rama.
+    6. Datos reales: las 3 visitas iguales (SHA-256 791834f0...8dda);
+       reglas_negocio de 22 a 21 filas, y las 21 que quedan, sin cambios:
+       las de ahora más la fila borrada (30.00, la descripción de paso13,
+       fecha 2026-10-12) reproducen el SHA-256 de antes (aa617fe5...a952a3).
+    7. docs/schema_actual.sql: dump_schema solo cambiaba la fecha y el
+       recuento de filas de reglas_negocio; no se regenera (sin cambios de
+       esquema).]
