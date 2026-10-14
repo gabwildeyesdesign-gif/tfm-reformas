@@ -114,7 +114,13 @@ CASOS_FIN = [
 # necesita más).
 for inicio_caso, minutos_caso, esperado_caso in CASOS_FIN:
     # isoformat(): el mismo texto que escribe la API ("...T12:00:00+02:00").
-    obtenido = reglas_visita.fin_de_visita(inicio_caso, {reglas_visita.CLAVE_DURACION: minutos_caso}).isoformat()
+    # try: una versión rota que lea otra regla (KeyError) o que falle de
+    # cualquier otro modo cuenta como FALLO, nunca para el script.
+    try:
+        obtenido = reglas_visita.fin_de_visita(inicio_caso, {reglas_visita.CLAVE_DURACION: minutos_caso}).isoformat()
+    # La excepción, como texto, en el lugar del resultado.
+    except Exception as error:
+        obtenido = f"{type(error).__name__}: {error}"
     # Mismo texto: mismo instante, mismo desfase y mismo formato.
     comprobar(f"{inicio_caso.isoformat()} + {minutos_caso} min -> {esperado_caso}", obtenido == esperado_caso,
               f"(obtenido {obtenido})")

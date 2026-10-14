@@ -159,4 +159,52 @@ foto otra vez. Después, Bloque D (documentación) y push.
 
 7. RESULTADOS Y HASHES
 ================================================================
-(se rellenan en la fase 2)
+Fase 1: commit 7fd2277 "SIN ejecutar" (código, pruebas y este plan); ast.parse
+OK en los 11 .py; 123 sentencias nuevas o tocadas, 0 sin comentario cercano.
+Antes de la fase 2: 0,49 GB libres con Docker, WSL y Edge abiertos (15:34:50):
+se paró y se avisó; Gabi los cerró.
+
+Fase 2 (2026-10-14): 1,88 GB libres a las 16:09:18 y 1,56 GB a las 16:22:59
+(antes de la suite); ningún chrome, msedge, docker ni vmmem (quedaba
+wslservice, el servicio de Windows, sin la máquina virtual). Ningún
+Kernel-Power 506/507 entre 16:08 y 16:35. git diff -- app/ vacío durante
+toda la fase 2.
+
+1. Foto de datos reales (16:09:43): SHA-256 por tabla de las filas con id <=
+   id_base. Dos clientes antiguos con @example.com (ids 242 y 243, del
+   21/09, pruebas a mano desde n8n) que no son de ningún script: se cuentan
+   como datos reales.
+2. Positivas (main -> rama): check_visits_service 16/16 -> 23/23,
+   check_resultados_llamada_service 37/37 -> 51/51, check_visits_http
+   90/90 -> 98/98 (CASO 20: 26 respuestas de éxito revisadas),
+   check_resultados_llamada_http 183/183 -> 202/202,
+   check_gate_decisions_http 124/124 -> 129/129. Ejemplo real: 201 de
+   /visits con "fecha_propuesta":"2027-05-10T08:30:00+02:00",
+   "fecha_fin_visita":"2027-05-10T09:30:00+02:00".
+3. Negativas sobre copias (app/, scripts/ y docs/ de HEAD; los secretos del
+   .env real cargados en el entorno por un lanzador, nunca copiados). Control
+   con la copia limpia: 23/23. De una en una:
+     N1 (+ desplazamiento): visits_service 19/23, resultados_service 46/51,
+        visits_http 93/98, resultados_http 191/202, gate_http 126/129.
+     N2 (60 escrito): visits_service 19/23 (3 casos puros y el ast);
+        visits_http 98/98 (las HTTP no lo pueden ver con la regla real).
+     N3 (reloj de pared): visits_service 22/23 (el cambio de hora);
+        visits_http 98/98 (mutante equivalente en las franjas).
+     N4 (P1 sin hacer): resultados_service 45/51, resultados_http 199/202,
+        gate_http 128/129.
+   Todas con FALLOS contados y ninguna traza; limpieza: 0 clientes de prueba.
+   Hallazgo H-D33-1, corregido en la fase 2: con N1, la 1b se habría parado
+   con KeyError (sus reglas solo tienen la duración); ahora una excepción en
+   fin_de_visita cuenta como FALLO (con él, 19/23 en vez de una traza).
+4. Suite completa en UNA pasada (16:23:25-16:32:59): 54 scripts, código 0 en
+   54/54; salida de los de P4, check_connection y check_mcp_connection
+   revisada a mano: sin fallos (las 3 tools; 0 filas de prueba persistidas;
+   RLS activado y no forzado, 0 políticas). Uvicorn del 8031 detenido por su
+   PID 13944 (log = netstat; lanzador 37704). Incluye la regresión de TODOS
+   los scripts que crean visitas.
+5. Foto otra vez (16:33:42): las 10 tablas IGUALES (mismo id_base, filas y
+   SHA-256): clientes cabb5643ea5b0cee, decisiones_gate 9a53574b88632e0d,
+   leads 34f160fa7fd22bea, logs 6ffb5c47f485a864, oportunidades
+   491fdd7448f950fd, presupuestos 9a45e01f6b7142ca, reglas_negocio
+   c7c696bd77de84c1, tarifas_base b79a721d0e4483ef, umbrales_gate
+   7c0c11a1beb7c9aa, visitas d6cff0bda877e7c6 (16 primeros).
