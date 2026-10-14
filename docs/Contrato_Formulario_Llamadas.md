@@ -120,6 +120,7 @@ El `mensaje` lo escribe el backend para administración y se puede enseñar tal 
 | 409 | `visita_activa_existente` | "Ya tiene una visita activa." | No |
 | 409 | `hueco_ocupado` | "Esa hora ya está ocupada por otra visita." + las horas de `huecos_libres` (ver abajo), y volver a la página de la fecha. | No |
 | 422 | `fecha_pasada`, `fin_de_semana`, `fuera_de_franja` | El `mensaje` (dice las franjas) y volver a la página de la fecha. | No |
+| 422 | `fuera_de_rejilla` (D32, desde el 2026-10-13) | No debería salir nunca si las horas vienen de GET /huecos-libres (sección 4b). Si sale: el `mensaje` (dice las horas válidas; también van aparte en `horas_validas`) y volver a la página "Día". | **Sí** (indica un fallo del formulario) |
 | 422 | `misma_hora_pedida` | "Es la hora que pidió: elige 'confirmar la hora pedida'." | No |
 | 422 | (lista de Pydantic, sin `motivo`) | Error del formulario (un campo mal enviado). | **Sí** |
 | 401 | — | "Error de configuración" (la credencial). | **Sí** |
@@ -152,6 +153,81 @@ hora más la duración (60 min). La visita pedida por el propio cliente no cuent
 - El mensaje nunca dice de quién es la otra visita ni a qué hora termina.
 - El ALIAS POST /gate-decisions (el formulario de hoy) responde exactamente igual, con el mismo cuerpo, en
   `visita_acordada` (P17): el formulario publicado tiene que enseñarlo también.
+
+*(Nota 2026-10-14, D32: el ejemplo de arriba es de D31. Desde D32, `huecos_libres` ya no va cada 30 min: son las
+horas libres de la rejilla (con las reglas de hoy, 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15) que no chocan con
+otra visita contando 15 min de desplazamiento; la forma del cuerpo no cambia. Con GET /huecos-libres (sección 4b)
+este 409 solo sale si alguien coge la hora entre la página "Hora" y el envío: el formulario vuelve entonces a la
+página "Día", recalculada.)*
+
+## 4b. Elegir día y hora: GET /huecos-libres (D32, desde el 2026-10-13)
+
+Para `visita_acordada` y `otra_hora` (en `confirmar_hora` la hora ya la pidió el cliente). Las visitas empiezan a
+horas fijas (la rejilla) y el formulario ofrece SOLO las libres, así administración no se entera de que una hora
+estaba ocupada cuando el cliente ya ha colgado. Misma credencial (`X-Gate-Secret`). Solo lectura: no escribe nada.
+
+**Por qué son dos páginas.** El formulario de n8n no ejecuta JavaScript (el campo HTML no admite `<script>`) ni
+tiene botón "Atrás": una página no puede cambiar sus opciones según lo que se elige en otra. Por eso el día se
+elige en una página y la hora en la siguiente, que se construye al abrirla. Y la página "Hora" vuelve a preguntar
+al backend (no reutiliza lo de la página "Día"): durante la llamada otro cliente, desde el chat, puede haber
+cogido una hora, y no se le puede ofrecer a este.
+
+### Página "Día": `GET /huecos-libres` (sin parámetros)
+
+```json
+{"modo": "dias",
+ "generado_en": "2026-10-14T09:12:03+02:00",
+ "dias": [
+   {"fecha": "2026-10-15", "dia_semana": "jueves",
+    "manana": ["09:45", "11:00"], "tarde": ["18:15"], "num_horas_libres": 3,
+    "etiqueta": "Jueves 15/10 — mañana: 09:45 · 11:00 — tarde: 18:15"},
+   ...]}
+```
+
+- Los próximos `dias_oferta_visita` (10) días de lunes a viernes, DESDE HOY (de hoy, solo las horas que aún no han
+  pasado), que tienen al menos una hora libre; los días completos no salen. Si no hay ninguno, `"dias": []`.
+- `manana` y `tarde`: siempre presentes; lista vacía si esa franja no tiene horas ese día.
+- `etiqueta`: el texto EXACTO de la opción. Una franja sin horas no se escribe ("Jueves 15/10 — tarde: 17:00 ·
+  18:15"). Es única: lleva la fecha.
+- Construcción del campo (Define Form: Using JSON): un `dropdown` con
+  `fieldOptions.values = [{"option": d.etiqueta} para cada día] + [{"option": "Otro día más adelante"}]`.
+  El valor que devuelve el desplegable es el TEXTO de la opción: n8n busca el día por `etiqueta` en la lista que ya
+  tiene y toma su `fecha`. "Otro día más adelante" es un texto fijo (no choca con ninguna etiqueta, que empiezan por
+  el nombre de un día) y lleva a una página con un campo `date`; esa fecha va a la página "Hora".
+
+### Página "Hora": `GET /huecos-libres?fecha=AAAA-MM-DD` (al abrirla)
+
+```json
+{"modo": "dia",
+ "generado_en": "2026-10-14T09:13:40+02:00",
+ "fecha": "2026-10-15", "dia_semana": "jueves",
+ "manana": ["09:45", "11:00"], "tarde": ["18:15"],
+ "horas": ["09:45", "11:00", "18:15"],
+ "sin_horas_motivo": null}
+```
+
+- `horas`: mañana y tarde juntas, en orden: las opciones de un campo `radio`, tal cual (`{"option": "09:45"}`...).
+- Siempre se añade la opción fija **"Ninguna le va bien → elegir otro día"** (no choca con una hora "HH:MM"), y el
+  textarea del informe.
+- Si `horas` viene vacía, la página SOLO ofrece "Ninguna le va bien → elegir otro día". `sin_horas_motivo` dice
+  por qué (se puede enseñar en un campo `html`): `dia_completo` (alguien cogió la última durante la llamada),
+  `fin_de_semana` o `fecha_pasada` (fechas del calendario de "Otro día más adelante").
+- 422 solo si la fecha está mal escrita o no existe (por ejemplo `2026-02-30`): error del formulario (WF4 sí).
+
+### El bucle "Ninguna le va bien" (opción (a), acordada el 2026-10-13)
+
+Dentro de la MISMA ejecución: la rama "Ninguna le va bien → elegir otro día" vuelve al nodo de la página "Día", que
+llama OTRA VEZ a `GET /huecos-libres` (los datos recalculados, nunca la lista de la primera vuelta). n8n tiene que
+conservar `oportunidad_id` y el resultado elegido (`visita_acordada` u `otra_hora`) entre vueltas, y puede pasar el
+informe ya escrito como `defaultValue` del textarea de la siguiente página "Hora" para no perderlo. El 409
+`hueco_ocupado` del envío vuelve también a la página "Día", recalculada. La documentación de n8n no describe volver
+a una página anterior: el bucle se comprueba al construirlo en n8n; el backend no cambia.
+
+### Al enviar
+
+`POST /resultados-llamada` con la `fecha` (de la etiqueta o del calendario) y la `hora` (la opción de radio). Si
+alguien la cogió entre la página "Hora" y el envío: 409 `hueco_ocupado` (sección 4) y vuelta a "Día". Un 422
+`fuera_de_rejilla` no debería salir nunca: si sale, el formulario está enviando una hora que no vino de la consulta.
 
 ## 5. Lo que este formulario NO hace (N0)
 

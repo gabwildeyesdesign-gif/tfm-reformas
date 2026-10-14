@@ -264,6 +264,16 @@ teléfono); y POST /visits, POST /resultados-llamada y el alias comprueban que
 el hueco esté libre (D31: 409 hueco_ocupado con huecos_libres).
 request_missing_information() sale de N0 (P14). Detalle en "Estado actual"
 y en la Adenda 5.11.)
+(Nota 2026-10-14: desde el 2026-10-13, en la rama feat/n0-horario-visitas
+(pendiente de merge), D32: GET /huecos-libres (décimo include_router, solo
+REST, de SOLO LECTURA, X-Gate-Secret en el router: las horas libres de
+visita para el formulario de n8n, modo días y modo un día) y la tool MCP
+consultar_huecos_libres (la misma consulta para el Agente 2; list_tools
+devuelve calculate_estimate, get_business_rules y consultar_huecos_libres).
+POST /visits, POST /resultados-llamada y el alias solo aceptan horas de la
+rejilla (422 fuera_de_rejilla con horas_validas) y el choque cuenta el
+desplazamiento. paso_huecos_min ya no se lee. Detalle en "Estado actual" y
+en la Adenda 5.11 (e).)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -634,6 +644,21 @@ SOLO REST.
 > docs/schema_actual.sql; detalle en la sección 11.2 del plan). Misma regla
 > de siempre: no hacer merge sin la confirmación explícita de Gabi, y siempre
 > con `--ff-only`.
+>
+> **(Nota 2026-10-14.)** `fix/n0-paso13b` está **integrada en `main`
+> (258ccf3)**. **Bloque actual: D32, el horario de visitas** (rejilla de
+> D23.5, desplazamiento y disponibilidad AL OFRECER), implementado y
+> verificado en la rama `feat/n0-horario-visitas`, **pendiente de merge**
+> (bloques A, B1-B4, fase 2, revisión y D cerrados; plan
+> docs/Plan_Horario_Visitas_D32.txt, hashes en su sección 10, integración en
+> la 13; contrato en la Adenda 5.11 (e) y en docs/Contrato_Formulario_Llamadas.md,
+> sección 4b). OJO: la migración paso14 (desplazamiento_min = 15 y
+> dias_oferta_visita = 10) YA ESTÁ APLICADA (2026-10-13 23:21:45); paso14b
+> (borrar paso_huecos_min) está PREPARADA SIN APLICAR y va DESPUÉS del
+> merge. Suite completa 53/53 (2026-10-14). Misma regla de siempre: no
+> hacer merge sin la confirmación explícita de Gabi, después de la revisión
+> del tutor, y siempre con `--ff-only`. Después del merge: reiniciar el
+> uvicorn del 8000 SIN --reload (app/ cambia) y paso14b.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1003,6 +1028,16 @@ paso13b después del merge: es su prueba en negativo.)
 (Nota 2026-10-13: paso13b ya está APLICADA; check_migracion_paso13b da 6/6 y
 deja de fallar. La suite sigue teniendo 48 scripts, sin ningún fallo
 esperado.)
+(Nota 2026-10-14, rama feat/n0-horario-visitas: la suite tiene ahora 54
+scripts: check_migracion_d32, check_huecos_libres_service,
+check_huecos_libres_http (puerto 8032), check_mcp_huecos_libres (puerto
+8033) y check_migracion_paso14b. 53/53 en UNA pasada (2026-10-14
+10:31:38-10:40:55, sin check_migracion_paso14b, que aún no existía), con
+1,60 GB libres, Docker/n8n, Chrome, Edge y WSL cerrados y sin Kernel-Power
+506/507; uvicorn del 8031 detenido por su PID 31796 (log = netstat); datos
+reales iguales. check_migracion_paso14b FALLA a propósito (2/3) hasta que
+se aplique paso14b después del merge: es su prueba en negativo. Lección:
+Edge se vuelve a abrir en segundo plano; medir justo antes de ejecutar.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1238,6 +1273,14 @@ crean visitas sin fallos; docs/schema_actual.sql regenerado. Detalle en la
 nota de la sección 11.2 del plan del Agente 2. Pendiente menor: el
 comentario de app/schemas/listado_llamadas.py sobre texto_cliente sigue
 diciendo "1..1000 caracteres".
+(Nota 2026-10-14, rama feat/n0-horario-visitas, D32.) Pendientes nuevos:
+  - Después del merge: reiniciar el uvicorn del 8000 sin --reload; paso14b
+    (sección 13.2 del plan D32), con el cambio de check_migracion_agente2.
+  - n8n: el formulario de POST /resultados-llamada con las páginas "Día" y
+    "Hora" y el bucle "Ninguna le va bien" (contrato, 4b), y el Agente 2 con
+    la tool consultar_huecos_libres (ofrecer SOLO sus horas).
+  - Una 'solicitada' antigua fuera de la rejilla no se puede confirmar con
+    confirmar_hora (K3 del plan D32; el 2026-10-13 había 0).
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas
@@ -1335,6 +1378,12 @@ rápida, no sustituye esa documentación. Contiene:
   del Agente 2): P1-P22 decididas, D31 (sección 10.3), hallazgos y pruebas
   en negativo N1-N9 con sus resultados exactos, integración y paso13b
   (sección 11) y hashes (sección 12).
+- Plan_Horario_Visitas_D32.txt — plan de D32 (rama feat/n0-horario-visitas):
+  rejilla de D23.5, desplazamiento, disponibilidad única, GET /huecos-libres
+  y la tool consultar_huecos_libres; P1-P12 (sección 11), mediciones, lista
+  de scripts afectados (6), pruebas en negativo N1-N14 con sus resultados
+  (sección 12), hashes (10) e integración y paso14b (13). D23.5 y D32 los
+  tiene el tutor en el Proyecto de claude.ai.
 - Decisiones_D28_Resumen_Conversacion_y_Enlace_Ficha.md y
   Decisiones_D29_Me_Lo_Pienso_y_Ultima_Llamada.md — D28 (resumen de la
   conversación, rama 2) y D29 (copiados del Proyecto de claude.ai el

@@ -655,6 +655,12 @@ P14. ¿request_missing_information()? Recomendación: sacarla de N0 con una
 
 10.3 D31 — POST /visits comprueba que el hueco esté libre (revisa D18.6;
      el documento lo redacta el tutor)
+  [Nota 2026-10-14: revisado por D32 (rama feat/n0-horario-visitas, plan
+  docs/Plan_Horario_Visitas_D32.txt). D31 se escribió sin D23.5: las horas
+  de inicio son fijas (rejilla de duración + desplazamiento, 422
+  fuera_de_rejilla), el choque cuenta 15 min de desplazamiento y la
+  disponibilidad se ve AL OFRECER (GET /huecos-libres y la tool
+  consultar_huecos_libres). El bloqueo por día, el orden y C8 siguen.]
   Fijado por la decisión: un solo técnico; una visita OCUPA si está
   'solicitada' o 'confirmada'; ocupa [inicio, inicio + duracion_visita_min);
   cuentan los SOLAPES, no solo el mismo inicio; si está ocupado, 409
@@ -764,6 +770,9 @@ P18. ¿Forma del 409? Recomendación: {motivo, mensaje, huecos_libres} con las
      horas de inicio de ese día; sin tool nueva en N0.
 P19. ¿Inicios fijos? Recomendación: rejilla solo para ofrecer, con la regla
      nueva paso_huecos_min = 30 en paso13 (10.3 d, C).
+     [Nota 2026-10-14: revisado por D32: inicios FIJOS de la rejilla de
+     D23.5 (08:30, 09:45, 11:00, 12:15, 17:00 y 18:15 con las reglas de
+     hoy); paso_huecos_min deja de leerse y se borra con paso14b.]
 P20. ¿Qué pasa con visitas activas que ya se solapen (hoy 0, M5)?
      Recomendación: no se tocan; la comprobación solo mira lo que se crea o
      se confirma.

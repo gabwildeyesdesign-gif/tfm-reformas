@@ -654,6 +654,20 @@ P12. Nombres de las reglas nuevas: desplazamiento_min y
 10. HASHES DE LA RAMA feat/n0-horario-visitas (desde main 258ccf3)
 ================================================================
   A   (el commit de este plan)
+  [Nota 2026-10-14: la tabla completa.]
+  A         20ba9aa  el plan (sin código)
+            45c3864  sección 11: respuestas y correcciones del tutor
+  B1        adc6ef3  migración paso14 y check_migracion_d32 (sin ejecutar)
+  B2        ad615b1  rejilla, choque con desplazamiento y disponibilidad
+                     única; scripts de 6.1 (sin ejecutar)
+  B3        000e03c  GET /huecos-libres y sus dos scripts (sin ejecutar)
+  B4        9982090  tool consultar_huecos_libres (sin ejecutar)
+  Fase 2    359b204  ejecutada: paso14 APLICADA, positivas, N1-N14, suite
+                     53/53
+  Revisión  f1961a7  H-D32-1 y H-D32-2 (check_huecos_libres_http 45/45)
+  D         (el commit de esta nota) Adenda, contrato del formulario,
+            CLAUDE.md, notas en el plan del Agente 2, paso14b preparada y
+            la sección 13.
 
 
 ================================================================
@@ -765,3 +779,60 @@ Hallazgos (sin arreglar, para la revisión del tutor):
            en 6.1); cambiado en B4.
   H-D32-4  exigir_libres (fechas_prueba) no contaba el desplazamiento;
            cambiado en B2.
+
+
+================================================================
+13. NOTA 2026-10-14: INTEGRACIÓN EN MAIN Y paso14b (Bloque D)
+================================================================
+13.1 Comandos EXACTOS para Gabi (Git Bash), solo tras la revisión del tutor:
+
+    cd /c/Proyectos/tfm-reformas
+    git status -sb                       # tiene que estar limpio
+    git fetch origin
+    git checkout main
+    git pull --ff-only origin main
+    git rev-parse --short HEAD           # tiene que dar 258ccf3; si no, PARA
+    git log --oneline -1 origin/feat/n0-horario-visitas   # el commit del Bloque D
+    git merge --ff-only origin/feat/n0-horario-visitas    # sin merge commit; si
+                                                          # falla, PARA (no forzar)
+    git log --oneline -3                 # main = el commit del Bloque D
+    git push origin main
+    git push origin --delete feat/n0-horario-visitas      # la rama en GitHub
+    git branch -d feat/n0-horario-visitas                 # la rama en local
+
+  Después, reiniciar el uvicorn del 8000 (el de n8n) con el código nuevo,
+  SIN --reload (regla crítica de CLAUDE.md), porque app/ cambia: en su
+  terminal, Ctrl+C y
+
+    ./venv/Scripts/python.exe -m uvicorn app.main:app
+
+  (en PowerShell: .\venv\Scripts\python.exe -m uvicorn app.main:app).
+  Comprobar a mano GET http://127.0.0.1:8000/health/db (200). Sin el
+  reinicio, n8n sigue con el código de antes: sin rejilla, sin
+  desplazamiento, sin GET /huecos-libres y sin consultar_huecos_libres.
+
+13.2 paso14b (borrar la fila paso_huecos_min), PREPARADA SIN APLICAR
+  Archivos: scripts/migraciones_ejecutadas/paso14b_borrar_paso_huecos.py
+  (freno --confirmo-paso14b; enseña el valor antes de borrar; idempotente),
+  paso14b_vuelta_atras.py (la reinserta con 30 y su descripción de paso13,
+  freno --confirmo-vuelta-atras) y scripts/check_migracion_paso14b.py (la
+  fila no existe; desplazamiento_min y dias_oferta_visita sí; y
+  leer_reglas_visita lee sin problemas). Ejecutada en solo lectura el
+  2026-10-14 a las 11:03: 2/3, FALLO "paso_huecos_min ya no existe (30.00)"
+  (su prueba en negativo). Mientras paso14b no se aplique, es el único
+  script de la suite que debe fallar.
+  Orden, DESPUÉS de 13.1 (main con D32 y el uvicorn reiniciado):
+    1. check_migracion_paso14b -> tiene que FALLAR.
+    2. Frase de Gabi: "confirmo la migración paso14b".
+    3. ./venv/Scripts/python.exe scripts/migraciones_ejecutadas/paso14b_borrar_paso_huecos.py --confirmo-paso14b
+    4. check_migracion_paso14b -> 3/3; la migración otra vez: "ya no
+       existe: no se toca nada".
+    5. En el mismo paso (rama corta), check_migracion_agente2 deja de pasar
+       (su punto 3 exige la fila): se cambia para exigir que NO exista.
+       Después, la suite (o al menos los scripts de reglas y de visitas).
+  docs/schema_actual.sql no cambia (no guarda filas).
+
+13.3 Pendiente después del merge, fuera de esta rama: en n8n, el
+  formulario con las páginas "Día" y "Hora" y el bucle (contrato, 4b), y el
+  Agente 2 con la tool consultar_huecos_libres (prompt: ofrecer solo sus
+  horas); la lista de pendientes anotados en CLAUDE.md.

@@ -12,14 +12,15 @@ endpoints y revisión técnica final.
 |---|---|---|---|---|
 | 1 | POST /leads | nombre, email (se guarda entero en minúsculas), telefono (se normaliza; ver 5.1), tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token (máx. 100 caracteres; clave de idempotencia, ver 5.1) | 201 (alta nueva) o 200 (repetición con el mismo lead_token): lead_id, cliente_id, oportunidad_id, status, creado (ver 5.1) | Webhook n8n, al confirmar el cliente los datos en el chat web (Agente 1) |
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
-| 3 | POST /gate-decisions | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) **[Nota 2026-10-11, rama feat/n0-resultado-llamadas]** Desde el Bloque B1 es el ALIAS, con este mismo contrato y solo para casos con Gate, de POST /resultados-llamada (fila 10, 5.10): la misma función del servicio. Se quitará cuando el formulario de n8n use la ruta nueva (D26.6). Ver la nota de 5.5  **[Nota 2026-10-12, rama feat/n0-agente2]** El alias gana el 409 hueco_ocupado con huecos_libres (D31, P17): ver 5.11 |
-| 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** texto_cliente baja a 1..300 caracteres y da 422 si tiene forma de email o de teléfono (D26.7); 409 hueco_ocupado con huecos_libres si la visita se solapa con otra activa (D31). Ver 5.11 |
+| 3 | POST /gate-decisions | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) **[Nota 2026-10-11, rama feat/n0-resultado-llamadas]** Desde el Bloque B1 es el ALIAS, con este mismo contrato y solo para casos con Gate, de POST /resultados-llamada (fila 10, 5.10): la misma función del servicio. Se quitará cuando el formulario de n8n use la ruta nueva (D26.6). Ver la nota de 5.5  **[Nota 2026-10-12, rama feat/n0-agente2]** El alias gana el 409 hueco_ocupado con huecos_libres (D31, P17): ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
+| 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** texto_cliente baja a 1..300 caracteres y da 422 si tiene forma de email o de teléfono (D26.7); 409 hueco_ocupado con huecos_libres si la visita se solapa con otra activa (D31). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`. **[Nota 2026-10-07]** La base del plazo es presupuestos.created_at (la pre-estimación), no la creación de la oportunidad; las 48 h viven en reglas_negocio.horas_seguimiento_presupuesto (migración paso11), no en el código. Las oportunidades que cumplen la condición las da GET /llamadas-del-dia (fila 8, apartado seguimientos_por_abrir); este endpoint sigue sin implementar (rama siguiente). **[Nota 2026-10-08, rama feat/n0-create-followup-task]** Implementado. Contrato real: entrada oportunidad_id (entero > 0) y motivo (solo 'sin_respuesta_visita' en N0, D25.13), cabecera X-Gate-Secret; salida log_id, oportunidad_id, motivo, estado_oportunidad (el "status" de esta fila, con el nombre de los endpoints recientes; P6 de su plan), fecha_apertura y creado; 201 (abre el seguimiento) o 200 (ya abierto, no escribe); 404, 409 con seis motivos, 422, 503 sin log. Trigger: WF3, por cada elemento de seguimientos_por_abrir de GET /llamadas-del-dia. Solo REST. Ver 5.8 |
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** Añade reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales} y plazo_orientativo (D18.7; null salvo baño o cocina con presupuesto, sin Gate y sin cambios); 503 configuracion_incompleta solo si hace falta un plazo y su regla falta. Sigue sin importes. Ver 5.11 |
 | 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura |
 | 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura. **[Nota 2026-10-11, rama feat/n0-resumen-lista-diaria, D26.1]** Cada elemento lleva además el objeto "solicitud" {m2 (texto exacto o null), nivel_acabados, incluye_cambios_estructurales}, siempre presente, después de tipo_reforma; los de visita (d y e), además, texto_cliente de ESA visita. Siguen sin salir email e importes. Ver la nota del 2026-10-11 en 5.7 |
 | 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura |
-| 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11 |
+| 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
+| 11 | GET /huecos-libres | Sin parámetros (modo días) o ?fecha=AAAA-MM-DD (modo un día); cualquier otro parámetro, 422. Cabecera X-Gate-Secret, puesta en el router (ver 5.11 e) | 200 siempre que la petición sea válida. Modo días: modo, generado_en, dias [{fecha, dia_semana, manana, tarde, num_horas_libres, etiqueta}]. Modo un día: modo, generado_en, fecha, dia_semana, manana, tarde, horas, sin_horas_motivo (null, fecha_pasada, fin_de_semana o dia_completo). NUNCA datos de otras visitas. 401, 422 de forma, 503 configuracion_incompleta sin log | **[Añadido 2026-10-13, D32]** El formulario de n8n de POST /resultados-llamada, en sus páginas "Día" y "Hora". El Agente 2 tiene la misma consulta como tool MCP consultar_huecos_libres (sin etiqueta). Solo lectura. Forma exacta: docs/Contrato_Formulario_Llamadas.md |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
 autenticación del webhook): además del cuerpo, toda petición debe traer la
@@ -34,6 +35,11 @@ sin endpoint HTTP propio — leen directamente de services/.
 como tool MCP sin parámetros y de solo lectura, ver 5.11.
 request_missing_information() sale de N0 (P14 del plan del Agente 2): el
 Agente 1 ya pide en la conversación lo que falta.)
+(Nota 2026-10-14, rama feat/n0-horario-visitas, D32: tercera tool MCP,
+consultar_huecos_libres(fecha=None), de solo lectura: las horas libres de
+visita, con las mismas funciones que GET /huecos-libres (fila 11). El
+Agente 2 ofrece SOLO las horas que devuelve; get_business_rules no da la
+rejilla (P9 = B del plan D32). Ver 5.11 (e).)
 
 Aclaración de diseño (resuelve ambigüedad de "doble invocación"): cada
 endpoint con dualidad MCP/REST expone la MISMA función de services/ por
@@ -544,6 +550,14 @@ aprobado_por: se queda NULL porque N0 no identifica al operador; ver 5.5.)
 caracteres y sin email ni teléfono (D26.7), y la visita no puede solaparse
 con otra activa: 409 hueco_ocupado con huecos_libres (D31; revisa D18.6).
 Las limitaciones "hora exacta" (C7) y "festivos" siguen; ver 5.11.)
+
+(Nota 2026-10-14, rama feat/n0-horario-visitas, D32: la limitación "hora
+exacta" cambia de sentido: ya no vale cualquier hora dentro de la franja,
+solo las de la rejilla (D23.5: 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15
+con las reglas de hoy); otra da 422 fuera_de_rejilla con horas_validas,
+después de fuera_de_franja. Y el choque cuenta el desplazamiento (15 min).
+El Agente 2 consulta antes las horas libres con consultar_huecos_libres.
+Ver 5.11 (e).)
 
 5.5 POST /gate-decisions (añadido el 2026-10-01, rama feat/n0-gate-decisions)
 
@@ -1555,6 +1569,15 @@ OTRA activa (la pedida propia no cuenta, C8); ver 5.11. La mitigación de
 "me lo pienso" con el aviso de "última llamada" (D29.2, bloque 4c) queda
 revisada por D30: no se hace en el backend, sino en n8n; el documento de D30
 lo tiene el tutor en el Proyecto de claude.ai.)
+(Nota 2026-10-14, rama feat/n0-horario-visitas, D32: visita_acordada,
+confirmar_hora y otra_hora solo aceptan horas de la rejilla (422
+fuera_de_rejilla con horas_validas; también por el alias). El formulario
+ofrece las horas con GET /huecos-libres (fila 11): página "Día" y página
+"Hora", recalculada al abrirla; el 409 hueco_ocupado queda como red de
+seguridad ante dos reservas a la vez. Ver 5.11 (e) y
+docs/Contrato_Formulario_Llamadas.md. OJO: una 'solicitada' antigua fuera
+de la rejilla no se puede confirmar con confirmar_hora (hay que usar
+otra_hora); el 2026-10-12 no había ninguna.)
 
 5.11 Rama feat/n0-agente2: contexto del Agente 2, get_business_rules, filtro
 D26.7 y disponibilidad D31 (añadido el 2026-10-12)
@@ -1569,6 +1592,10 @@ tutor en el Proyecto de claude.ai):
     sigue fuera (Fase 2 del formulario en n8n).
   - D30 (revisa D29.2): el aviso de "última llamada" no se hace en el
     backend (no hay bloque 4c ni regla horas_ultima_llamada): se hará en n8n.
+  - (Nota 2026-10-14) D32 (revisa D31): horas de inicio fijas (rejilla de
+    D23.5: duración + desplazamiento), choque con desplazamiento y la
+    disponibilidad AL OFRECER (GET /huecos-libres y la tool
+    consultar_huecos_libres). Ver (e).
 
 (a) GET /leads/session/{lead_token}: contexto del Agente 2 (P4 = A, D18.4)
   Campos nuevos, siempre presentes (null si existe = false):
@@ -1625,6 +1652,10 @@ tutor en el Proyecto de claude.ai):
   devuelve el texto en "input" y queda en la ejecución de n8n (R3).
 
 (d) D31: el hueco tiene que estar libre (P15-P22)
+  [Nota 2026-10-14: revisado por D32, ver (e). El paso de 30 min
+  (paso_huecos_min) y el solape sin desplazamiento ya no valen; el bloqueo
+  por día, el orden de las comprobaciones, C8 y el 409 con huecos_libres
+  siguen, con las horas calculadas por disponibilidad().]
   Un solo técnico. Una visita 'solicitada' o 'confirmada' OCUPA
   [inicio, inicio + duracion_visita_min): una de 10:00 a 11:00 ocupa las
   10:59 y deja libres las 09:00 y las 11:00. Cuentan los solapes, no solo el
@@ -1676,6 +1707,85 @@ check_visits_http 90/90, check_resultados_llamada_http 183/183,
 check_gate_decisions_http 124/124, check_migracion_agente2 CORRECTO, con
 pruebas en negativo N1-N9 (resultados exactos en la sección 7 del plan) y
 suite completa 48/48 (Bloque C).
+
+(e) D32: horario de visitas y disponibilidad AL OFRECER (rama
+feat/n0-horario-visitas, 2026-10-13 y 14; revisa D31; plan
+docs/Plan_Horario_Visitas_D32.txt). D23.5 (04/10): visita de 60 min y 15
+de desplazamiento, seis horas de inicio al día; D31 se escribió sin ella.
+  Rejilla: las horas de inicio válidas, calculadas en UNA función
+  (rejilla() de reglas_visita.py): desde el inicio de cada franja, cada
+  duracion_visita_min + desplazamiento_min (regla nueva, 15, paso14),
+  mientras la visita entera quepa en la franja. Con las reglas de hoy:
+  08:30, 09:45, 11:00, 12:15, 17:00 y 18:15 (comprobado con las reglas
+  reales). Si cambia una regla, la rejilla se recalcula sola; las visitas
+  guardadas no se mueven.
+  422 fuera_de_rejilla, en POST /visits, POST /resultados-llamada y el
+  alias, DESPUÉS de fuera_de_franja (una hora fuera de la franja sigue
+  dando fuera_de_franja):
+    {"detail": {"motivo": "fuera_de_rejilla",
+                "mensaje": "Las visitas empiezan a horas fijas: mañana 08:30, 09:45, 11:00 o 12:15; tarde 17:00 o 18:15. La hora 10:00 no es una de ellas.",
+                "horas_validas": {"manana": ["08:30", "09:45", "11:00", "12:15"], "tarde": ["17:00", "18:15"]}}}
+  Orden completo: forma -> 404 -> estado y Gate -> fecha_pasada ->
+  fin_de_semana -> fuera_de_franja -> fuera_de_rejilla -> las de la visita
+  propia -> hueco_ocupado -> escritura.
+  Choque: dos visitas chocan si entre el fin de una y el inicio de la otra
+  hay MENOS de desplazamiento_min (15 justos no es chocar). Entre dos horas
+  de la rejilla hay justo 75 min: dos horas válidas distintas nunca chocan;
+  una visita antigua fuera de la rejilla sí puede quitar varias (una
+  'confirmada' a las 10:00 quita las 09:45 y las 11:00).
+  Disponibilidad única: disponibilidad() de reglas_visita.py (rejilla, de
+  lunes a viernes, posterior a now() y sin chocar con ninguna 'solicitada'
+  o 'confirmada'), con UNA consulta para todos los días. La usan el 409
+  hueco_ocupado (huecos_libres sigue siendo una lista plana, P3), GET
+  /huecos-libres y la tool consultar_huecos_libres. Ningún otro archivo de
+  app/ calcula horas (lo comprueba check_disponibilidad_service con ast).
+  Así, cada hora ofrecida pasa la validación (T1: 58 de 58) y una hora
+  cogida entre la consulta y el envío da 409 (T3).
+  paso_huecos_min ya NO se lee (expand/contract): su fila se borra con
+  paso14b, DESPUÉS del merge.
+  GET /huecos-libres (fila 11), solo lectura (REPEATABLE READ, READ ONLY),
+  X-Gate-Secret en el router, dos modos:
+    - días (sin parámetros): los próximos dias_oferta_visita (10, regla
+      nueva de paso14) días laborables DESDE HOY con al menos una hora libre
+      (las de hoy, solo las posteriores a now(); P4), buscando hasta 60
+      laborables; los días completos no salen. Cada día: fecha, dia_semana,
+      manana, tarde, num_horas_libres y etiqueta, el texto exacto del
+      desplegable: "Jueves 15/10 — mañana: 09:45 · 11:00 — tarde: 18:15".
+    - un día (?fecha=AAAA-MM-DD): las horas libres de esa fecha,
+      recalculadas en ese momento, por franja y juntas en "horas";
+      sin_horas_motivo null, fecha_pasada, fin_de_semana o dia_completo
+      (siempre 200, P7).
+    401 (sin cabecera o con el valor de WEBHOOK_SECRET) / 422 de forma
+    (fecha mal escrita o imposible, parámetro de más) / 503
+    configuracion_incompleta SIN log, con [AVISO] en stderr. Sin máximo de
+    antelación (D19.6). Medido: UNA consulta de visitas por modo (4 órdenes
+    en total); 300 visitas en 60 días, 198 ms; por HTTP, unos 290 ms.
+  Tool MCP consultar_huecos_libres(fecha=None): las mismas funciones del
+  servicio, sin etiqueta. La fecha la escribe el LLM: es un dato y se
+  valida con el mismo modelo que la query (ToolError "La fecha tiene que
+  ser un día real escrito como AAAA-MM-DD ..."). fastmcp envuelve la salida
+  en {"result": ...} (dos modelos posibles). get_business_rules no da la
+  rejilla (P9 = B): su descripción dice que las horas se ofrecen solo con
+  esta tool.
+  Limitaciones: festivos no detectados (como 5.4); la consulta no excluye
+  la visita de la propia oportunidad (R4, P11); entre la consulta y el
+  envío otro puede coger la hora (el 409 es la red de seguridad, R1); una
+  'solicitada' antigua fuera de la rejilla no se puede confirmar con
+  confirmar_hora (K3); los scripts que insertan visitas en días reales
+  cambian la oferta mientras se ejecutan (R7, con n8n cerrado).
+  Implementación: app/services/reglas_visita.py (rejilla, rejilla_texto,
+  choca, disponibilidad, validar_fecha, comprobar_hueco_libre),
+  app/schemas/huecos_libres.py, app/services/huecos_libres_service.py,
+  app/api/huecos_libres.py (décimo include_router), app/mcp_server/server.py
+  (la tool), app/api/visits.py y resultados_llamada.py (horas_validas).
+  Migración paso14 (APLICADA el 2026-10-13 a las 23:21:45:
+  desplazamiento_min y dias_oferta_visita) y paso14b (PREPARADA, sin
+  aplicar: borra paso_huecos_min después del merge). Verificación:
+  check_migracion_d32 10/10, check_disponibilidad_service 60/60,
+  check_huecos_libres_service 32/32, check_huecos_libres_http 45/45,
+  check_mcp_huecos_libres 17/17, check_visits_http 93/93,
+  check_resultados_llamada_http 185/185, check_gate_decisions_http 125/125,
+  pruebas en negativo N1-N14 (sección 12 del plan) y suite completa 53/53.
 
 6. Revisión técnica final — hallazgos y resolución
 
