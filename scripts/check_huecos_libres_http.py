@@ -18,6 +18,10 @@ Emails http-huecos-<8 caracteres>@example.com.
   CASO 4   modo un día: sábado (fin_de_semana), ayer (fecha_pasada), un
            laborable libre (la rejilla entera), hoy (solo horas futuras) y
            el primer día del modo días (lo mismo que dijo el modo días).
+  CASO 4b  (H-D32-1, 2026-10-14) una visita 'confirmada' puesta por SQL
+           ocupa su hora en los DOS modos y la siguiente de la rejilla sigue
+           libre (el desplazamiento justo); una 'confirmada' antigua a las
+           10:00 quita las 09:45 y las 11:00 (N4: sin mirar las 'confirmada').
   CASO 5   T1: CADA hora de CADA día del modo días pasa POST /visits (201,
            nunca 409 ni 422). Escribe visitas propias en días REALES (P10:
            la fase 2 va con n8n cerrado); se cancelan al terminar el caso.
@@ -36,6 +40,11 @@ Emails http-huecos-<8 caracteres>@example.com.
 "NO TOCA NADA AJENO": como check_visits_http, se cuentan las filas ajenas
 antes y después con el mismo id_base. Limpieza: solo lo propio, en el orden
 de las claves foráneas.
+
+(Nota 2026-10-14, H-D32-2 de la revisión del tutor: ningún acceso por índice
+a la lista de días ni a sus horas puede reventar; si el modo días viene vacío
+o un día sin horas, FALLO contado con su título y el script sigue hasta el
+final y la limpieza.)
 """
 
 # sys: consola y código de salida.
@@ -526,15 +535,95 @@ try:
               all(en_madrid(HOY, h) > generado for h in j.get("horas", [])), f"({j.get('horas')})")
     # El primer día del modo días: lo mismo en el modo un día.
     if dias:
+        # El primer día (H-D32-2: con .get).
+        d0 = dias[0]
         # La petición.
-        j = cuerpo(huecos({"fecha": dias[0]["fecha"]}))
+        j = cuerpo(huecos({"fecha": d0.get("fecha")}))
         # Las mismas horas por franja.
-        comprobar(f"el primer día del modo días ({dias[0]['fecha']}): las mismas horas en el modo un día",
-                  (j.get("manana"), j.get("tarde")) == (dias[0]["manana"], dias[0]["tarde"]), f"({j})")
+        comprobar(f"el primer día del modo días ({d0.get('fecha')}): las mismas horas en el modo un día",
+                  (j.get("manana"), j.get("tarde")) == (d0.get("manana"), d0.get("tarde")), f"({j})")
     # Sin días no hay nada que comparar.
     else:
         # FALLO explícito.
         comprobar("el modo días devuelve al menos un día", False, "(lista vacía)")
+
+    # ------------------------------------------------------------------
+    print("\nCASO 4b - Una visita 'confirmada' ocupa su hora en los dos modos (H-D32-1, N4)")
+    # Lo que ocupa una visita con el desplazamiento (oráculo, en minutos).
+    PASO = REGLAS["duracion_visita_min"] + REGLAS["desplazamiento_min"]
+
+    def a_minutos(hhmm):
+        """'09:45' -> 585."""
+        # Horas y minutos.
+        h, m = map(int, hhmm.split(":"))
+        # Total.
+        return h * 60 + m
+
+    def a_hhmm(minutos):
+        """585 -> '09:45'."""
+        # Con dos cifras.
+        return f"{minutos // 60:02d}:{minutos % 60:02d}"
+
+    # Un día real del modo días con una hora H cuya siguiente de la rejilla
+    # (H + duración + desplazamiento, en la misma franja) también esté libre.
+    eleccion = None
+    # Los días, uno a uno (con .get: nada de índices, H-D32-2).
+    for d in cuerpo(huecos()).get("dias") or []:
+        # Las dos franjas.
+        for franja in ("manana", "tarde"):
+            # Sus horas libres.
+            libres_f = d.get(franja) or []
+            # La primera hora con su siguiente libre.
+            h = next((x for x in libres_f if a_hhmm(a_minutos(x) + PASO) in libres_f), None)
+            # Encontrada: se guarda y se deja de buscar.
+            if h is not None and eleccion is None:
+                # (día, hora, la siguiente).
+                eleccion = (date.fromisoformat(d.get("fecha", "2000-01-01")), h, a_hhmm(a_minutos(h) + PASO))
+    # Sin ningún día así: FALLO contado y se sigue.
+    if eleccion is None:
+        # Con su título.
+        comprobar("4b: el modo días trae un día con dos horas seguidas libres", False, "(ninguno)")
+    # Con día: la visita 'confirmada' por SQL y los dos modos.
+    else:
+        # El día, la hora y la siguiente.
+        F4, H4, SIG4 = eleccion
+        # Se enseña.
+        print(f"      'confirmada' de prueba: {F4} {H4}; la siguiente de la rejilla: {SIG4}")
+        # Una oportunidad propia.
+        _, op_conf = lead_http()
+        # SQL: su visita 'confirmada' (solo sobre una oportunidad propia; la
+        # borra limpiar() en el finally).
+        ejecutar("INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
+                 "VALUES (%s, %s, 'confirmada', 'visita confirmada de prueba (H-D32-1)');", (op_conf, en_madrid(F4, H4)))
+        # El modo días: ese día, por fecha.
+        dia4 = next((d for d in cuerpo(huecos()).get("dias") or [] if d.get("fecha") == F4.isoformat()), {})
+        # Sus horas.
+        horas_dias = (dia4.get("manana") or []) + (dia4.get("tarde") or [])
+        # Sin H y con la siguiente.
+        comprobar(f"4b modo días: {F4} sin {H4} (la 'confirmada') y con {SIG4} (desplazamiento justo)",
+                  H4 not in horas_dias and SIG4 in horas_dias, f"({horas_dias})")
+        # El modo un día.
+        horas_dia = cuerpo(huecos({"fecha": F4.isoformat()})).get("horas") or []
+        # Igual.
+        comprobar(f"4b modo un día: {F4} sin {H4} y con {SIG4}", H4 not in horas_dia and SIG4 in horas_dia,
+                  f"({horas_dia})")
+    # Una 'confirmada' ANTIGUA a las 10:00 (fuera de la rejilla) en un día del bloque.
+    D_C4 = DIAS.siguiente()
+    # Otra oportunidad propia.
+    _, op_conf2 = lead_http()
+    # SQL: la visita (oportunidad propia; limpiar() la borra).
+    ejecutar("INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
+             "VALUES (%s, %s, 'confirmada', 'visita antigua confirmada de prueba (H-D32-1)');",
+             (op_conf2, en_madrid(D_C4, "10:00")))
+    # Lo esperado (oráculo): la rejilla sin las que chocan con las 10:00.
+    esperado4 = [h for h in TODAS if abs(a_minutos(h) - 600) >= PASO]
+    # El modo un día.
+    horas_c4 = cuerpo(huecos({"fecha": D_C4.isoformat()})).get("horas") or []
+    # Exacto.
+    comprobar(f"4b modo un día: {D_C4} con una 'confirmada' antigua a las 10:00 -> {esperado4}",
+              horas_c4 == esperado4, f"({horas_c4})")
+    # Las visitas propias dejan de ocupar (día real).
+    cancelar_propias()
 
     # ------------------------------------------------------------------
     print("\nCASO 5 - T1: cada hora ofrecida pasa POST /visits (días reales)")
@@ -549,15 +638,15 @@ try:
         # El lead del día.
         token, _ = lead_http()
         # Cada hora del día.
-        for h in d["manana"] + d["tarde"]:
+        for h in (d.get("manana") or []) + (d.get("tarde") or []):
             # La petición.
-            r = visita(token, date.fromisoformat(d["fecha"]), h)
+            r = visita(token, date.fromisoformat(d.get("fecha", "2000-01-01")), h)
             # Una más.
             n_peticiones += 1
             # Tiene que ser 201.
             if r.status_code != 201:
                 # Se apunta.
-                rechazos.append((d["fecha"], h, r.status_code, motivo(r)))
+                rechazos.append((d.get("fecha"), h, r.status_code, motivo(r)))
     # Se enseña.
     print(f"      {n_peticiones} peticiones en {len(dias_t1)} días; rechazos: {rechazos}")
     # Ninguna rechazada.
@@ -609,29 +698,38 @@ try:
     print("\nCASO 7 - T3: la hora se ocupa entre la página 'Día' y la página 'Hora'")
     # Página "Día": el modo días.
     dias_t3 = cuerpo(huecos()).get("dias") or []
-    # El primer día y su primera hora.
-    F = date.fromisoformat(dias_t3[0]["fecha"]) if dias_t3 else None
-    # Su primera hora.
-    H = (dias_t3[0]["manana"] + dias_t3[0]["tarde"])[0] if dias_t3 else None
-    # Se enseña.
-    print(f"      página 'Día': {F} con {H} libre")
-    # Otra oportunidad la coge entre las dos páginas.
-    token_p1, _ = lead_http()
-    # La coge.
-    r = visita(token_p1, F, H)
-    # 201.
-    comprobar(f"T3: otro cliente coge {F} {H} (201)", r.status_code == 201, f"({r.status_code}, {motivo(r)})")
-    # Página "Hora": el modo un día, recalculado.
-    j = cuerpo(huecos({"fecha": F.isoformat()}))
-    # La hora ya no está.
-    comprobar(f"T3: la página 'Hora' ya NO ofrece {H} (N8)", H not in (j.get("horas") or []), f"({j.get('horas')})")
-    # El POST con esa hora: 409.
-    token_p2, _ = lead_http()
-    # La petición.
-    r = visita(token_p2, F, H)
-    # 409 hueco_ocupado.
-    comprobar(f"T3: POST con {H}: 409 hueco_ocupado", r.status_code == 409 and motivo(r) == "hueco_ocupado",
-              f"({r.status_code}, {motivo(r)})")
+    # H-D32-2: el primer día que tenga alguna hora (nunca un índice sobre una
+    # lista que puede venir vacía).
+    primero = next((d for d in dias_t3 if (d.get("manana") or []) + (d.get("tarde") or [])), None)
+    # Sin ninguno: FALLO contado con su título, y el script sigue.
+    if primero is None:
+        # El fallo.
+        comprobar("T3: el modo días trae al menos un día con horas", False, f"({dias_t3[:2]})")
+    # Con día: la prueba de siempre.
+    else:
+        # El día.
+        F = date.fromisoformat(primero.get("fecha", "2000-01-01"))
+        # Su primera hora.
+        H = ((primero.get("manana") or []) + (primero.get("tarde") or []))[0]
+        # Se enseña.
+        print(f"      página 'Día': {F} con {H} libre")
+        # Otra oportunidad la coge entre las dos páginas.
+        token_p1, _ = lead_http()
+        # La coge.
+        r = visita(token_p1, F, H)
+        # 201.
+        comprobar(f"T3: otro cliente coge {F} {H} (201)", r.status_code == 201, f"({r.status_code}, {motivo(r)})")
+        # Página "Hora": el modo un día, recalculado.
+        j = cuerpo(huecos({"fecha": F.isoformat()}))
+        # La hora ya no está.
+        comprobar(f"T3: la página 'Hora' ya NO ofrece {H} (N8)", H not in (j.get("horas") or []), f"({j.get('horas')})")
+        # El POST con esa hora: 409.
+        token_p2, _ = lead_http()
+        # La petición.
+        r = visita(token_p2, F, H)
+        # 409 hueco_ocupado.
+        comprobar(f"T3: POST con {H}: 409 hueco_ocupado", r.status_code == 409 and motivo(r) == "hueco_ocupado",
+                  f"({r.status_code}, {motivo(r)})")
     # Las visitas propias dejan de ocupar (día real).
     cancelar_propias()
 
@@ -657,20 +755,21 @@ try:
     # El primer día real del modo días, lleno con sus horas libres.
     dias_t4 = cuerpo(huecos()).get("dias") or []
     # El primer día.
-    G = dias_t4[0] if dias_t4 else {}
+    # H-D32-2: el primer día con horas, o {} (sin índices).
+    G = next((d for d in dias_t4 if (d.get("manana") or []) + (d.get("tarde") or [])), {})
     # Una oportunidad por hora libre.
     for h in G.get("manana", []) + G.get("tarde", []):
         # Su lead.
         token, _ = lead_http()
         # La petición (la hora está libre: 201).
-        visita(token, date.fromisoformat(G["fecha"]), h)
+        visita(token, date.fromisoformat(G.get("fecha", "2000-01-01")), h)
     # El modo días otra vez.
     despues = cuerpo(huecos()).get("dias") or []
     # El día lleno ya no está, y siguen siendo dias_oferta_visita.
     comprobar(f"T4: el día real lleno ({G.get('fecha')}) desaparece del modo días, que sigue con "
               f"{REGLAS['dias_oferta_visita']} días",
-              G and G.get("fecha") not in [d["fecha"] for d in despues] and len(despues) == REGLAS["dias_oferta_visita"],
-              f"({[d['fecha'] for d in despues]})")
+              bool(G) and G.get("fecha") not in [d.get("fecha") for d in despues]
+              and len(despues) == REGLAS["dias_oferta_visita"], f"({[d.get('fecha') for d in despues]})")
     # Las visitas propias dejan de ocupar (día real).
     cancelar_propias()
 
