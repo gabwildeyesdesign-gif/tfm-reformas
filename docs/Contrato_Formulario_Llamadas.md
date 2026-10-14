@@ -6,6 +6,8 @@
 **Mientras tanto:** el formulario publicado sigue llamando a `POST /gate-decisions`, que es ahora un ALIAS con su
 contrato de siempre (solo casos con Gate). Cuando este formulario ampliado esté publicado, el alias se quita en otra
 rama (D26.6).
+(Nota 2026-10-14, D33, rama `feat/n0-fecha-fin-visita`: el alias responde además `fecha_fin_visita`, una clave más
+para WF5; el formulario publicado no la usa y no se rompe. Ver la sección 4.)
 
 ---
 
@@ -100,10 +102,16 @@ que tienen que empezar y terminar dentro de la franja, de lunes a viernes y en e
 | `resultado`, `motivo` | Los registrados (en un 200, los que ya estaban). |
 | `estado_oportunidad` | `visita_agendada` o `perdida`. |
 | `visita_id`, `fecha_visita` | La visita que queda CONFIRMADA (`null` en `descartar` y `cliente_cancela`). `fecha_visita` con su desfase: `"2026-10-19T10:00:00+02:00"`. |
+| `fecha_fin_visita` | (D33, desde el 2026-10-14) Su FIN: `fecha_visita` + `duracion_visita_min` de `reglas_negocio`, con el mismo formato y desfase (`"2026-10-19T11:00:00+02:00"`); `null` cuando `fecha_visita` es `null`. Es la hora de fin del evento de Google Calendar de WF5: **n8n no suma la duración por su cuenta**. Va también en el 200. |
 | `visita_cancelada_id` | La pedida que se canceló (`otra_hora`, `cliente_cancela`), o `null`. |
 | `creado` | `true` en el 201, `false` en el 200. |
 
 Nunca lleva importes.
+
+(Nota 2026-10-14, D33.) El alias `POST /gate-decisions` lleva la misma clave `fecha_fin_visita` (con
+`fecha_propuesta` como inicio), y `POST /visits` también (la visita pedida desde el chat, que WF5 pone como
+PENDIENTE). Limitación: el fin se calcula con la duración VIGENTE; si administración cambia
+`duracion_visita_min`, un 200 posterior trae el fin nuevo (la tabla `visitas` no guarda el fin).
 
 ### Errores: `{"detail": {"motivo": "...", "mensaje": "..."}}`
 
@@ -130,6 +138,9 @@ El `mensaje` lo escribe el backend para administración y se puede enseñar tal 
 
 Reintentos de n8n: solo ante 500 o sin conexión (un reintento que llega dos veces da 200, no duplica nada). Nunca
 ante 4xx ni 503.
+(Nota 2026-10-14, D33, P1: la repetición de un resultado CON visita lee las reglas de visita para calcular
+`fecha_fin_visita`; si están rotas, da el mismo 503 `configuracion_incompleta` que el registro, no un 200. Sin
+visita, la repetición sigue dando 200.)
 
 ### 409 `hueco_ocupado` (D31, desde el 2026-10-12, rama feat/n0-agente2)
 

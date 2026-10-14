@@ -274,6 +274,11 @@ POST /visits, POST /resultados-llamada y el alias solo aceptan horas de la
 rejilla (422 fuera_de_rejilla con horas_validas) y el choque cuenta el
 desplazamiento. paso_huecos_min ya no se lee. Detalle en "Estado actual" y
 en la Adenda 5.11 (e).)
+(Nota 2026-10-14, D33: en la rama feat/n0-fecha-fin-visita (pendiente de
+merge), POST /visits, POST /resultados-llamada y el alias /gate-decisions
+responden además fecha_fin_visita (inicio + duracion_visita_min, mismo
+formato y desfase; null sin visita), para el subflujo WF5 de n8n que copia
+las visitas a Google Calendar. Sin endpoints ni tools nuevos.)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -668,6 +673,25 @@ SOLO REST.
 > después; regresión sin fallos. Detalle en la nota de la sección 13 del plan
 > D32. Queda un fallo CONOCIDO en la suite: check_migracion_agente2 (33/38)
 > exige todavía esa fila; se cambia en su propia rama.
+>
+> **(Nota 2026-10-14, tarde.)** El fallo conocido de check_migracion_agente2
+> ya no existe: f81f6ac (en `main`) hace que su punto 3 exija que
+> paso_huecos_min NO exista (CORRECTO en la suite de D33). **Bloque actual:
+> D33, fecha_fin_visita** (decisión del tutor del 2026-10-14: WF5 copia las
+> visitas a Google Calendar, las 'solicitada' como pendientes y las
+> 'confirmada' como confirmadas; la base de datos sigue siendo la fuente de
+> verdad, D31), implementado y verificado en la rama
+> `feat/n0-fecha-fin-visita`, **pendiente de merge** (fase 1 7fd2277, fase 2
+> 0584705, documentación en el commit del Bloque D; plan
+> docs/Plan_Fecha_Fin_Visita_D33.txt). Una sola suma,
+> reglas_visita.fin_de_visita() (en UTC, sin números escritos), con la
+> lectura de reglas que ya hacía cada petición. P1: la repetición CON visita
+> de /resultados-llamada lee las reglas (503 con log si faltan, como
+> /visits). P2: el alias gana una clave (9). P3: el fin usa la duración
+> VIGENTE. Sin migración (la base de datos no cambia); después del merge, reiniciar el uvicorn del 8000 SIN --reload (app/
+> cambia). Misma regla de siempre: no hacer merge sin la confirmación
+> explícita de Gabi, después de la revisión del tutor, y siempre con
+> `--ff-only`.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1047,6 +1071,12 @@ check_huecos_libres_http (puerto 8032), check_mcp_huecos_libres (puerto
 reales iguales. check_migracion_paso14b FALLA a propósito (2/3) hasta que
 se aplique paso14b después del merge: es su prueba en negativo. Lección:
 Edge se vuelve a abrir en segundo plano; medir justo antes de ejecutar.)
+(Nota 2026-10-14, rama feat/n0-fecha-fin-visita, D33: siguen siendo 54
+scripts, sin ninguno nuevo. 54/54 con código 0 en UNA pasada
+(16:23:25-16:32:59), con 1,56 GB libres, sin chrome, msedge, docker ni vmmem
+y sin Kernel-Power 506/507 entre 16:08 y 16:35; uvicorn del 8031 detenido
+por su PID 13944 (log = netstat); datos reales iguales (SHA-256 de las 10
+tablas). check_migracion_paso14b ya da 3/3 (paso14b aplicada).)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1396,6 +1426,11 @@ rápida, no sustituye esa documentación. Contiene:
   y la tool consultar_huecos_libres; P1-P12 (sección 11), mediciones, lista
   de scripts afectados (6), pruebas en negativo N1-N14 con sus resultados
   (sección 12), hashes (10) e integración y paso14b (13). D23.5 y D32 los
+  tiene el tutor en el Proyecto de claude.ai.
+- Plan_Fecha_Fin_Visita_D33.txt — plan de D33 (rama
+  feat/n0-fecha-fin-visita): fecha_fin_visita en /visits, /resultados-llamada
+  y el alias; P1-P3 con alternativas, pruebas en negativo N1-N4 con sus
+  resultados, y resultados de la fase 2 con los SHA-256 (sección 7). D33 lo
   tiene el tutor en el Proyecto de claude.ai.
 - Decisiones_D28_Resumen_Conversacion_y_Enlace_Ficha.md y
   Decisiones_D29_Me_Lo_Pienso_y_Ultima_Llamada.md — D28 (resumen de la

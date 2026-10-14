@@ -559,6 +559,17 @@ después de fuera_de_franja. Y el choque cuenta el desplazamiento (15 min).
 El Agente 2 consulta antes las horas libres con consultar_huecos_libres.
 Ver 5.11 (e).)
 
+(Nota 2026-10-14, rama feat/n0-fecha-fin-visita, D33: la respuesta (201 y
+200) añade fecha_fin_visita = fecha_propuesta + duracion_visita_min, con el
+mismo formato y desfase ("2026-10-23T09:30:00+02:00"); nunca null. Es la
+hora de fin del evento PENDIENTE que n8n copia a Google Calendar (WF5), para
+que n8n no duplique la regla. La duración sale de la MISMA lectura de
+reglas_negocio del paso 3 (ninguna consulta nueva) y la suma la hace solo
+reglas_visita.fin_de_visita(), en UTC. Limitación: es la duración VIGENTE
+(la tabla visitas no guarda el fin); si se cambia duracion_visita_min, un
+200 posterior trae el fin nuevo (columna de fin guardado: N1). Plan:
+docs/Plan_Fecha_Fin_Visita_D33.txt.)
+
 5.5 POST /gate-decisions (añadido el 2026-10-01, rama feat/n0-gate-decisions)
 
 (Nota 2026-10-11, rama feat/n0-resultado-llamadas, plan
@@ -1578,6 +1589,21 @@ seguridad ante dos reservas a la vez. Ver 5.11 (e) y
 docs/Contrato_Formulario_Llamadas.md. OJO: una 'solicitada' antigua fuera
 de la rejilla no se puede confirmar con confirmar_hora (hay que usar
 otra_hora); el 2026-10-12 no había ninguna.)
+(Nota 2026-10-14, rama feat/n0-fecha-fin-visita, D33: la respuesta (201 y
+200) añade fecha_fin_visita = fecha_visita + duracion_visita_min, con el
+mismo formato y desfase; null cuando fecha_visita es null (descartar,
+cliente_cancela). Es la hora de fin del evento CONFIRMADO de WF5 (Google
+Calendar, n8n). En el 201 la duración sale de la lectura de reglas del paso
+de la visita (ninguna consulta nueva). P1: la repetición se resuelve ANTES
+de leer las reglas, así que una repetición CON visita las lee (una consulta,
+solo ahí) y, si faltan o no son válidas, da el mismo 503
+configuracion_incompleta con su log que el registro (como la repetición de
+/visits); sin visita, sigue dando 200 sin leerlas. P2: el ALIAS POST
+/gate-decisions añade la misma clave (9 en vez de 8; con fecha_propuesta
+como inicio): ya no conserva su contrato "de siempre" al pie de la letra,
+pero solo gana una clave, que el formulario publicado ignora. P3: la
+duración es la VIGENTE (ver la nota de 5.4). Plan:
+docs/Plan_Fecha_Fin_Visita_D33.txt.)
 
 5.11 Rama feat/n0-agente2: contexto del Agente 2, get_business_rules, filtro
 D26.7 y disponibilidad D31 (añadido el 2026-10-12)
