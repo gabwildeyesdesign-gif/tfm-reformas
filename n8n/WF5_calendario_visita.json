@@ -1,0 +1,757 @@
+{
+  "name": "WF5_calendario_visita",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "accion"
+            },
+            {
+              "name": "visita_id",
+              "type": "number"
+            },
+            {
+              "name": "estado_visita"
+            },
+            {
+              "name": "inicio"
+            },
+            {
+              "name": "fin"
+            },
+            {
+              "name": "nombre"
+            },
+            {
+              "name": "tipo_reforma"
+            },
+            {
+              "name": "oportunidad_id",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -1488,
+        480
+      ],
+      "id": "053a6d81-58b1-4dda-8aab-910fd4649da0",
+      "name": "Al ser llamado"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF5_calendario_visita · Preparar el evento (D33). 2026-10-14.\n// Revisión 14/10 (pruebas 88-91): la descripción lleva el enlace a la ficha.\n// Copia una visita de la base de datos (la FUENTE DE VERDAD, D31) al calendario\n// interno \"Visitas técnicas — Reformas Amedida\". Lo llaman el formulario de\n// llamadas y, más adelante, el Agente 2.\n// Entrada (1 elemento, del disparador):\n//   accion         'guardar' (crear o actualizar) | 'borrar'\n//   visita_id      número de la visita en la base de datos\n//   estado_visita  'solicitada' (pedida por el cliente) | 'confirmada'   (solo en guardar)\n//   inicio, fin    \"YYYY-MM-DDTHH:MM:SS+02:00\", tal como los da el backend (solo en guardar)\n//   nombre, tipo_reforma, oportunidad_id   para el título y la descripción\n// El id del evento es SIEMPRE \"visita\" + visita_id (Google admite ids propios con\n// letras a-v y números, de 5 a 1024 caracteres): para actualizar o borrar, ya se\n// sabe cómo se llama, sin guardar nada nuevo en la base de datos.\n// Salida: { ok, accion, event_id, url_evento, url_coleccion, cuerpo }  o\n//         { ok: false, mensaje_error }.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// ID del calendario \"Visitas técnicas — Reformas Amedida\" (Configuración del\n// calendario -> Integrar el calendario -> ID del calendario). NO es una contraseña,\n// pero no debe ir al repositorio público: se sanea al exportar el flujo (D27.5).\nconst CALENDARIO_ID = 'PEGA_AQUI_ID_DEL_CALENDARIO';\n// Dirección de la página de la ficha (WF_ficha_oportunidad, D26.8). El dominio de\n// ngrok tampoco va al repositorio público: se sanea como TU-DOMINIO (D27.5).\nconst FICHA_URL = 'https://TU-DOMINIO.ngrok-free.dev/webhook/ficha?oportunidad_id=';\n\n// Los datos que llegan del flujo que nos llama.\nconst e = $input.first().json;\n\n// Atajo para devolver un error claro (lo convierte en aviso técnico el nodo resumen).\nfunction error(mensaje_error) {\n  return [{ json: { ok: false, accion: e.accion ?? null, mensaje_error } }];\n}\n\n// ---- 1. Comprobaciones: mejor parar que escribir algo raro en el calendario --\nif (CALENDARIO_ID.startsWith('PEGA_AQUI')) return error('Falta el ID del calendario en el nodo preparar_evento.');\nif (!['guardar', 'borrar'].includes(e.accion)) return error(`Acción no reconocida: \"${e.accion}\".`);\n// El número de visita: entero positivo.\nconst visita_id = Number(e.visita_id);\nif (!Number.isInteger(visita_id) || visita_id <= 0) return error(`visita_id no válido: \"${e.visita_id}\".`);\n// El id del evento en Google: \"visita\" + número (solo letras a-v y cifras).\nconst event_id = `visita${visita_id}`;\n// Las direcciones de la API de Google Calendar (el ID va codificado: lleva \"@\").\nconst url_coleccion = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CALENDARIO_ID)}/events`;\nconst url_evento = `${url_coleccion}/${event_id}`;\n\n// Borrar no necesita nada más.\nif (e.accion === 'borrar') {\n  return [{ json: { ok: true, accion: 'borrar', event_id, url_evento, url_coleccion, cuerpo: null } }];\n}\n\n// ---- 2. Guardar: estado, fechas y textos ------------------------------------\nif (!['solicitada', 'confirmada'].includes(e.estado_visita)) return error(`estado_visita no válido: \"${e.estado_visita}\".`);\n// Fecha y hora con su desfase de Madrid, como las da el backend.\nconst FORMA = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2})?([+-]\\d{2}:\\d{2}|Z)$/;\nif (!FORMA.test(String(e.inicio ?? '')) || !FORMA.test(String(e.fin ?? ''))) {\n  return error('inicio o fin sin la forma \"YYYY-MM-DDTHH:MM:SS+02:00\".');\n}\n// El fin tiene que ser posterior al inicio.\nif (new Date(e.fin) <= new Date(e.inicio)) return error('El fin de la visita no es posterior al inicio.');\n\n// Textos: sin espacios sobrantes y con un tope razonable para un título.\nconst nombre = String(e.nombre ?? '').trim().slice(0, 80) || 'Cliente sin nombre';\n// Códigos del backend -> texto legible.\nconst TIPOS = { bano: 'Baño', cocina: 'Cocina', integral_vivienda: 'Reforma integral', parcial_acabados: 'Acabados parciales' };\nconst tipo = TIPOS[e.tipo_reforma] ?? (String(e.tipo_reforma ?? '').trim() || 'Reforma');\nconst pendiente = e.estado_visita === 'solicitada';\n// El número de oportunidad, solo si es un entero positivo (si no, no hay enlace).\nconst op = Number(e.oportunidad_id);\nconst enlaceFicha = Number.isInteger(op) && op > 0 ? `Ficha completa: ${FICHA_URL}${op}\\n` : '';\n\n// El evento. Calendario INTERNO (solo administración y el técnico): nombre y tipo\n// de reforma para que el técnico sepa a qué va; nunca teléfono, email ni dirección\n// (están en la ficha, detrás de la contraseña de administración). Minimización (RGPD).\nconst cuerpo = {\n  summary: pendiente\n    ? `🟡 PENDIENTE DE CONFIRMAR · ${nombre} · ${tipo}`\n    : `✅ Visita técnica · ${nombre} · ${tipo}`,\n  description:\n    `Oportunidad ${Number.isInteger(op) && op > 0 ? op : '—'} · visita nº ${visita_id}\\n` +\n    enlaceFicha +\n    (pendiente ? 'Pedida por el cliente desde el chat: administración tiene que llamarle para confirmarla.\\n' : 'Confirmada por administración.\\n') +\n    'Evento creado por el sistema: los cambios se hacen desde el formulario de llamadas, no a mano.',\n  start: { dateTime: e.inicio, timeZone: 'Europe/Madrid' },\n  end: { dateTime: e.fin, timeZone: 'Europe/Madrid' },\n  // Colores de Google Calendar: 5 = amarillo (pendiente), 10 = verde (confirmada).\n  colorId: pendiente ? '5' : '10',\n  // Marcas internas, invisibles en el calendario, para saber de dónde viene el evento.\n  extendedProperties: { private: { origen: 'tfm-reformas', visita_id: String(visita_id) } },\n};\n\n// Todo listo.\nreturn [{ json: { ok: true, accion: 'guardar', event_id, url_evento, url_coleccion, cuerpo } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1264,
+        480
+      ],
+      "id": "720e915e-4af3-4201-aa78-3e2d42eb3400",
+      "name": "preparar_evento"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ced628e9-554e-4806-a691-cadfd8777312",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1040,
+        480
+      ],
+      "id": "5b8d3a01-d525-4720-ab2f-831786bcc11b",
+      "name": "preparacion_ok"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url_evento }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -816,
+        416
+      ],
+      "id": "e0aac4b6-4a7b-4a72-a9c2-f9ce565a70ee",
+      "name": "leer_evento",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "pZ0Cqv9vv9x5QbT1",
+          "name": "Reformas Amedida"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF5_calendario_visita · Decidir qué hacer en Google (D33). 2026-10-14.\n// Entrada ($json): la respuesta COMPLETA de leer_evento (GET del evento por su id).\n//   200 -> el evento existe (si status = \"cancelled\", existió y se borró)\n//   404 -> no existe\n// Salida: { paso, ... } con paso:\n//   'insertar'   -> guardar y no existe            -> POST con el id propio\n//   'actualizar' -> guardar y existe (o se borró)  -> PATCH, y vuelve a estar activo\n//   'borrar'     -> borrar y existe activo         -> DELETE\n//   'nada'       -> borrar y no existe o ya borrado (repetir no hace daño)\n//   'error'      -> cualquier otra respuesta (401, 403, 500...)\n// Así, repetir la misma llamada nunca duplica eventos (Google no garantiza\n// detectar ids repetidos al crear: por eso se pregunta antes).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Lo preparado (accion, urls, cuerpo) y la respuesta de Google.\nconst prep = $('preparar_evento').first().json;\nconst estado = $input.first().json.statusCode;\nconst b = $input.first().json.body ?? {};\n\n// Existe y está activo / existió pero está borrado / no existe.\nconst existe = estado === 200;\nconst activo = existe && b.status !== 'cancelled';\n\n// Atajo: lo preparado + el paso decidido.\nconst salida = (paso, extra = {}) => [{ json: { ...prep, paso, codigo_lectura: estado, ...extra } }];\n\n// Respuesta inesperada al leer: no se toca nada y se avisa.\nif (!existe && estado !== 404) {\n  return salida('error', { ok: false, mensaje_error: `GET del evento ${prep.event_id} respondió ${estado}.` });\n}\n\nif (prep.accion === 'guardar') {\n  // No existe: se crea con su id propio. Existe (activo o borrado): se actualiza\n  // y se marca confirmado (status del EVENTO en Google, no de la visita).\n  if (!existe) return salida('insertar', { cuerpo: { id: prep.event_id, ...prep.cuerpo } });\n  return salida('actualizar', { cuerpo: { ...prep.cuerpo, status: 'confirmed' } });\n}\n\n// accion === 'borrar': solo si existe y está activo; si no, no hay nada que hacer.\nreturn salida(activo ? 'borrar' : 'nada');\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -592,
+        272
+      ],
+      "id": "287ad1a1-913f-4a41-85b4-716da1598696",
+      "name": "decidir_paso"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "af708687-9c87-4446-89fe-631829d94079",
+                    "leftValue": "={{ $json.paso }}",
+                    "rightValue": "insertar",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "insertar"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "a4eea687-bead-4097-a2dd-b36d110420f4",
+                    "leftValue": "={{ $json.paso }}",
+                    "rightValue": "actualizar",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "actualizar"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "d4780cec-ac6e-4db7-8c57-c9947c15a587",
+                    "leftValue": "={{ $json.paso }}",
+                    "rightValue": "borrar",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "borrar"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "11429729-cfb1-4fd0-9810-4f7f738891c9",
+                    "leftValue": "={{ $json.paso }}",
+                    "rightValue": "nada",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "nada"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "d80131f9-eb5a-47b7-81f9-c2d145ece74a",
+                    "leftValue": "={{ $json.paso }}",
+                    "rightValue": "error",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "error"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -368,
+        224
+      ],
+      "id": "9aa78685-d0fb-4cbb-a01c-e7dc9b5f354c",
+      "name": "segun_paso"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url_coleccion }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.cuerpo) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -144,
+        0
+      ],
+      "id": "d683fec5-0f25-4b28-9372-0347e448e218",
+      "name": "insertar_evento",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "pZ0Cqv9vv9x5QbT1",
+          "name": "Reformas Amedida"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.url_evento }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.cuerpo) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -144,
+        192
+      ],
+      "id": "c3a1a685-e6f5-4d29-a173-1dab42a9beb6",
+      "name": "actualizar_evento",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "pZ0Cqv9vv9x5QbT1",
+          "name": "Reformas Amedida"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ $json.url_evento }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -144,
+        480
+      ],
+      "id": "e55ffbee-cebc-4400-99b1-a76109970188",
+      "name": "borrar_evento",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "pZ0Cqv9vv9x5QbT1",
+          "name": "Reformas Amedida"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF5_calendario_visita · Resumen del resultado (D33). 2026-10-14.\n// Recibe de varios sitios (se sabe cuál con $prevNode.name):\n//   insertar_evento, actualizar_evento, borrar_evento -> respuesta COMPLETA de Google\n//     (o su salida de ERROR si no hubo respuesta: trae json.error)\n//   leer_evento      -> salida de ERROR: no hubo respuesta al leer\n//   segun_paso       -> paso 'nada' (no había nada que borrar) o 'error'\n//   preparacion_ok   -> datos de entrada no válidos (ok = false)\n// Salida (1 elemento): { ok, accion, event_id, mensaje, mensaje_error }\n//   ok = false -> el nodo siguiente avisa al técnico (WF4).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Quién nos manda el dato y el dato.\nconst origen = $prevNode.name;\nconst dato = $input.first().json;\n\n// Lo preparado (si se llegó a preparar), para el id del evento y la acción.\nlet prep = {};\ntry { prep = $('preparar_evento').first().json; } catch (e) { prep = {}; }\n\n// Atajo para la salida.\nconst fin = (ok, mensaje, mensaje_error = '') =>\n  [{ json: { ok, accion: prep.accion ?? null, event_id: prep.event_id ?? null, mensaje, mensaje_error } }];\n\n// Texto de un error de red de n8n: code, message y description, sin el objeto entero.\nfunction textoError(j) {\n  const e = j.error;\n  if (!e) return 'sin detalle del error';\n  if (typeof e === 'string') return e;\n  const partes = [e.code, e.message, e.description].filter((x) => typeof x === 'string' && x.trim() !== '');\n  return partes.length > 0 ? partes.join(' · ') : 'error sin texto';\n}\n\n// Datos de entrada no válidos: ya vienen con su mensaje.\nif (origen === 'preparacion_ok') return fin(false, 'No se ha podido preparar el evento.', dato.mensaje_error);\n// Decisión tomada sin llamar a Google.\nif (origen === 'segun_paso') {\n  if (dato.paso === 'nada') return fin(true, 'No había ningún evento que borrar.');\n  return fin(false, 'No se ha podido leer el calendario.', dato.mensaje_error);\n}\n// La lectura no tuvo respuesta (red, credencial inválida...).\nif (origen === 'leer_evento') return fin(false, 'Sin respuesta de Google Calendar.', `GET ${prep.event_id}: ${textoError(dato)}`);\n\n// Respuesta de una escritura: 200 (crear o actualizar) o 204 (borrar) es éxito.\nconst estado = dato.statusCode;\nif (estado === undefined) {\n  // Salida de error del nodo HTTP: no hubo respuesta.\n  return fin(false, 'Sin respuesta de Google Calendar.', `${origen} (${prep.event_id}): ${textoError(dato)}`);\n}\nif (estado === 200 || estado === 204) {\n  const QUE = { insertar_evento: 'Evento creado', actualizar_evento: 'Evento actualizado', borrar_evento: 'Evento borrado' };\n  return fin(true, `${QUE[origen] ?? 'Hecho'} en el calendario.`);\n}\n// Cualquier otra respuesta de Google: error (solo el código, nunca el cuerpo).\nreturn fin(false, 'Google Calendar ha rechazado el cambio.', `${origen} (${prep.event_id}) respondió ${estado}.`);\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        384
+      ],
+      "id": "b7694413-af9b-4c0c-b6b0-c07e22955be4",
+      "name": "resumen"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d15fe1f8-c262-4839-8b45-b9dff29b6adb",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        304,
+        384
+      ],
+      "id": "c89528fe-1d5c-49a1-8b6c-0dca0aadc359",
+      "name": "resultado_ok"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF5_calendario_visita · Preparar el aviso técnico (D33). 2026-10-14.\n// Entrada ($json): el resumen con ok = false. Salida: los 5 datos de WF4_aviso_tecnico.\n// RGPD: ni nombre ni datos del cliente; solo el id del evento y códigos.\n// Mode: Run Once for All Items.\n// ---------------------------------------------------------------------------\n// El resumen del fallo.\nconst r = $input.first().json;\n// El número de oportunidad que mandó quien nos llamó (puede faltar: null).\nlet oportunidad_id = null;\ntry { oportunidad_id = $('Al ser llamado').first().json.oportunidad_id ?? null; } catch (e) { oportunidad_id = null; }\n// Los 5 datos que espera WF4.\nreturn [{ json: {\n  flujo: $workflow.name,                                       // este subflujo\n  nodo: 'calendario',                                          // el paso que ha fallado\n  mensaje_error: `${r.mensaje} ${r.mensaje_error}`.trim(),     // qué ha pasado\n  oportunidad_id,                                              // para buscar el caso\n  ejecucion_id: String($execution.id),                         // para buscar la ejecución\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        464
+      ],
+      "id": "2b958e21-f492-47ff-bc40-81bbffb3b8a5",
+      "name": "preparar_aviso"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "jVVsWYknS0DDKhaO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jVVsWYknS0DDKhaO",
+          "cachedResultName": "WF4_aviso_tecnico"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "oportunidad_id": "={{ $json.oportunidad_id }}",
+            "flujo": "={{ $json.flujo }}",
+            "nodo": "={{ $json.nodo }}",
+            "mensaje_error": "={{ $json.mensaje_error }}",
+            "ejecucion_id": "={{ $json.ejecucion_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "flujo",
+              "displayName": "flujo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nodo",
+              "displayName": "nodo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "ejecucion_id",
+              "displayName": "ejecucion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        752,
+        464
+      ],
+      "id": "89c61bd1-f82f-46f8-b712-3ef7ed27f884",
+      "name": "llamar_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF5_calendario_visita · Devolver el resultado a quien nos llamó (D33). 2026-10-14.\n// Todas las ramas terminan aquí, para que el flujo que llama reciba SIEMPRE el\n// resumen { ok, accion, event_id, mensaje, mensaje_error } y no la salida de WF4.\n// Mode: Run Once for All Items.\n// ---------------------------------------------------------------------------\n// El resumen de esta ejecución.\nreturn [{ json: $('resumen').first().json }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        384
+      ],
+      "id": "fc3bffa2-c46f-4e2a-848f-9aba012a1941",
+      "name": "devolver"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Al ser llamado": {
+      "main": [
+        [
+          {
+            "node": "preparar_evento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_evento": {
+      "main": [
+        [
+          {
+            "node": "preparacion_ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparacion_ok": {
+      "main": [
+        [
+          {
+            "node": "leer_evento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_evento": {
+      "main": [
+        [
+          {
+            "node": "decidir_paso",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "decidir_paso": {
+      "main": [
+        [
+          {
+            "node": "segun_paso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_paso": {
+      "main": [
+        [
+          {
+            "node": "insertar_evento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "actualizar_evento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "borrar_evento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "insertar_evento": {
+      "main": [
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "actualizar_evento": {
+      "main": [
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "borrar_evento": {
+      "main": [
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "resumen": {
+      "main": [
+        [
+          {
+            "node": "resultado_ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "resultado_ok": {
+      "main": [
+        [
+          {
+            "node": "devolver",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "preparar_aviso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_aviso": {
+      "main": [
+        [
+          {
+            "node": "llamar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "llamar_aviso_tecnico": {
+      "main": [
+        [
+          {
+            "node": "devolver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "id": "hJQF6yGml9qaUDKf",
+  "tags": []
+}

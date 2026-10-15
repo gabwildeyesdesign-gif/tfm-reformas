@@ -1,0 +1,2081 @@
+{
+  "name": "WF_formulario_llamadas",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "basicAuth",
+        "formTitle": "Registro resultados de la llamada",
+        "formDescription": "Introduce el número de oportunidad que aparece en la lista diaria.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Numero de oportunidad",
+              "fieldType": "number",
+              "fieldName": "oportunidad_id",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "appendAttribution": false,
+          "path": "resultado-llamada"
+        }
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        -3136,
+        1632
+      ],
+      "id": "f94066e1-5aae-4d03-9ec0-e3ce5a7a9c9e",
+      "name": "On form submission",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Fa1bxlK0a6JT0rdh",
+          "name": "Formulario Gate (administracion)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar la ficha (página 2). F1, 2026-10-12.\n// F4, 2026-10-13: añade aviso_tecnico y codigo a la salida (errores técnicos -> WF4).\n// v2, 2026-10-14 (D33): sin atributos style (n8n los borra) y añade nombre y\n//   tipo_reforma a la salida: los usa preparar_calendario para el evento de WF5.\n// Entrada ($json): la respuesta COMPLETA de GET /oportunidades/{id}/ficha,\n//   es decir { statusCode, headers, body } (opción \"Include Response Headers\n//   and Status\" del nodo leer_ficha).\n// Salida: { resultado, mensaje, ficha_html, oportunidad_id, tipo_llamada,\n//           resultados, visita_pedida, aviso_tecnico, codigo }, donde resultado es:\n//   'ok'            -> hay una llamada que registrar: se enseña la ficha\n//   'ya_registrado' -> ya tiene un resultado (es definitivo): aviso y fin\n//   'nada'          -> no tiene ninguna llamada pendiente: aviso y fin\n//   'error'         -> el backend no respondió 200: aviso y fin\n//   aviso_tecnico   -> true si el error es técnico (lo lee preparar_aviso_tecnico)\n// QUIÉN DECIDE qué se puede registrar: el backend (llamada_registrable).\n// Este nodo no deduce nada. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Código HTTP de la respuesta (200, 404, 422...).\nconst estado = $json.statusCode;\n// Cuerpo de la respuesta; \"?? {}\" = objeto vacío si no hay cuerpo.\nconst b = $json.body ?? {};\n\n// Escapar texto antes de meterlo en HTML: nombre, texto de la visita...\n// los escribió el CLIENTE en el chat, y podrían llevar código HTML.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')     // < y > : impiden abrir etiquetas HTML\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')   // comillas: impiden salir de un atributo\n    .replace(/'/g, '&#39;');\n}\n\n// Atajo para devolver una salida completa; \"extra\" sustituye los valores por defecto.\nfunction salida(resultado, mensaje, extra = {}) {\n  return {\n    json: {\n      resultado,                                   // 'ok', 'ya_registrado', 'nada' o 'error'\n      mensaje,                                     // texto para la pantalla de aviso\n      ficha_html: '',                              // la ficha (solo en 'ok')\n      oportunidad_id: b.oportunidad_id ?? null,    // el número, si el backend lo dio\n      tipo_llamada: null,                          // gate, seguimiento o confirmacion_visita\n      resultados: [],                              // resultados admitidos (solo en 'ok')\n      visita_pedida: null,                         // { fecha, hora, texto } en confirmaciones\n      aviso_tecnico: false,                        // NUEVO F4: true = avisar al técnico (WF4)\n      codigo: estado,                              // NUEVO F4: código HTTP, para el aviso\n      nombre: null,                                // v2: nombre del cliente (título del evento)\n      tipo_reforma: null,                          // v2: tipo de reforma (título del evento)\n      ...extra,                                    // lo que cambie en cada caso\n    },\n  };\n}\n\n// ---- 1. Respuestas que NO son 200: explicar y terminar ----------------------\nif (estado !== 200) {\n  let mensaje;                                     // el texto que verá administración\n  let aviso_tecnico = false;                       // NUEVO F4: por defecto, error del operador\n  if (estado === 404) {\n    // Número que no existe: lo arregla el operador. Sin aviso técnico.\n    mensaje = 'No existe ninguna oportunidad con ese número. Revisa el número de la lista diaria.';\n  } else if (estado === 422) {\n    // Número mal escrito: lo arregla el operador. Sin aviso técnico.\n    mensaje = 'El número de oportunidad no es válido.';\n  } else if (estado === 401) {\n    // Llave mala: el formulario está roto para TODOS los casos -> aviso técnico.\n    mensaje = 'Error de configuración: el formulario no tiene una llave válida. Avisa al responsable técnico.';\n    aviso_tecnico = true;\n  } else {\n    // 500, 503... : fallo del sistema, el operador no puede arreglarlo -> aviso técnico.\n    mensaje = `Error inesperado del sistema (código ${estado}). Inténtalo de nuevo en unos minutos.`;\n    aviso_tecnico = true;\n  }\n  return salida('error', mensaje, { oportunidad_id: null, aviso_tecnico });\n}\n\n// ---- 2. Formatos y diccionarios (solo para MOSTRAR) -------------------------\n// Euros y números en formato español.\nconst eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });\nconst num = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 });\n// Un importe, o una raya si no hay.\nfunction dinero(t) { return (t === null || t === undefined) ? '—' : eur.format(Number(t)); }\n// Una fecha con hora, en hora de Madrid, o una raya si no hay.\nfunction fecha(t) {\n  if (!t) return '—';\n  return new Date(t).toLocaleString('es-ES', {\n    timeZone: 'Europe/Madrid', weekday: 'long', day: '2-digit', month: '2-digit',\n    year: 'numeric', hour: '2-digit', minute: '2-digit',\n  });\n}\n// Códigos del backend -> texto legible.\nconst TIPOS = { bano: 'Baño', cocina: 'Cocina', integral_vivienda: 'Reforma integral de vivienda', parcial_acabados: 'Acabados parciales' };\nconst ACABADOS = { basico: 'Básico', medio: 'Medio', alto: 'Alto' };\nconst TIPOS_LLAMADA = { gate: 'Gate (aprobación manual)', seguimiento: 'Seguimiento del presupuesto', confirmacion_visita: 'Confirmación de visita pedida' };\nconst RESULTADOS = {\n  visita_acordada: 'Visita acordada', descartar: 'Descartado', confirmar_hora: 'Hora confirmada',\n  otra_hora: 'Otra hora acordada', cliente_cancela: 'El cliente cancela',\n};\nconst MOTIVOS = {\n  precio: 'precio', plazo: 'plazo', no_contesta: 'no contesta', proyecto_no_viable: 'proyecto no viable',\n  otro: 'otro', sin_decision: 'sin decisión en la última llamada',\n};\nconst ESTADOS = {\n  nueva: 'nueva', cualificada: 'cualificada', pendiente_aprobacion: 'pendiente de aprobación',\n  visita_agendada: 'visita agendada', presupuesto_enviado: 'presupuesto enviado',\n  seguimiento_pendiente: 'seguimiento pendiente', ganada: 'ganada', perdida: 'perdida',\n};\n\n// ---- 3. ¿Ya tiene un resultado? Es definitivo: avisar y terminar ------------\n// \"llamadas\" viene ordenada de la más antigua a la más reciente: se toma la última.\nconst llamadas = b.llamadas ?? [];\nif (llamadas.length > 0) {\n  const u = llamadas[llamadas.length - 1];\n  // Con visita: su fecha. Sin visita (descartar o cancelar): el motivo.\n  const detalle = u.fecha_visita\n    ? `visita el ${fecha(u.fecha_visita)}`\n    : `motivo: ${MOTIVOS[u.motivo] ?? u.motivo ?? '—'}`;\n  return salida('ya_registrado',\n    `La oportunidad ${b.oportunidad_id} ya tiene un resultado registrado ` +\n    `(${RESULTADOS[u.resultado] ?? u.resultado}, ${detalle}; registrado el ${fecha(u.fecha_registro)}). ` +\n    `Es definitivo: no hace falta volver a registrarlo.`);\n}\n\n// ---- 4. ¿Hay algo que registrar ahora? Lo dice el backend -------------------\nconst lr = b.llamada_registrable;                  // null o { tipo_llamada, resultados }\nif (!lr) {\n  return salida('nada',\n    `La oportunidad ${b.oportunidad_id} no tiene ninguna llamada pendiente ` +\n    `(estado: ${ESTADOS[b.estado_oportunidad] ?? b.estado_oportunidad}).`);\n}\n\n// ---- 5. En una confirmación: la visita que pidió el cliente -----------------\n// Es la visita con estado 'solicitada'. Su fecha_visita llega en hora de Madrid\n// con su desfase (\"2026-10-13T11:00:00+02:00\"): se recorta el texto en vez de\n// convertirlo, para que ninguna zona horaria pueda mover el día o la hora.\nlet visita_pedida = null;\nif (lr.tipo_llamada === 'confirmacion_visita') {\n  const v = (b.visitas ?? []).find((x) => x.estado_visita === 'solicitada');\n  // Si el backend dice \"confirmación\" pero no hay visita pedida, algo no cuadra: parar.\n  // NUEVO F4: es una incoherencia de datos del sistema -> aviso técnico.\n  if (!v) {\n    return salida('error',\n      `La oportunidad ${b.oportunidad_id} debería tener una visita pedida y no la tiene. Avisa al responsable técnico.`,\n      { aviso_tecnico: true });\n  }\n  visita_pedida = {\n    fecha: String(v.fecha_visita).slice(0, 10),    // \"2026-10-13\"\n    hora: String(v.fecha_visita).slice(11, 16),    // \"11:00\"\n    texto: v.texto_cliente ?? '',                  // lo que dijo el cliente\n    fecha_legible: fecha(v.fecha_visita),          // para enseñarla\n  };\n}\n\n// ---- 6. La ficha en HTML ----------------------------------------------------\n// Una fila \"etiqueta: valor\". El valor SIEMPRE pasa por esc().\nfunction fila(etiqueta, valor) {\n  // v2 (14/10): sin style (n8n lo elimina); el valor va en negrita.\n  return `<tr><td>${etiqueta}</td><td><strong>${esc(valor)}</strong></td></tr>`;\n}\nconst c = b.contacto ?? {};                        // nombre, telefono, origen...\nconst r = b.reforma ?? {};                         // tipo, m2, acabados...\nconst p = b.presupuesto;                           // null si no hay presupuesto\n\n// Contacto: el de esta solicitud, o un aviso si la solicitud no lo trae.\nlet filas = c.origen === 'solicitud'\n  ? fila('Cliente', c.nombre ?? '—') + fila('Teléfono', c.telefono ?? '—')\n  : fila('Contacto', 'No disponible en la solicitud: revisa la ficha completa');\n// Qué llamada es (la decidió el backend).\nfilas += fila('Llamada', TIPOS_LLAMADA[lr.tipo_llamada] ?? lr.tipo_llamada);\n// La reforma: tipo, metros y acabado.\nconst m2 = (r.m2 === null || r.m2 === undefined) ? '—' : `${num.format(Number(r.m2))} m²`;\nfilas += fila('Reforma', `${TIPOS[r.tipo_reforma] ?? r.tipo_reforma ?? '—'}, ${m2}, acabado ${ACABADOS[r.nivel_acabados] ?? r.nivel_acabados ?? '—'}`);\n// El presupuesto, si existe (el formulario es solo de administración: puede ver importes).\nif (p) filas += fila('Horquilla (IVA incl.)', `${dinero(p.importe_min_con_iva)} – ${dinero(p.importe_max_con_iva)}`);\n// En una confirmación: la hora pedida y lo que contó el cliente.\nif (visita_pedida) {\n  filas += fila('Visita pedida', visita_pedida.fecha_legible);\n  filas += fila('Lo que dijo el cliente', visita_pedida.texto || '—');\n}\n\n// La tarjeta: título en negrita y la tabla (v2: sin style, n8n lo borra).\nconst ficha_html =\n  `<p><strong>Oportunidad ${esc(b.oportunidad_id)}</strong></p>` +   // el número, en negrita\n  `<table>${filas}</table>`;                                          // las filas de arriba\n\n// ---- 7. Todo listo: la ficha y lo que necesitarán las páginas siguientes ----\nreturn salida('ok', '', {\n  ficha_html,\n  tipo_llamada: lr.tipo_llamada,\n  resultados: lr.resultados,\n  visita_pedida,\n  // v2 (D33): para el evento del calendario. Solo el nombre (nunca teléfono ni email).\n  nombre: c.origen === 'solicitud' ? (c.nombre ?? null) : null,\n  tipo_reforma: r.tipo_reforma ?? null,                // el código (bano, cocina...)\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2688,
+        1376
+      ],
+      "id": "e19350f3-619f-421c-860e-865a9913e686",
+      "name": "preparar_ficha"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6729585f-b4c1-495e-88ef-afc3c5fbdaf4",
+              "leftValue": "={{ $json.resultado === 'ok' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -2464,
+        1376
+      ],
+      "id": "854e0d0d-da61-4657-abc7-c3aa9f86cd68",
+      "name": "caso_registrable"
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "html",
+              "html": "{{ $json.ficha_html }}"
+            },
+            {
+              "fieldLabel": "Resultado de la llamada",
+              "fieldType": "dropdown",
+              "fieldName": "decision",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Visita acordada"
+                  },
+                  {
+                    "option": "Descartar"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Resultado de la llamada"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -2016,
+        624
+      ],
+      "id": "c05c026e-ebff-4830-9e1b-7ea4e31c5f18",
+      "name": "pagina_resultado"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "No se puede registrar",
+        "completionMessage": "={{ $json.mensaje }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -896,
+        1392
+      ],
+      "id": "efcd644b-bf3c-4a6d-9a49-566bb59319e8",
+      "name": "sin_registro"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Sistema no disponible",
+        "completionMessage": "No se ha podido conectar con el sistema. Inténtalo de nuevo en unos minutos; si persiste, avisa al responsable técnico.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -2688,
+        1568
+      ],
+      "id": "8f2ca335-5140-4179-87aa-3187882d6d44",
+      "name": "sistema_no_disponible"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "Visita acordada",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "87026ca5-738d-4271-ad41-846ea9db435b"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "visita"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "65093136-7900-4a26-bbf9-00232bfd8388",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "Descartar",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "descartar"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -1792,
+        624
+      ],
+      "id": "770932ba-f6b3-45d3-9a96-47133657c836",
+      "name": "segun_decision"
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "html",
+              "html": "<p>⚠️ <strong>Atención:</strong> descartar es <strong>definitivo</strong>. Usa \"No contesta\" solo después de 3 intentos en 2 días laborables distintos, y \"Sigue sin decidirse\" solo en la última llamada.</p>"
+            },
+            {
+              "fieldLabel": "Motivo de descarte",
+              "fieldType": "dropdown",
+              "fieldName": "motivo",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Precio: le parece caro"
+                  },
+                  {
+                    "option": "Plazo: no le encajan los tiempos"
+                  },
+                  {
+                    "option": "No contesta (tras varios intentos)"
+                  },
+                  {
+                    "option": "Sigue sin decidirse (última llamada)"
+                  },
+                  {
+                    "option": "Proyecto no viable técnicamente"
+                  },
+                  {
+                    "option": "Otro (explícalo en el informe)"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Informe de la llamada",
+              "fieldType": "textarea",
+              "fieldName": "informe",
+              "placeholder": "Qué se habló y por qué se descarta",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "=Oportunidad {{ $('preparar_ficha').first().json.oportunidad_id }} · Descartar"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -1568,
+        720
+      ],
+      "id": "5a517639-7867-4981-a29f-3997097c53db",
+      "name": "pagina_descarte"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar el resultado (tras la página del resultado). F2, 2026-10-12.\n// D32, 2026-10-14: en \"Visita acordada\" y \"Otra hora\", la fecha sale de la página\n//   \"Día\" (vía preparar_pagina_hora) y la hora de la página \"Hora\". Las lecturas\n//   de otros nodos usan .first() (= su ÚLTIMA ejecución): en el bucle de la agenda\n//   este nodo puede ejecutarse más de una vez y .item no sirve en bucles.\n// Entrada ($json): lo rellenado en la última página (pagina_hora, pagina_descarte,\n//   pagina_confirmar_hora o pagina_cancela).\n// Salida: { valido, mensaje, cuerpo, resumen_html }\n//   valido       -> true si todo cuadra; false = no se envía nada\n//   cuerpo       -> el JSON EXACTO para POST /resultados-llamada (contrato, sección 3)\n//   resumen_html -> el resumen para la página de confirmación\n// Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Lo que dejó preparar_ficha: número, tipo de llamada, resultados admitidos y visita pedida.\nconst ficha = $('preparar_ficha').first().json;\nconst oportunidad_id = ficha.oportunidad_id;\n\n// Lee lo elegido en una página de resultado. Si esa página no se ha usado en\n// esta ejecución, n8n lanza un error: se atrapa y se devuelve undefined.\nfunction eleccionDe(nodo) {\n  try { return $(nodo).first().json.decision; } catch (e) { return undefined; }\n}\n// Gate y seguimiento usan pagina_resultado; la confirmación, pagina_resultado_confirmacion.\nconst eleccion = eleccionDe('pagina_resultado') ?? eleccionDe('pagina_resultado_confirmacion');\n\n// Texto del desplegable -> resultado que admite el backend.\nconst RESULTADOS = {\n  'Visita acordada': 'visita_acordada',\n  'Descartar': 'descartar',\n  'Confirmar la hora pedida': 'confirmar_hora',\n  'Otra hora': 'otra_hora',\n  'El cliente cancela': 'cliente_cancela',\n};\n// Texto del desplegable -> motivo que admite el backend.\nconst MOTIVOS = {\n  'Precio: le parece caro': 'precio',\n  'Plazo: no le encajan los tiempos': 'plazo',\n  'No contesta (tras varios intentos)': 'no_contesta',\n  'Sigue sin decidirse (última llamada)': 'sin_decision',\n  'Proyecto no viable técnicamente': 'proyecto_no_viable',\n  'Otro (explícalo en el informe)': 'otro',\n};\n// Etiquetas para el resumen que verá el operador antes de confirmar.\nconst ETIQUETAS = {\n  visita_acordada: 'Visita acordada', descartar: 'DESCARTAR (definitivo)',\n  confirmar_hora: 'Confirmar la hora pedida', otra_hora: 'Otra hora (la pedida se cancela)',\n  cliente_cancela: 'EL CLIENTE CANCELA (definitivo)',\n};\nconst TIPOS_LLAMADA = { gate: 'Gate (aprobación manual)', seguimiento: 'Seguimiento del presupuesto', confirmacion_visita: 'Confirmación de visita pedida' };\n\n// Salida de error: así no se envía nada al backend.\nfunction invalido(mensaje) {\n  return { json: { valido: false, mensaje, cuerpo: null, resumen_html: '' } };\n}\n// Escapar texto antes de meterlo en HTML.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n// Una fila \"etiqueta: valor\" del resumen. El valor SIEMPRE pasa por esc().\nfunction fila(etiqueta, valor) {\n  // v2 (14/10): sin style (n8n lo elimina); el valor va en negrita.\n  return `<tr><td>${etiqueta}</td><td><strong>${esc(valor)}</strong></td></tr>`;\n}\n// \"2026-10-14\" + \"11:00\" -> \"miércoles 14/10/2026 a las 11:00\".\n// Date.UTC + getUTCDay: la zona horaria del servidor no puede mover el día.\nfunction fechaLegible(fecha, hora) {\n  const [a, m, d] = fecha.split('-');\n  const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];\n  const dia = DIAS[new Date(Date.UTC(Number(a), Number(m) - 1, Number(d))).getUTCDay()];\n  return `${dia} ${d}/${m}/${a} a las ${hora}`;\n}\n\n// ---- 1. Comprobaciones comunes ----------------------------------------------\nif (!oportunidad_id) return invalido('No se ha podido recuperar el número de oportunidad. Vuelve a abrir el formulario.');\n// Traducir lo elegido; si no está en el diccionario, mejor parar que adivinar.\nconst resultado = RESULTADOS[eleccion];\nif (!resultado) return invalido(`Resultado no reconocido: \"${eleccion}\". Avisa al responsable técnico.`);\n// Defensa: el resultado tiene que estar entre los que el backend dijo que admite esta llamada.\nif (!(ficha.resultados ?? []).includes(resultado)) {\n  return invalido(`\"${eleccion}\" no se admite en esta llamada. Vuelve a abrir el formulario.`);\n}\n// El informe, sin espacios sobrantes; el backend exige de 1 a 2.000 caracteres.\nconst informe = String($json.informe ?? '').trim();\nif (informe.length === 0) return invalido('El informe de la llamada está vacío.');\nif (informe.length > 2000) return invalido(`El informe tiene ${informe.length} caracteres; el máximo es 2.000.`);\n\n// ---- 2. El cuerpo según el resultado (tabla de la sección 3 del contrato) ---\nlet cuerpo;\nlet filas = fila('Llamada', TIPOS_LLAMADA[ficha.tipo_llamada] ?? ficha.tipo_llamada) +\n            fila('Resultado', ETIQUETAS[resultado]);\n\nif (resultado === 'visita_acordada' || resultado === 'otra_hora') {\n  // D32: la fecha, la del día elegido en esta vuelta (la guarda preparar_pagina_hora);\n  // la hora, el botón elegido en la página \"Hora\". Nadie las escribe a mano.\n  let fecha = '';\n  try { fecha = String($('preparar_pagina_hora').first().json.fecha ?? ''); } catch (e) { fecha = ''; }\n  const hora = String($json.hora ?? '');\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(fecha) || !/^\\d{2}:\\d{2}$/.test(hora)) {\n    return invalido('Falta la fecha o la hora de la visita.');\n  }\n  // \"Otra hora\" no puede ser la misma que pidió el cliente (el backend daría 422).\n  const vp = ficha.visita_pedida;\n  if (resultado === 'otra_hora' && vp && fecha === vp.fecha && hora === vp.hora) {\n    return invalido('Es la misma hora que pidió el cliente: vuelve a abrir el formulario y elige \"Confirmar la hora pedida\".');\n  }\n  cuerpo = { oportunidad_id, resultado, fecha, hora, informe };\n  filas += fila('Visita', fechaLegible(fecha, hora));\n} else if (resultado === 'confirmar_hora') {\n  // La hora PEDIDA, tal cual la dio la ficha (nadie la escribe a mano).\n  const vp = ficha.visita_pedida;\n  if (!vp) return invalido('No se encuentra la visita pedida. Vuelve a abrir el formulario.');\n  cuerpo = { oportunidad_id, resultado, fecha: vp.fecha, hora: vp.hora, informe };\n  filas += fila('Visita', fechaLegible(vp.fecha, vp.hora));\n} else {\n  // descartar o cliente_cancela: motivo OBLIGATORIO, sin fecha ni hora.\n  const motivo = MOTIVOS[$json.motivo];\n  if (!motivo) return invalido(`Motivo no reconocido: \"${$json.motivo}\". Avisa al responsable técnico.`);\n  // Quien cancela ha contestado y ha decidido: esos dos motivos no valen (D29.3).\n  if (resultado === 'cliente_cancela' && (motivo === 'no_contesta' || motivo === 'sin_decision')) {\n    return invalido('Ese motivo no vale cuando el cliente cancela. Elige otro.');\n  }\n  cuerpo = { oportunidad_id, resultado, motivo, informe };\n  filas += fila('Motivo', $json.motivo);\n}\n\n// ---- 3. El resumen para la página de confirmación ---------------------------\n// El informe, escapado y con sus saltos de línea convertidos en <br>.\nconst informeHtml = esc(informe).replace(/\\r?\\n/g, '<br>');\n// v2 (14/10): sin style (n8n lo elimina).\nconst resumen_html =\n  `<p><strong>Oportunidad ${esc(oportunidad_id)}</strong></p>` +   // el número, en negrita\n  `<table>${filas}` +                                               // las filas del resultado\n  `<tr><td>Informe</td><td>${informeHtml}</td></tr>` +              // el informe escrito\n  `</table>`;\n\n// Todo listo.\nreturn { json: { valido: true, mensaje: '', cuerpo, resumen_html } };\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1344,
+        880
+      ],
+      "id": "7334c69b-f284-4a30-aec0-a7cad0a77709",
+      "name": "preparar_decision"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "52e04039-9692-4ab8-8084-0e7bacbda9e8",
+              "leftValue": "={{ $json.valido }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1120,
+        880
+      ],
+      "id": "f3681bf0-96cf-4d23-98dc-4dd0f4d96394",
+      "name": "decision_valida"
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "html",
+              "html": "{{ $json.resumen_html }}\n\n\n"
+            },
+            {
+              "fieldLabel": "Confirmas el registro?",
+              "fieldType": "dropdown",
+              "fieldName": "confirmar",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Si, registrar"
+                  },
+                  {
+                    "option": "No, cancelar"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "=Confirma el registro · Oportunidad {{ $json.cuerpo.oportunidad_id }}"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -896,
+        880
+      ],
+      "id": "59a1d9c2-cdb2-48bd-8f0f-b7485e3f546a",
+      "name": "pagina_confirmacion"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9cefd161-4ff3-46b0-bb8e-7f29f6b2c358",
+              "leftValue": "={{ $json.confirmar }}",
+              "rightValue": "Si, registrar",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -672,
+        880
+      ],
+      "id": "5493c781-2e69-404f-bc06-0906f2d27dd3",
+      "name": "confirmado"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Registro cancelado",
+        "completionMessage": "No se ha registrado nada. La oportunidad sigue pendiente; puedes volver a abrir el formulario cuando quieras.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -448,
+        1296
+      ],
+      "id": "864cf05a-2922-45f4-a71e-7df5cea8011b",
+      "name": "registro_cancelado"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Traducir la respuesta de POST /resultados-llamada. F2, 2026-10-12.\n// 2026-10-13: 409 hueco_ocupado (D31) con sus huecos_libres; NO es aviso técnico.\n// 2026-10-14 (D32): en \"Visita acordada\" y \"Otra hora\", el 409 hueco_ocupado\n//   vuelve a la página \"Día\" (volver_agenda = true); el 422 fuera_de_rejilla es\n//   un fallo del formulario (aviso técnico). Lecturas con .first() (bucles).\n// v2, 2026-10-14 (D33): ya no pide anotar la visita a mano; la frase del\n//   calendario la añade cerrar_pantalla después de llamar a WF5.\n// Entrada ($json): la respuesta COMPLETA { statusCode, headers, body }.\n// Salida: { titulo, mensaje, aviso_tecnico, codigo, oportunidad_id,\n//           volver_agenda, fecha_ocupada, hora_ocupada }\n//   aviso_tecnico -> true si hay que avisar al técnico (lo lee preparar_aviso_tecnico -> WF4)\n//   volver_agenda -> true: segun_traduccion vuelve a la página \"Día\" en vez de terminar\n// Textos: secciones 4 y 4b de docs/Contrato_Formulario_Llamadas.md.\n// Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Código HTTP y cuerpo (\"?? {}\": objeto vacío si no hay cuerpo).\nconst estado = $json.statusCode;\nconst b = $json.body ?? {};\n// Lo que se envió (.first() = la última ejecución de preparar_decision).\nconst enviado = $('preparar_decision').first().json.cuerpo ?? {};\n// Número de oportunidad: del cuerpo que se envió.\nconst op = enviado.oportunidad_id;\n\n// Fecha y hora en español y hora de Madrid, solo para MOSTRAR.\nfunction fecha(t) {\n  if (!t) return '—';\n  return new Date(t).toLocaleString('es-ES', {\n    timeZone: 'Europe/Madrid', weekday: 'long', day: '2-digit', month: '2-digit',\n    year: 'numeric', hour: '2-digit', minute: '2-digit',\n  });\n}\n// Atajo para la pantalla final; aviso_tecnico = false y volver_agenda = false salvo que se diga.\nfunction pantalla(titulo, mensaje, aviso_tecnico = false) {\n  return { json: { titulo, mensaje, aviso_tecnico, codigo: estado, oportunidad_id: op, volver_agenda: false } };\n}\n// Motivos del backend -> texto para el operador.\nconst MOTIVOS = {\n  precio: 'precio', plazo: 'plazo', no_contesta: 'no contesta', proyecto_no_viable: 'proyecto no viable',\n  otro: 'otro', sin_decision: 'sin decisión en la última llamada',\n};\n\n// ---- 1. Éxito: 201 (registrado ahora) o 200 (repetición exacta) ------------\nif (estado === 201 || estado === 200) {\n  const reg = `(registro nº ${b.llamada_id})`;\n  // 200: el backend no ha escrito nada (normal si n8n reintenta).\n  if (estado === 200) {\n    return pantalla('Ya estaba registrado', `Oportunidad ${op}: este mismo resultado ya estaba registrado ${reg}. No se ha cambiado nada.`);\n  }\n  // 201 con visita (visita acordada, hora confirmada u otra hora).\n  if (['visita_acordada', 'confirmar_hora', 'otra_hora'].includes(b.resultado)) {\n    const cancelada = b.resultado === 'otra_hora' ? ' La hora que había pedido el cliente queda cancelada.' : '';\n    return pantalla('Visita registrada',\n      `Oportunidad ${op}: visita confirmada el ${fecha(b.fecha_visita)} ${reg}.${cancelada}`);\n  }\n  // 201 de descarte.\n  if (b.resultado === 'descartar') {\n    return pantalla('Descarte registrado',\n      `Oportunidad ${op} descartada, motivo: ${MOTIVOS[b.motivo] ?? b.motivo} ${reg}. La oportunidad queda cerrada como perdida.`);\n  }\n  // 201 de cancelación del cliente.\n  if (b.resultado === 'cliente_cancela') {\n    return pantalla('Cancelación registrada',\n      `Oportunidad ${op}: el cliente cancela, motivo: ${MOTIVOS[b.motivo] ?? b.motivo} ${reg}. La visita pedida queda cancelada y la oportunidad cerrada como perdida.`);\n  }\n  // Un resultado nuevo que este nodo no conoce: se enseña tal cual.\n  return pantalla('Resultado registrado', `Oportunidad ${op}: ${b.resultado} ${reg}.`);\n}\n\n// ---- 2. Rechazos de negocio: {\"detail\": {\"motivo\": ..., \"mensaje\": ...}} ----\n// \"?.\" evita romper si detail no es un objeto (un 422 de forma trae una lista).\nconst motivo = b.detail?.motivo;\nconst mensajeBackend = b.detail?.mensaje ?? '';\nconst NADA = ' No se ha registrado nada.';\n\n// 409 hueco_ocupado (D31/D32): la hora choca con otra visita. Caso normal del\n// negocio (un solo técnico), NO un fallo: sin aviso técnico.\nif (estado === 409 && motivo === 'hueco_ocupado') {\n  // \"Visita acordada\" u \"Otra hora\": la hora salió de la agenda y alguien la cogió\n  // entre la página \"Hora\" y el envío. Se vuelve a \"Día\", recalculada (contrato 4b).\n  if (enviado.resultado === 'visita_acordada' || enviado.resultado === 'otra_hora') {\n    const r = pantalla('Hora ocupada', `Esa hora se acaba de ocupar.${NADA}`);\n    r.json.volver_agenda = true;                 // segun_traduccion -> entrar_agenda\n    r.json.fecha_ocupada = enviado.fecha;        // para el aviso de la página \"Día\"\n    r.json.hora_ocupada = enviado.hora;\n    return r;\n  }\n  // \"Confirmar la hora pedida\": la hora la pidió el cliente y ya no está libre.\n  return pantalla('La hora pedida ya no está libre',\n    `La hora que pidió el cliente ya está ocupada por otra visita.${NADA} ` +\n    'Vuelve a abrir el formulario y elige \"Otra hora\" para acordar una nueva con él.');\n}\n\n// Fecha u hora no válidas: el mensaje del backend explica la regla y las franjas.\nif (estado === 422 && ['fecha_pasada', 'fin_de_semana', 'fuera_de_franja'].includes(motivo)) {\n  return pantalla('Fecha u hora no válidas', `${mensajeBackend}${NADA} Vuelve a abrir el formulario y elige otra fecha u hora.`);\n}\n// D32: fuera de la rejilla no debería salir nunca (las horas vienen de la agenda):\n// si sale, el formulario envía una hora que no vino de la consulta -> aviso técnico.\nif (estado === 422 && motivo === 'fuera_de_rejilla') {\n  return pantalla('Hora no válida', `${mensajeBackend}${NADA} Avisa al responsable técnico.`, true);\n}\nif (estado === 422 && motivo === 'misma_hora_pedida') {\n  return pantalla('Es la hora que pidió', `Es la hora que pidió el cliente: elige \"Confirmar la hora pedida\".${NADA}`);\n}\n// Conflictos (409) y oportunidad inexistente (404): textos del contrato.\nconst MENSAJES = {\n  resultado_ya_registrado: 'Esta llamada ya tiene un resultado registrado (es definitivo).',\n  resultado_no_admitido: 'La situación del cliente ha cambiado desde que abriste la ficha: vuelve a abrir el formulario.',\n  visita_cambiada: 'El cliente ha cambiado la hora pedida: vuelve a abrir el formulario y confírmale la nueva.',\n  estado_no_permitido: 'Esta oportunidad no tiene ninguna llamada pendiente.',\n  sin_presupuesto: 'Todavía no tiene presupuesto.',\n  visita_activa_existente: 'Ya tiene una visita activa.',\n  oportunidad_no_encontrada: 'Oportunidad no encontrada.',\n};\nif (MENSAJES[motivo]) return pantalla('No se ha podido registrar', MENSAJES[motivo] + NADA);\n// Los cuatro motivos del seguimiento: un texto común más el del backend.\nif (['plazo_no_cumplido', 'contacto_registrado', 'visita_existente', 'con_gate'].includes(motivo)) {\n  return pantalla('No se ha podido registrar', `Esta oportunidad no está en el seguimiento ahora mismo. ${mensajeBackend}${NADA}`);\n}\n\n// ---- 3. Errores técnicos: el operador no puede arreglarlos -> aviso técnico --\nif (estado === 401) {\n  return pantalla('Error de configuración', `El formulario no tiene una llave válida.${NADA} Avisa al responsable técnico.`, true);\n}\nif (estado === 422) {\n  // 422 sin motivo = el cuerpo no tiene la forma esperada: fallo nuestro, no del operador.\n  return pantalla('Error en los datos enviados', `El sistema ha rechazado el formato de los datos.${NADA} Avisa al responsable técnico.`, true);\n}\nif (estado === 503) {\n  return pantalla('Sistema no disponible', `Falta configuración en el sistema.${NADA} Avisa al responsable técnico.`, true);\n}\n// Cualquier otro código (500...): se enseña para poder buscarlo.\nreturn pantalla('Error inesperado', `Código ${estado}.${NADA} Avisa al responsable técnico.`, true);\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        672
+      ],
+      "id": "932f5f39-284f-46b0-83ca-601d69420baa",
+      "name": "traducir_resultado"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "={{ $json.titulo }}",
+        "completionMessage": "={{ $json.mensaje }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1120,
+        624
+      ],
+      "id": "dd2e7b01-353a-4445-9096-89b1bcc33ae7",
+      "name": "pantalla_resultado_final"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "No se sabe si se ha registrado",
+        "completionMessage": "Se ha perdido la conexión con el sistema durante el registro. Vuelve a abrir el formulario con el mismo número de oportunidad: si la decisión se registró, lo verás indicado; si no, podrás registrarla de nuevo sin riesgo de duplicarla.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -224,
+        864
+      ],
+      "id": "52d51ef6-8f48-4172-abbc-895da5ad69a3",
+      "name": "registro_incierto"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/oportunidades/{{ $json.oportunidad_id }}/ficha",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -2912,
+        1632
+      ],
+      "id": "a2d38637-6815-4c75-ab93-8ee6a49ca0de",
+      "name": "leer_ficha",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/resultados-llamada",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('preparar_decision').first().json.cuerpo) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -448,
+        864
+      ],
+      "id": "7e74620b-2fde-474d-8130-4798302ae93c",
+      "name": "registrar_resultado",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.tipo_llamada }}",
+                    "rightValue": "confirmacion_visita",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notEquals"
+                    },
+                    "id": "1ea399ff-bdd4-45cd-b5e4-b2427716c5eb"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "gate_o_seguimiento"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "ecbe12de-d5a3-4f68-83d9-39583a512e34",
+                    "leftValue": "={{ $json.tipo_llamada }}",
+                    "rightValue": "confirmacion_visita",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirmacion"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -2240,
+        912
+      ],
+      "id": "1af3efb4-51a0-4a41-b57c-64da34afbb4a",
+      "name": "segun_tipo_llamada"
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "html",
+              "html": "{{ $json.ficha_html }}"
+            },
+            {
+              "fieldLabel": "Resultado de la llamada",
+              "fieldType": "dropdown",
+              "fieldName": "decision",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Confirmar la hora pedida"
+                  },
+                  {
+                    "option": "Otra hora"
+                  },
+                  {
+                    "option": "El cliente cancela"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "Resultado de la llamada"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -2016,
+        1040
+      ],
+      "id": "ff160d07-e0ac-428e-adb2-7336461f1619",
+      "name": "pagina_resultado_confirmacion"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "Confirmar la hora pedida",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "87026ca5-738d-4271-ad41-846ea9db435b"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirmar"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "65093136-7900-4a26-bbf9-00232bfd8388",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "Otra hora",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "otra"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "79c6c1f1-82d7-491d-a318-d8894efd1b30",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "El cliente cancela",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cancela"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -1792,
+        1024
+      ],
+      "id": "cb02cc45-2ab7-4ee4-8aa2-3723fa008c1b",
+      "name": "segun_decision_confirmacion"
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "html",
+              "html": "<p>Se confirmará la hora que pidió el cliente: <strong>{{ $('preparar_ficha').first().json.visita_pedida.fecha_legible }}</strong>.</p>"
+            },
+            {
+              "fieldLabel": "Informe de la llamada",
+              "fieldType": "textarea",
+              "fieldName": "informe",
+              "placeholder": "Qué se habló y qué se confirmó.",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "=Oportunidad {{ $('preparar_ficha').first().json.oportunidad_id }} · Confirmar la hora pedida"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -1568,
+        912
+      ],
+      "id": "38fb60c6-a4f8-4ae1-9d6e-0a62b1d66aad",
+      "name": "pagina_confirmar_hora"
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "html",
+              "html": "<p>⚠️ <strong>Atención:</strong> es <strong>definitivo</strong>: la visita pedida se cancela y la oportunidad queda cerrada como perdida.</p>"
+            },
+            {
+              "fieldLabel": "Motivo de la cancelación",
+              "fieldType": "dropdown",
+              "fieldName": "motivo",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Precio: le parece caro"
+                  },
+                  {
+                    "option": "Plazo: no le encajan los tiempos"
+                  },
+                  {
+                    "option": "Proyecto no viable técnicamente"
+                  },
+                  {
+                    "option": "Otro (explícalo en el informe)"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Informe de la llamada",
+              "fieldType": "textarea",
+              "fieldName": "informe",
+              "placeholder": "Qué se habló y por qué cancela.",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "=Oportunidad {{ $('preparar_ficha').first().json.oportunidad_id }} · El cliente cancela"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -1568,
+        1296
+      ],
+      "id": "67e4899c-913d-4700-a81a-4b974a07be5f",
+      "name": "pagina_cancela"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar el aviso técnico. F4, 2026-10-13.\n// Revisión 13/10 (prueba 81): textoError lee code, message y description,\n// porque los errores de red de n8n pueden traer SOLO \"code\" (p. ej.\n// ERR_INVALID_HTTP_TOKEN, ECONNREFUSED) y el aviso salía \"error sin mensaje\".\n// D32, 2026-10-14: recibe también de la agenda (leer_dias, leer_horas y los\n// nodos agenda_ok, hora_ok y segun_dia, que mandan sus errores ya preparados\n// en { aviso_tecnico, nodo_error, mensaje_tecnico }).\n// Orígenes (se sabe cuál con $prevNode.name):\n//   - traducir_resultado    -> respuesta de POST /resultados-llamada (avisa si aviso_tecnico)\n//   - caso_registrable      -> rama \"no registrable\" de la ficha (avisa si aviso_tecnico)\n//   - leer_ficha, leer_dias, leer_horas -> salida de ERROR: sin respuesta del backend\n//   - registrar_resultado   -> salida de ERROR: conexión perdida al registrar\n//   - agenda_ok, hora_ok, segun_dia -> errores de la agenda, ya preparados\n//   - cerrar_pantalla       -> v2 (D33): WF5 NO se pudo ni ejecutar (avisa si aviso_calendario).\n//                              Si WF5 se ejecutó y falló, WF5 ya avisó por su cuenta.\n// Mode: Run Once for All Items, para poder devolver [] (= no avisar, la rama se para).\n// Salida: 0 elementos, o 1 con los 5 datos que espera WF4_aviso_tecnico:\n//   { flujo, nodo, mensaje_error, oportunidad_id, ejecucion_id }\n// RGPD: nunca se envían datos del cliente ni el cuerpo de la petición; solo\n// códigos, nombres de nodos, fechas de la agenda y el número de oportunidad.\n// Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Nombre del nodo que nos ha mandado el dato en esta ejecución.\nconst origen = $prevNode.name;\n// El único elemento que llega (el formulario procesa un caso cada vez).\nconst dato = $input.first().json;\n\n// Número que escribió administración en la primera página. Existe siempre,\n// incluso cuando el backend no respondió. try/catch: si no se pudiera leer, null.\nlet oportunidad_id = null;\ntry {\n  oportunidad_id = $('On form submission').first().json.oportunidad_id ?? null;\n} catch (e) {\n  oportunidad_id = null;\n}\n\n// Texto del error que deja n8n en la salida de error de un nodo HTTP.\n// Puede venir como texto o como objeto. Si es objeto, se juntan los campos de\n// texto que traiga: code (siempre en errores de red), message y description.\n// Nunca se envía el objeto entero (podría llevar la petición completa).\nfunction textoError(j) {\n  const e = j.error;                                   // el error, si n8n lo dejó\n  if (!e) return 'sin detalle del error';              // no llegó nada\n  if (typeof e === 'string') return e;                 // ya es un texto\n  // Los tres campos candidatos, en este orden; se quedan solo los textos no vacíos.\n  const partes = [e.code, e.message, e.description]\n    .filter((x) => typeof x === 'string' && x.trim() !== '');\n  // Si hay alguno, se unen con \" · \"; si no, se dice que no trae texto.\n  return partes.length > 0 ? partes.join(' · ') : 'error sin texto (revisar la ejecución)';\n}\n\n// Los nodos HTTP que leen (sin escribir nada) y qué leen: para el texto del aviso.\nconst LECTURAS = {\n  leer_ficha: 'leer la ficha',\n  leer_dias: 'leer los días con hueco (GET /huecos-libres)',\n  leer_horas: 'leer las horas libres de un día (GET /huecos-libres?fecha=...)',\n};\n\nlet nodo;            // el paso que ha fallado (lo verá el técnico)\nlet mensaje_error;   // qué ha pasado, en una línea\n\nif (origen === 'traducir_resultado') {\n  // El backend respondió, pero con un error técnico (401, 422 de forma, 503, 500...).\n  if (dato.aviso_tecnico !== true) return [];          // error del operador o éxito: no avisar\n  nodo = 'registrar_resultado';\n  mensaje_error = `POST /resultados-llamada respondió ${dato.codigo} (${dato.titulo}). No se ha registrado nada.`;\n} else if (origen === 'caso_registrable') {\n  // La ficha no se puede registrar: solo se avisa si es un fallo técnico.\n  if (dato.aviso_tecnico !== true) return [];          // 404, 422, ya registrado, nada: no avisar\n  nodo = 'leer_ficha';\n  mensaje_error = `GET /oportunidades/{id}/ficha respondió ${dato.codigo}. ${dato.mensaje}`;\n} else if (LECTURAS[origen]) {\n  // Salida de error de un nodo HTTP de lectura: la petición no llegó a tener\n  // respuesta (backend apagado, sin red, o configuración inválida).\n  nodo = origen;\n  mensaje_error = `Sin respuesta del backend al ${LECTURAS[origen]}: ${textoError(dato)}`;\n} else if (origen === 'registrar_resultado') {\n  // Se cortó la conexión DURANTE el registro: puede que se haya escrito o no.\n  nodo = 'registrar_resultado';\n  mensaje_error = `Sin respuesta durante POST /resultados-llamada; NO se sabe si se registró: ${textoError(dato)}`;\n} else if (['agenda_ok', 'hora_ok', 'segun_dia'].includes(origen)) {\n  // Errores de la agenda: el nodo que los detectó ya dejó el paso y el texto.\n  if (dato.aviso_tecnico !== true) return [];          // por seguridad: solo los marcados\n  nodo = String(dato.nodo_error ?? origen);\n  mensaje_error = String(dato.mensaje_tecnico ?? 'Error de la agenda sin detalle.');\n} else if (origen === 'cerrar_pantalla') {\n  // v2 (D33): la llamada a WF5 falló entera (sin resumen de WF5): nadie ha avisado aún.\n  if (dato.aviso_calendario !== true) return [];        // calendario bien, o WF5 ya avisó\n  nodo = 'llamar_calendario';\n  mensaje_error = String(dato.mensaje_tecnico ?? 'Fallo al llamar a WF5 sin detalle.');\n} else {\n  // Alguien ha conectado este nodo a otro sitio: se avisa para que se revise.\n  nodo = origen;\n  mensaje_error = 'Origen no previsto en preparar_aviso_tecnico: revisar las conexiones del flujo.';\n}\n\n// Los 5 datos para WF4_aviso_tecnico. $workflow.name = nombre de este flujo;\n// $execution.id = número de esta ejecución (para buscarla en Executions).\nreturn [{\n  json: {\n    flujo: $workflow.name,\n    nodo,\n    mensaje_error,\n    oportunidad_id,\n    ejecucion_id: String($execution.id),\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        1760
+      ],
+      "id": "0b93a126-b6dc-42ff-9dac-fcf001209b8d",
+      "name": "preparar_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "jVVsWYknS0DDKhaO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jVVsWYknS0DDKhaO",
+          "cachedResultName": "WF4_aviso_tecnico"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "oportunidad_id": "={{ $json.oportunidad_id }}",
+            "flujo": "={{ $json.flujo }}",
+            "nodo": "={{ $json.nodo }}",
+            "mensaje_error": "={{ $json.mensaje_error }}",
+            "ejecucion_id": "={{ $json.ejecucion_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "flujo",
+              "displayName": "flujo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nodo",
+              "displayName": "nodo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "ejecucion_id",
+              "displayName": "ejecucion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        224,
+        1760
+      ],
+      "id": "c002be73-e5c4-4110-ae86-a8eef48b7336",
+      "name": "llamar_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Entrar en la agenda (D32). 2026-10-14.\n// Recibe de CUATRO sitios (se sabe cuál con $prevNode.name):\n//   - segun_decision              -> \"Visita acordada\" (primera vez)\n//   - segun_decision_confirmacion -> \"Otra hora\" (primera vez)\n//   - segun_hora                  -> \"Ninguna le va bien\": el cliente quiere otro día\n//   - segun_traduccion            -> 409 hueco_ocupado: alguien cogió la hora entre\n//                                    la página \"Hora\" y el envío\n// Salida (1 elemento): { vuelta, aviso_html, resultado_texto, oportunidad_id }\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// En un bucle este nodo se ejecuta varias veces: quien lo lea usa .first(),\n// que en n8n devuelve el elemento de su ÚLTIMA ejecución.\n// ---------------------------------------------------------------------------\n\n// Nombre del nodo que nos ha mandado el dato en esta vuelta.\nconst origen = $prevNode.name;\n// El único elemento que llega (el formulario procesa un caso cada vez).\nconst dato = $input.first().json;\n\n// Escapar texto antes de meterlo en HTML (las fechas y horas vienen del backend,\n// pero se escapan igual: es la regla del flujo para TODO lo que va a HTML).\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')     // < y > : impiden abrir etiquetas HTML\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')   // comillas: impiden salir de un atributo\n    .replace(/'/g, '&#39;');\n}\n\n// Lee lo elegido en una página de resultado; si esa página no se usó en esta\n// ejecución, n8n lanza un error: se atrapa y se devuelve undefined.\nfunction eleccionDe(nodo) {\n  try { return $(nodo).first().json.decision; } catch (e) { return undefined; }\n}\n// \"Visita acordada\" (Gate o seguimiento) u \"Otra hora\" (confirmación).\nconst resultado_texto = eleccionDe('pagina_resultado') ?? eleccionDe('pagina_resultado_confirmacion') ?? 'Visita';\n// El número de oportunidad, de la ficha (preparar_ficha se ejecuta una sola vez).\nconst oportunidad_id = $('preparar_ficha').first().json.oportunidad_id;\n\n// Por defecto: primera vez, sin aviso.\nlet vuelta = 'inicio';\n// El aviso que se enseñará arriba de la página \"Día\" (vacío = ninguno).\nlet aviso_html = '';\n\nif (origen === 'segun_hora') {\n  // El cliente no quiso ninguna hora de ese día: se vuelve a elegir día.\n  vuelta = 'otro_dia';\n  // Aviso informativo (v2: sin color, n8n borra style).\n  aviso_html = '<p>Ninguna hora de ese día le iba bien: elige otro día.</p>';\n} else if (origen === 'segun_traduccion') {\n  // 409 hueco_ocupado al registrar: la hora se ocupó mientras se rellenaba.\n  vuelta = 'hueco_ocupado';\n  // Aviso con ⚠️ y negrita (v2: sin color), con el día y la hora que se intentaron (nunca de quién es la otra visita).\n  aviso_html =\n    `<p>⚠️ <strong>Atención:</strong> la hora ${esc(dato.hora_ocupada ?? '')} ` +\n    `del ${esc(dato.fecha_ocupada ?? '')} se acaba de ocupar (otra reserva entró mientras tanto). ` +\n    `<strong>No se ha registrado nada.</strong> Elige otra con el cliente.</p>`;\n}\n// Cualquier otro origen (segun_decision o segun_decision_confirmacion): primera vez.\n\n// Un solo elemento con todo lo que necesitan las páginas siguientes.\nreturn [{ json: { vuelta, aviso_html, resultado_texto, oportunidad_id } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1568,
+        160
+      ],
+      "id": "3f9ae3e7-5976-4d7c-9c47-80f0a4880e4f",
+      "name": "entrar_agenda"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/huecos-libres",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1344,
+        160
+      ],
+      "id": "93005c33-6092-4383-9d2a-2f74525a2584",
+      "name": "leer_dias",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar la página \"Día\" (D32). 2026-10-14.\n// Entrada ($json): la respuesta COMPLETA de GET /huecos-libres (modo días),\n//   { statusCode, headers, body } (opción \"Include Response Headers and Status\").\n// Salida (1 elemento):\n//   ok: true  -> { campos, titulo, dias }: campos = los campos de la página en JSON\n//                (Define Form: Using JSON); dias = la lista del backend, para\n//                traducir después la opción elegida a su fecha.\n//   ok: false -> { mensaje, aviso_tecnico, nodo_error, mensaje_tecnico, codigo }\n// Contrato: docs/Contrato_Formulario_Llamadas.md, sección 4b.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Código HTTP y cuerpo (\"?? {}\": objeto vacío si no hay cuerpo).\nconst estado = $input.first().json.statusCode;\nconst b = $input.first().json.body ?? {};\n// Lo que dejó entrar_agenda en ESTA vuelta (.first() = su última ejecución).\nconst ctx = $('entrar_agenda').first().json;\n// Texto fijo de la opción del calendario (contrato 4b: no choca con ninguna etiqueta).\nconst OTRO = 'Otro día más adelante';\n\n// Escapar texto antes de meterlo en HTML.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')     // < y > : impiden abrir etiquetas HTML\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')   // comillas: impiden salir de un atributo\n    .replace(/'/g, '&#39;');\n}\n\n// ---- 1. El backend no respondió 200: fallo técnico, aviso y fin -------------\nif (estado !== 200) {\n  return [{\n    json: {\n      ok: false,                                         // va a la pantalla de error\n      aviso_tecnico: true,                               // lo lee preparar_aviso_tecnico\n      mensaje: `No se han podido leer los huecos libres (código ${estado}). No se ha registrado nada. Avisa al responsable técnico.`,\n      nodo_error: 'leer_dias',                           // el paso que ha fallado\n      mensaje_tecnico: `GET /huecos-libres respondió ${estado}.`, // para el técnico\n      codigo: estado,                                    // el código HTTP\n    },\n  }];\n}\n\n// ---- 2. Los días: solo los que traen etiqueta y fecha con buena forma -------\n// Defensa: si el backend mandara algo raro, se ignora en vez de enseñarlo.\nconst dias = (Array.isArray(b.dias) ? b.dias : [])\n  .filter((d) => d && typeof d.etiqueta === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(d.fecha ?? '')));\n\n// Opciones del desplegable: una por día (su etiqueta, tal cual) y la del calendario al final.\nconst opciones = dias.map((d) => ({ option: d.etiqueta })).concat([{ option: OTRO }]);\n\n// ---- 3. El texto de arriba de la página -------------------------------------\nlet html =\n  `<p>Oportunidad <strong>${esc(ctx.oportunidad_id)}</strong> · <strong>${esc(ctx.resultado_texto)}</strong>. ` +\n  `Pregunta al cliente qué día le viene bien. Solo aparecen los días con alguna hora libre ` +\n  `y, en cada uno, sus horas libres de mañana y de tarde.</p>`;\n// El aviso de la vuelta (otro día u hora ocupada), si lo hay.\nhtml += ctx.aviso_html ?? '';\n// Sin ningún día con hueco: se explica y solo queda el calendario.\nif (dias.length === 0) {\n  // v2: ⚠️ y negrita en vez de color (n8n borra style).\n  html += `<p>⚠️ <strong>No queda ninguna hora libre</strong> en los próximos días laborables: elige \"${OTRO}\".</p>`;\n}\n\n// ---- 4. Los campos de la página (formato \"Using JSON\" del nodo n8n Form) ----\nconst campos = [\n  // El texto de arriba.\n  { fieldType: 'html', html },\n  // El desplegable de días (obligatorio).\n  {\n    fieldLabel: 'Día de la visita',\n    fieldName: 'dia',\n    fieldType: 'dropdown',\n    fieldOptions: { values: opciones },\n    requiredField: true,\n  },\n];\n\n// Todo listo: los campos, el título y la lista de días para traducir la elección.\nreturn [{\n  json: {\n    ok: true,\n    campos,\n    titulo: `Oportunidad ${ctx.oportunidad_id} · Elegir día`,\n    dias,\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        160
+      ],
+      "id": "b0e2696c-06d0-4fb2-8be0-0ebbf6d1aecc",
+      "name": "preparar_pagina_dia"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e395a39a-c3f9-4199-bdec-1b141c58f8b4",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -896,
+        160
+      ],
+      "id": "6de5beb1-7156-4832-af4d-cc14a0049858",
+      "name": "agenda_ok"
+    },
+    {
+      "parameters": {
+        "defineForm": "json",
+        "jsonOutput": "={{ $json.campos }}",
+        "options": {
+          "formTitle": "={{ $json.titulo }}"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -672,
+        160
+      ],
+      "id": "8269fd20-944d-4197-b709-6583a82ac248",
+      "name": "pagina_dia"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Traducir el día elegido a su fecha (D32). 2026-10-14.\n// Entrada ($json): lo rellenado en pagina_dia, { dia: \"<etiqueta elegida>\" }.\n// Salida (1 elemento) con \"destino\", que lee el Switch segun_dia:\n//   'horas'      -> { fecha: \"YYYY-MM-DD\" } : se piden las horas de ese día\n//   'calendario' -> el operador eligió \"Otro día más adelante\"\n//   'error'      -> la etiqueta no está en la lista (no debería pasar nunca)\n// El desplegable devuelve el TEXTO de la opción: se busca en la lista que dio\n// el backend en ESTA vuelta (contrato 4b). Nunca se deduce la fecha del texto.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Texto fijo de la opción del calendario (el mismo que en preparar_pagina_dia).\nconst OTRO = 'Otro día más adelante';\n// Lo elegido en la página \"Día\".\nconst elegido = String($input.first().json.dia ?? '');\n\n// \"Otro día más adelante\": a la página del calendario.\nif (elegido === OTRO) {\n  return [{ json: { destino: 'calendario' } }];\n}\n\n// La lista de días de esta vuelta (.first() = la última ejecución de preparar_pagina_dia).\nconst dias = $('preparar_pagina_dia').first().json.dias ?? [];\n// El día cuya etiqueta coincide EXACTAMENTE con lo elegido.\nconst d = dias.find((x) => x.etiqueta === elegido);\n\n// No encontrado: fallo del formulario (la opción no salió de la lista). Aviso técnico.\nif (!d) {\n  return [{\n    json: {\n      destino: 'error',                                   // al final con error\n      ok: false,                                          // para la pantalla de error\n      aviso_tecnico: true,                                // lo lee preparar_aviso_tecnico\n      mensaje: 'No se reconoce el día elegido. No se ha registrado nada. Vuelve a abrir el formulario y avisa al responsable técnico.',\n      nodo_error: 'pagina_dia',                           // el paso que ha fallado\n      mensaje_tecnico: `Día elegido que no está en la lista de GET /huecos-libres: \"${elegido}\".`,\n    },\n  }];\n}\n\n// Encontrado: su fecha, para pedir las horas libres de ese día.\nreturn [{ json: { destino: 'horas', fecha: d.fecha } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        160
+      ],
+      "id": "e5c4f034-800f-4531-9d78-9c149c52a715",
+      "name": "elegir_dia"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "71c68d3d-b014-43c3-a117-a0f26fc7d71f",
+                    "leftValue": "={{ $json.destino }}",
+                    "rightValue": "horas",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "horas"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "8dbf63e8-0af5-4d37-899e-c8b3a14532fd",
+                    "leftValue": "={{ $json.destino }}",
+                    "rightValue": "calendario",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "calendario"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "e48aa058-73bb-42f9-831a-473645652dc4",
+                    "leftValue": "={{ $json.destino }}",
+                    "rightValue": "error",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "error"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -224,
+        160
+      ],
+      "id": "44eb429e-24e2-4978-a20f-bd3ee6ca33dd",
+      "name": "segun_dia"
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldType": "html",
+              "html": "<p>Elige en el calendario el día que propone el cliente. En la página siguiente verás sus horas libres (si es fin de semana o ya ha pasado, te lo dirá).</p>"
+            },
+            {
+              "fieldLabel": "Día de la visita",
+              "fieldType": "date",
+              "fieldName": "fecha",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "=Oportunidad {{ $('preparar_ficha').first().json.oportunidad_id }} · Otro día"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        0
+      ],
+      "id": "9fd3b101-09c5-4368-a03d-93f9af289be3",
+      "name": "pagina_otra_fecha"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/huecos-libres?fecha={{ encodeURIComponent($json.fecha) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1568,
+        400
+      ],
+      "id": "74bc314b-7138-40aa-8c98-f21de3616d05",
+      "name": "leer_horas",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar la página \"Hora\" (D32). 2026-10-14.\n// Entrada ($json): la respuesta COMPLETA de GET /huecos-libres?fecha=... (modo un día).\n// Se llama AL ABRIR la página: si durante la llamada alguien cogió una hora,\n// aquí ya no aparece (contrato 4b).\n// Salida (1 elemento):\n//   ok: true  -> { campos, titulo, fecha }\n//   ok: false -> { mensaje, aviso_tecnico, nodo_error, mensaje_tecnico, codigo }\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Código HTTP y cuerpo.\nconst estado = $input.first().json.statusCode;\nconst b = $input.first().json.body ?? {};\n// Lo que dejó entrar_agenda en esta vuelta.\nconst ctx = $('entrar_agenda').first().json;\n// Texto fijo de la opción que vuelve a la página \"Día\" (contrato 4b).\nconst NINGUNA = 'Ninguna le va bien → elegir otro día';\n\n// Escapar texto antes de meterlo en HTML.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')     // < y > : impiden abrir etiquetas HTML\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')   // comillas: impiden salir de un atributo\n    .replace(/'/g, '&#39;');\n}\n\n// ---- 1. El backend no respondió 200: fallo técnico, aviso y fin -------------\n// (Un 422 aquí = fecha mal escrita: no lo puede provocar el operador, que elige\n// de una lista o de un calendario; por eso también es técnico.)\nif (estado !== 200) {\n  return [{\n    json: {\n      ok: false,\n      aviso_tecnico: true,\n      mensaje: `No se han podido leer las horas libres (código ${estado}). No se ha registrado nada. Avisa al responsable técnico.`,\n      nodo_error: 'leer_horas',\n      mensaje_tecnico: `GET /huecos-libres?fecha=... respondió ${estado}.`,\n      codigo: estado,\n    },\n  }];\n}\n\n// ---- 2. Las horas: solo textos con forma HH:MM ------------------------------\nconst filtrar = (lista) => (Array.isArray(lista) ? lista : []).filter((h) => typeof h === 'string' && /^\\d{2}:\\d{2}$/.test(h));\n// Todas juntas (las opciones), y por franja (para el texto de arriba).\nconst horas = filtrar(b.horas);\nconst manana = filtrar(b.manana);\nconst tarde = filtrar(b.tarde);\n\n// \"2026-10-15\" + \"jueves\" -> \"Jueves 15/10/2026\" (se recorta el texto: sin zonas horarias).\nconst fecha = String(b.fecha ?? '');\nconst [a, m, d] = fecha.split('-');\nconst diaSemana = String(b.dia_semana ?? '');\nconst diaLegible = `${diaSemana.charAt(0).toUpperCase()}${diaSemana.slice(1)} ${d}/${m}/${a}`;\n\n// Por qué no hay horas, si no las hay (el backend lo dice en sin_horas_motivo).\nconst MOTIVOS_SIN_HORAS = {\n  dia_completo: 'Ese día ya no queda ninguna hora libre (se han ocupado todas).',\n  fin_de_semana: 'Es fin de semana: no hay visitas.',\n  fecha_pasada: 'Esa fecha ya ha pasado.',\n};\n\n// El informe que ya se escribió en una vuelta anterior, para no perderlo.\n// Si la página \"Hora\" todavía no se ha usado, n8n lanza un error: texto vacío.\nlet informePrevio = '';\ntry { informePrevio = String($('pagina_hora').first().json.informe ?? ''); } catch (e) { informePrevio = ''; }\n\n// ---- 3. El texto de arriba de la página -------------------------------------\nlet html = `<p><strong>${esc(diaLegible)}</strong> · Oportunidad ${esc(ctx.oportunidad_id)} · ${esc(ctx.resultado_texto)}</p>`;\nif (horas.length > 0) {\n  // Las horas libres de este momento, por franja (una franja vacía no se escribe).\n  const partes = [];\n  if (manana.length > 0) partes.push(`mañana: ${manana.join(' · ')}`);\n  if (tarde.length > 0) partes.push(`tarde: ${tarde.join(' · ')}`);\n  html += `<p>Horas libres ahora mismo — ${esc(partes.join(' — '))}.</p>`;\n} else {\n  // Ninguna hora: se dice por qué y solo queda volver a elegir día.\n  const motivo = MOTIVOS_SIN_HORAS[b.sin_horas_motivo] ?? 'Ese día no hay ninguna hora libre.';\n  // v2: ⚠️ y negrita en vez de color (n8n borra style).\n  html += `<p>⚠️ <strong>${esc(motivo)}</strong> Elige \"${esc(NINGUNA)}\".</p>`;\n}\n\n// ---- 4. Los campos de la página ---------------------------------------------\nconst campos = [\n  // El texto de arriba.\n  { fieldType: 'html', html },\n  // Las horas como botones (radio), más la opción de volver a \"Día\". Obligatorio.\n  {\n    fieldLabel: 'Hora de la visita',\n    fieldName: 'hora',\n    fieldType: 'radio',\n    fieldOptions: { values: horas.map((h) => ({ option: h })).concat([{ option: NINGUNA }]) },\n    requiredField: true,\n  },\n  // El informe: obligatorio si hay horas (hará falta para registrar); si no las\n  // hay, opcional, y conserva lo ya escrito para la siguiente vuelta.\n  {\n    fieldLabel: 'Informe de la llamada',\n    fieldName: 'informe',\n    fieldType: 'textarea',\n    placeholder: 'Qué se habló, qué se acordó y dudas del cliente.',\n    defaultValue: informePrevio,\n    requiredField: horas.length > 0,\n  },\n];\n\n// Todo listo: los campos, el título y la fecha (la usará preparar_decision).\nreturn [{\n  json: {\n    ok: true,\n    campos,\n    titulo: `Oportunidad ${ctx.oportunidad_id} · Elegir hora`,\n    fecha,\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1344,
+        400
+      ],
+      "id": "88175d75-2380-45e3-b098-cf8a46e3128f",
+      "name": "preparar_pagina_hora"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d1d6bf15-0bd9-49e0-aff9-c68932c1ba7a",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1120,
+        400
+      ],
+      "id": "dcb4a16a-457c-4e5d-ae30-41160e057381",
+      "name": "hora_ok"
+    },
+    {
+      "parameters": {
+        "defineForm": "json",
+        "jsonOutput": "={{ $json.campos }}",
+        "options": {
+          "formTitle": "={{ $json.titulo }}"
+        }
+      },
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        -896,
+        400
+      ],
+      "id": "6ab0d458-b316-4910-a0d5-98739d316c3b",
+      "name": "pagina_hora"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7b8afd25-f647-47b5-9c93-9ee5bf867147",
+              "leftValue": "={{ $json.hora === 'Ninguna le va bien → elegir otro día' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -672,
+        400
+      ],
+      "id": "a6b7dffc-4b71-462b-b215-ecc2c19654b4",
+      "name": "segun_hora"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "8cfef6ed-8b2a-4d61-ae5b-51a0a117dfd6",
+              "leftValue": "={{ $json.volver_agenda === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        672
+      ],
+      "id": "ef941494-43fe-489b-b0d6-09e77e21409a",
+      "name": "segun_traduccion"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar las llamadas a WF5 (D33). v2, 2026-10-14.\n// Lee la respuesta de POST /resultados-llamada y decide qué cambios hay que\n// copiar al calendario. Lo decide la RESPUESTA del backend, no el resultado\n// elegido: el backend dice qué visita queda confirmada y cuál se canceló.\n//   visita_cancelada_id  -> WF5 'borrar' esa visita   (otra_hora, cliente_cancela)\n//   visita_id            -> WF5 'guardar' confirmada  (visita_acordada, confirmar_hora, otra_hora)\n// También en un 200 (repetición): WF5 no duplica nunca, y así se recupera un\n// calendario que falló la primera vez.\n// Salida: 1 elemento por llamada a WF5, o 1 elemento { sin_calendario: true }.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// La respuesta del registro (.first() = la última ejecución de registrar_resultado).\nconst resp = $('registrar_resultado').first().json;\nconst estado = resp.statusCode;                       // 201, 200, 409, 422...\nconst b = resp.body ?? {};                            // el cuerpo (\"?? {}\": vacío si no hay)\n// La ficha: de ahí salen el nombre y el tipo de reforma para el título del evento.\nconst ficha = $('preparar_ficha').first().json;\n\n// Sin registro (cualquier error): nada que copiar.\nif (estado !== 201 && estado !== 200) return [{ json: { sin_calendario: true } }];\n\n// Lo común a todas las llamadas. Textos vacíos en vez de null: WF5 no los necesita\n// para borrar, y así ningún campo llega vacío de tipo.\nconst comun = {\n  nombre: ficha.nombre ?? '',                         // solo el nombre (RGPD: nada de contacto)\n  tipo_reforma: ficha.tipo_reforma ?? '',             // el código (bano, cocina...)\n  oportunidad_id: b.oportunidad_id ?? ficha.oportunidad_id,  // para el enlace a la ficha\n};\n\nconst llamadas = [];                                  // las llamadas a WF5, en orden\n// 1. La visita pedida que se ha cancelado: su evento amarillo se borra.\nif (b.visita_cancelada_id) {\n  llamadas.push({ accion: 'borrar', visita_id: b.visita_cancelada_id,\n                  estado_visita: '', inicio: '', fin: '', ...comun });\n}\n// 2. La visita que queda confirmada: se crea, o se pasa de amarillo a verde.\n//    Inicio y fin, tal cual los da el backend (n8n no suma la duración, D33).\nif (b.visita_id) {\n  llamadas.push({ accion: 'guardar', visita_id: b.visita_id, estado_visita: 'confirmada',\n                  inicio: b.fecha_visita ?? '', fin: b.fecha_fin_visita ?? '', ...comun });\n}\n\n// Descartar (sin visitas): nada que copiar.\nif (llamadas.length === 0) return [{ json: { sin_calendario: true } }];\n// Un elemento por llamada: llamar_calendario (modo \"each\") llama a WF5 una vez por cada uno.\nreturn llamadas.map((j) => ({ json: j }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        624
+      ],
+      "id": "cc8b1782-3668-4dbb-907a-2129d0f12907",
+      "name": "preparar_calendario"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "cbda70ce-383f-49ae-a32b-ac330ff920e6",
+              "leftValue": "={{ $json.sin_calendario !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        624
+      ],
+      "id": "1ca53710-29ee-4c60-9b03-6a6c3a9eb763",
+      "name": "necesita_calendario"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "hJQF6yGml9qaUDKf",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/hJQF6yGml9qaUDKf",
+          "cachedResultName": "WF5_calendario_visita"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "accion": "={{ $json.accion }}",
+            "visita_id": "={{ $json.visita_id }}",
+            "estado_visita": "={{ $json.estado_visita }}",
+            "inicio": "={{ $json.inicio }}",
+            "fin": "={{ $json.fin }}",
+            "nombre": "={{ $json.nombre }}",
+            "tipo_reforma": "={{ $json.tipo_reforma }}",
+            "oportunidad_id": "={{ $json.oportunidad_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "accion",
+              "displayName": "accion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "visita_id",
+              "displayName": "visita_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "estado_visita",
+              "displayName": "estado_visita",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "inicio",
+              "displayName": "inicio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "fin",
+              "displayName": "fin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nombre",
+              "displayName": "nombre",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "tipo_reforma",
+              "displayName": "tipo_reforma",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        672,
+        528
+      ],
+      "id": "8c4f943c-7df6-4773-83da-a4a9c1abd509",
+      "name": "llamar_calendario",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Texto de la pantalla final (D33). v2, 2026-10-14.\n// Recibe de dos sitios (se sabe cuál con $prevNode.name):\n//   - necesita_calendario -> no había nada que copiar: el texto de traducir_resultado tal cual\n//   - llamar_calendario   -> 1 resultado de WF5 por llamada: { ok, accion, mensaje, ... },\n//                            o { error } si WF5 no se pudo ni ejecutar\n// Salida (1 elemento): { titulo, mensaje, aviso_calendario, mensaje_tecnico }\n//   aviso_calendario -> true SOLO si WF5 no se ejecutó (si se ejecutó y falló, ya avisó él)\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// El texto del registro (.first() = la última ejecución, también tras el bucle de la agenda).\nconst t = $('traducir_resultado').first().json;\n// Atajo para la salida.\nconst salida = (titulo, mensaje, aviso_calendario = false, mensaje_tecnico = '') =>\n  [{ json: { titulo, mensaje, aviso_calendario, mensaje_tecnico } }];\n\n// Sin calendario (descarte o cualquier error del registro): el texto de siempre.\nif ($prevNode.name !== 'llamar_calendario') return salida(t.titulo, t.mensaje);\n\n// Lo que se pidió a WF5 y lo que contestó, en el mismo orden.\nconst pedidas = $('preparar_calendario').all().map((i) => i.json);\nconst resultados = $input.all().map((i) => i.json);\n// ¿Había que guardar una visita? (decide el título)\nconst hayGuardar = pedidas.some((p) => p.accion === 'guardar');\n\n// Texto de un error de n8n sin enviar el objeto entero (podría llevar datos).\nfunction textoError(e) {\n  if (!e) return 'sin detalle';\n  if (typeof e === 'string') return e;\n  const partes = [e.code, e.message, e.description].filter((x) => typeof x === 'string' && x.trim() !== '');\n  return partes.length > 0 ? partes.join(' · ') : 'error sin texto';\n}\n\n// Fallo de la LLAMADA: falta algún resultado o alguno no trae \"ok\" (WF5 no llegó a ejecutarse).\nconst falloLlamada = resultados.length !== pedidas.length || resultados.some((r) => typeof r.ok !== 'boolean');\n// Fallo DENTRO de WF5: se ejecutó, devolvió ok = false y ya mandó su aviso técnico.\nconst falloWf5 = resultados.some((r) => r.ok === false);\n\nif (falloLlamada || falloWf5) {\n  // El registro SÍ está hecho: que nadie lo repita, y que se sepa que el calendario no cuadra.\n  const titulo = hayGuardar ? 'Visita registrada, pero NO copiada al calendario' : 'Registrado, pero el calendario no se ha actualizado';\n  const mensaje = `${t.mensaje} ⚠️ Atención: el registro SÍ está guardado, no lo repitas. ` +\n    'No se ha podido actualizar el calendario \"Visitas técnicas — Reformas Amedida\": el responsable técnico ya ha recibido un aviso.';\n  // Solo si WF5 no se ejecutó hace falta que este flujo avise (si no, WF4 llegaría dos veces).\n  const tecnico = falloLlamada\n    ? `WF5 no se pudo ejecutar (${resultados.length} de ${pedidas.length} respuestas): ` +\n      resultados.map((r) => textoError(r.error)).join(' | ')\n    : '';\n  return salida(titulo, mensaje, falloLlamada, tecnico);\n}\n\n// Todo bien. 201 con visita: el título que pide D33. 200: el título de siempre.\nconst titulo = (t.codigo === 201 && hayGuardar) ? 'Visita registrada y añadida al calendario' : t.titulo;\n// La frase del calendario según lo que se hizo.\nlet frase;\nif (hayGuardar && pedidas.length > 1) frase = ' Calendario actualizado: la hora anterior se ha quitado y la nueva está añadida.';\nelse if (hayGuardar) frase = ' Visita añadida al calendario \"Visitas técnicas — Reformas Amedida\".';\nelse frase = ' La visita pedida se ha quitado del calendario.';\nreturn salida(titulo, t.mensaje + frase);\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        624
+      ],
+      "id": "6982be22-7067-4597-924c-3ecbc2e8505e",
+      "name": "cerrar_pantalla"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "On form submission": {
+      "main": [
+        [
+          {
+            "node": "leer_ficha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_ficha": {
+      "main": [
+        [
+          {
+            "node": "preparar_ficha",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "sistema_no_disponible",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_ficha": {
+      "main": [
+        [
+          {
+            "node": "caso_registrable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "caso_registrable": {
+      "main": [
+        [
+          {
+            "node": "segun_tipo_llamada",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "sin_registro",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_tipo_llamada": {
+      "main": [
+        [
+          {
+            "node": "pagina_resultado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "pagina_resultado_confirmacion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_resultado": {
+      "main": [
+        [
+          {
+            "node": "segun_decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_decision": {
+      "main": [
+        [
+          {
+            "node": "entrar_agenda",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "pagina_descarte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_resultado_confirmacion": {
+      "main": [
+        [
+          {
+            "node": "segun_decision_confirmacion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_decision_confirmacion": {
+      "main": [
+        [
+          {
+            "node": "pagina_confirmar_hora",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "entrar_agenda",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "pagina_cancela",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "entrar_agenda": {
+      "main": [
+        [
+          {
+            "node": "leer_dias",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_dias": {
+      "main": [
+        [
+          {
+            "node": "preparar_pagina_dia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "sistema_no_disponible",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_pagina_dia": {
+      "main": [
+        [
+          {
+            "node": "agenda_ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "agenda_ok": {
+      "main": [
+        [
+          {
+            "node": "pagina_dia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "sin_registro",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_dia": {
+      "main": [
+        [
+          {
+            "node": "elegir_dia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "elegir_dia": {
+      "main": [
+        [
+          {
+            "node": "segun_dia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_dia": {
+      "main": [
+        [
+          {
+            "node": "leer_horas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "pagina_otra_fecha",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "sin_registro",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_otra_fecha": {
+      "main": [
+        [
+          {
+            "node": "leer_horas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_horas": {
+      "main": [
+        [
+          {
+            "node": "preparar_pagina_hora",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "sistema_no_disponible",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_pagina_hora": {
+      "main": [
+        [
+          {
+            "node": "hora_ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hora_ok": {
+      "main": [
+        [
+          {
+            "node": "pagina_hora",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "sin_registro",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_hora": {
+      "main": [
+        [
+          {
+            "node": "segun_hora",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_hora": {
+      "main": [
+        [
+          {
+            "node": "entrar_agenda",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "preparar_decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_descarte": {
+      "main": [
+        [
+          {
+            "node": "preparar_decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_confirmar_hora": {
+      "main": [
+        [
+          {
+            "node": "preparar_decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_cancela": {
+      "main": [
+        [
+          {
+            "node": "preparar_decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_decision": {
+      "main": [
+        [
+          {
+            "node": "decision_valida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "decision_valida": {
+      "main": [
+        [
+          {
+            "node": "pagina_confirmacion",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "sin_registro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pagina_confirmacion": {
+      "main": [
+        [
+          {
+            "node": "confirmado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "confirmado": {
+      "main": [
+        [
+          {
+            "node": "registrar_resultado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "registro_cancelado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "registrar_resultado": {
+      "main": [
+        [
+          {
+            "node": "traducir_resultado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "registro_incierto",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "traducir_resultado": {
+      "main": [
+        [
+          {
+            "node": "segun_traduccion",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_traduccion": {
+      "main": [
+        [
+          {
+            "node": "entrar_agenda",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "preparar_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_aviso_tecnico": {
+      "main": [
+        [
+          {
+            "node": "llamar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_calendario": {
+      "main": [
+        [
+          {
+            "node": "necesita_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "necesita_calendario": {
+      "main": [
+        [
+          {
+            "node": "llamar_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "cerrar_pantalla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "llamar_calendario": {
+      "main": [
+        [
+          {
+            "node": "cerrar_pantalla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cerrar_pantalla": {
+      "main": [
+        [
+          {
+            "node": "pantalla_resultado_final",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "XyWcmtuXIy3yT4eY",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "id": "fEXHq4gRihB6PtaV",
+  "tags": []
+}
