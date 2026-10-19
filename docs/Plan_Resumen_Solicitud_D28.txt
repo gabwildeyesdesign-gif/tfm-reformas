@@ -1,0 +1,700 @@
+================================================================
+PLAN — D28.1: resumen de la solicitud (lo que el cliente cuenta en el chat)
+Rama: feat/n0-resumen-solicitud (desde main = 8e5ebab)
+Fecha: 2026-10-19
+Estado: Bloque A (solo plan, sin código). Pendiente de la revisión del
+tutor y de las respuestas de Gabi a la sección 10.
+================================================================
+
+1. CONTEXTO
+================================================================
+D28.1 (docs/Decisiones_D28_Resumen_Conversacion_y_Enlace_Ficha.md, aceptada
+por Gabi el 2026-10-11): lo que el cliente cuenta en el chat sobre su
+proyecto no llega a administración. leads.mensaje_original se guarda siempre
+a NULL (leads_service.py, a propósito: "la conversación vive en la memoria de
+n8n") y la conversación solo existe en n8n. Se añade un RESUMEN CORTO que
+escribe el Agente 1 al capturar los datos (un campo más de lo que envía a
+POST /leads), guardado en la base de datos con las protecciones de D26.7,
+visible en GET /gate-avisos (email de WF2) y en la ficha, y NUNCA en GET
+/llamadas-del-dia (acumulación, D26 sección 1.3). La conversación completa NO
+se guarda (opción B de D28.1, rechazada por RGPD).
+
+Valor de negocio (para la memoria): con el resumen, administración sabe QUÉ
+quiere el cliente con Gate ("cambiar la bañera por plato de ducha y alicatar
+hasta el techo") antes de llamar. Métrica: tiempo de preparación de la
+llamada de un caso con Gate (D26.8).
+
+Antecedente directo: docs/Plan_Agente2_Calendar.txt, secciones 3.1, 3.2, 4.5
+y 4.6, y sus decisiones en 10.1 (Gabi, 2026-10-12): P1 columna nueva
+leads.resumen_solicitud; P2 opcional en POST /leads; P3 300 caracteres,
+longitud en Pydantic y CHECK, emails y teléfonos solo en Python; P7 el
+Agente 2 no amplía el resumen en N0; P8 la plantilla de WF2 lo muestra. La
+sección 10.2 lo dejó para esta "rama 2".
+
+Fuera del repositorio (lo hace el tutor con Gabi en n8n, DESPUÉS de este
+bloque): el prompt del Agente 1 (prompts/agente1_captura.md y el nodo, a la
+vez), el parámetro nuevo de la tool guardar_datos_reforma, la plantilla del
+email de WF2 y la página de la ficha (WF_ficha_oportunidad). Este bloque deja
+el backend listo y el contrato escrito (sección 5.6).
+
+
+2. LO LEÍDO Y LO MEDIDO
+================================================================
+2.1 Código (main = 8e5ebab)
+- app/services/leads_service.py: _crear_lead_nuevo escribe
+  "VALUES (%s, %s, NULL, %s, ...)": mensaje_original a NULL, con el motivo
+  escrito. POST /leads NO escribe ninguna fila en logs (grep: ningún INSERT
+  INTO logs en el archivo): el resumen no tendría copia en logs (a diferencia
+  de visitas.texto_cliente, R10 del plan de la ficha).
+- Idempotencia (create_lead + _buscar_lead_por_token): si el lead_token ya
+  existe, el INSERT choca con leads_lead_token_key, se deshace todo y se
+  devuelve el lead original con creado=false; "si una repetición trae datos
+  distintos, se devuelve el lead original y los datos nuevos se ignoran"
+  (docstring y Adenda 5.1, "Idempotencia").
+- app/schemas/leads.py: LeadCreate es extra="forbid" (hoy un campo
+  "resumen_solicitud" daría 422 extra_forbidden). LeadCreateResponse tiene 5
+  campos, todos obligatorios (sin valor por defecto, por convención).
+- app/schemas/common.py: el filtro de D26.7 (PATRON_EMAIL_EN_TEXTO,
+  PATRON_TELEFONO_EN_TEXTO, texto_sin_datos_de_contacto, que LANZA
+  ValueError). Su comentario dice que "la rama 2 lo reutilizará para el
+  resumen de la solicitud (LeadCreate.resumen)".
+- app/services/datos_oportunidad.py: COLUMNAS_CASO, 17 pares (nombre,
+  expresión SQL). GET /gate-avisos y la ficha leen TODAS (columnas_caso_sql
+  y caso_desde_fila con strict=True). GET /leads/session
+  (NOMBRES_REFORMA_SESION) y GET /llamadas-del-dia (NOMBRES_SOLICITUD) toman
+  SOLO las suyas, por nombre.
+- app/schemas/aviso_gate.py: ReformaAviso (extra="forbid") es el MISMO
+  objeto "reforma" de GET /gate-avisos, de la ficha y de GET /leads/session
+  (leads.py importa ReformaAviso).
+- app/schemas/listado_llamadas.py: SolicitudLlamada (m2, nivel_acabados,
+  incluye_cambios_estructurales), extra="forbid".
+- prompts/agente1_captura.md, "Calling the tool": "If the tool returns an
+  error naming a field, explain it in plain Spanish and ask only for that
+  correction [...] show the full summary again and ask for confirmation
+  before calling the tool again". Y en "Language and tone": nunca enseñar
+  nombres de campos internos.
+- n8n/chat_tipo_reforma.json, nodo guardar_datos_reforma: el cuerpo se
+  construye como TEXTO con huecos entre comillas:
+    "nombre": "{{ $fromAI('nombre', ..., 'string') }}"
+  (ver C5).
+- n8n/WF2_aviso_gate.json, nodo construir_email_aviso: lee a.contacto,
+  a.reforma, a.presupuesto y a.decision por nombre; ningún Object.keys ni
+  Object.entries (búsqueda en el JSON exportado). Una clave nueva en la raíz
+  de la respuesta se ignora: no rompe WF2. Todo valor que pinta pasa por
+  esc() (escape de HTML). Lo mismo en WF_ficha_oportunidad,
+  WF_formulario_llamadas y WF3_lista_diaria: 0 Object.keys/entries.
+  (Fuente: los JSON saneados de n8n/ del repositorio; no se ha comprobado
+  contra el n8n en ejecución.)
+- Todos los INSERT INTO leads de app/ y scripts/ llevan lista de columnas, y
+  ningún SELECT usa "*" sobre leads (grep): un ADD COLUMN no rompe main.
+
+2.2 Medición en la base de datos real (SOLO LECTURA)
+Script del scratchpad medir_leads_d28.py (SHA-256
+f7f23d9cd17010fa0d58eab183baba41d29d3b167f7bc16a9d9a8aa899f4e2d8). Primera
+orden SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY; ROLLBACK al
+final; solo recuentos y nombres de restricciones, ningún dato personal.
+Hora del servidor: 2026-10-19 17:19:29 UTC.
+  M1. leads totales: 32. Con mensaje_original no nulo: 0 (0/32).
+  M2. Con lead_token (época del chat): 15. Con la clave 'contacto': 15.
+  M3. id máximo de leads: 10304.
+  M4. Restricciones de leads: chk_leads_m2_rango (CHECK), leads_cliente_id_fkey
+      (FK), leads_lead_token_key (UNIQUE), leads_pkey (PK). Ningún CHECK más.
+  M5. Columnas de leads: id, cliente_id, canal, mensaje_original (text),
+      fotos_urls (jsonb), datos_estructurados (jsonb), created_at,
+      lead_token. resumen_solicitud NO existe.
+  M6. Presupuestos con Gate: 8. Oportunidades: 32.
+  Las 4 preguntas de esta medición: (1) no escribe (READ ONLY lo impide);
+  (2) no hay código bajo prueba; (3) un corte no deja nada que deshacer;
+  (4) no toca el uvicorn del 8000 ni cambia datos.
+
+2.3 Scripts que comprueban claves EXACTAS (grep de CLAVES_* y set(...)):
+  - check_leads_endpoint_http: set(cuerpo) == {lead_id, cliente_id,
+    oportunidad_id, status, creado} (5 claves).
+  - check_schemas: construye LeadCreateResponse con sus 5 campos.
+  - check_aviso_gate_http: CLAVES_RAIZ, CLAVES_REFORMA, CLAVES_PROHIBIDAS.
+  - check_ficha_oportunidad_http: CLAVES_RAIZ, CLAVES_REFORMA, ...
+  - check_lead_session_http: CLAVES_SESION, CLAVES_REFORMA.
+  - check_listado_llamadas_http: CLAVES_OPORTUNIDAD, CLAVES_VISITA,
+    CLAVES_SOLICITUD.
+  Los cuatro primeros CAMBIAN (una clave más). Los dos últimos NO cambian: su
+  comprobación de claves exactas es justo la que debe seguir pasando (y la
+  que caza las pruebas en negativo N2 y N3).
+  Último recuento escrito en docs/ o CLAUDE.md (puede ser antiguo, porque
+  varios crecieron después): check_leads_endpoint_http 12/12,
+  check_schemas 37/37, check_aviso_gate_http 75/75, check_aviso_gate_service
+  18/18, check_ficha_oportunidad_http 69/69, check_ficha_oportunidad_service
+  40/40, check_lead_session_http 24/24, check_listado_llamadas_http 109/109,
+  check_listado_llamadas_service 69/69, check_create_lead_service 31/31,
+  check_webhook_auth_http 15/15, check_texto_agente_service 44/44. El
+  recuento ANTES real se toma en la fase 2, ejecutando cada script sobre main
+  antes de tocar nada; el DESPUÉS, sobre la rama. Los dos van al commit del
+  Bloque C.
+
+2.4 Puertos. Los que fija la suite (PUERTO = ... y --port): 8010, 8011,
+8012, 8013, 8015, 8016, 8018, 8019, 8020, 8023, 8024, 8025, 8026, 8028,
+8029, 8032 y 8033, además del 8030 y el 8031 (copias de
+check_graceful_shutdown y check_mcp_connection). netstat a las 17:2x del
+2026-10-19: 8034 y 8035 libres. El script HTTP nuevo usará el 8034 (y lo
+volverá a comprobar al arrancar: si está ocupado, se para sin tocar nada).
+Los scripts cambiados conservan su puerto.
+
+
+3. CONTRADICCIONES Y HALLAZGOS (dichos ANTES de decidir nada)
+================================================================
+C1. D28.1 dice, literalmente, "rechazo 422 de emails y teléfonos", y el plan
+    del Agente 2 (4.5, aceptado en 10.1) dice "ante un 422 del resumen lo
+    reescribe SIN preguntar al cliente". La pre-decisión 4 del tutor reabre
+    ese punto con "nunca perder un lead por culpa del resumen". Si se elige
+    otra opción que el 422 (sección 4.4), se REVISA D28.1 en ese punto: hace
+    falta la decisión explícita de Gabi y una nota fechada en D28 (sin
+    reescribir el texto original).
+C2. common.py y D26.7 dicen que el filtro va "solo en Pydantic, nunca en un
+    CHECK". Lo esencial es lo segundo (una regex en SQL divergiría de la de
+    Python). Con la opción (b) de 4.4, la evaluación del resumen se hace en
+    services/ (Python, con los MISMOS patrones de common.py), no en un
+    validador de Pydantic que lanza error. Cambia la letra, no el motivo.
+C3. Nombre del campo: common.py dice "LeadCreate.resumen" y el plan del
+    Agente 2 (3.1) "campo opcional resumen". La pre-decisión 3 pide un solo
+    nombre: resumen_solicitud en la entrada, la columna y las respuestas. Se
+    corrige el comentario de common.py en B2.
+C4. P1, P2 y P3 ya los decidió Gabi el 2026-10-12 (Plan_Agente2_Calendar,
+    10.1). Aquí se VALIDAN con los datos de 2.2; no se vuelven a decidir.
+C5. RIESGO EN n8n (fuera del backend, sin verificar): la tool
+    guardar_datos_reforma monta el JSON pegando textos entre comillas
+    ("nombre": "{{ $fromAI(...) }}"). Si el resumen lleva unas comillas dobles
+    o un salto de línea y n8n no los escapa al rellenar el hueco, el cuerpo
+    deja de ser JSON válido: POST /leads responde 422 json_invalid sin nombrar
+    ningún campo y el lead ENTERO no se guarda. Ninguna opción del backend lo
+    evita: el cuerpo no llega a interpretarse. No se sabe si $fromAI escapa
+    esos caracteres; hay que comprobarlo en n8n con una prueba real (un
+    resumen con comillas y otro con un salto de línea) antes de publicar el
+    prompt. Propuesta para el contrato (5.6): construir ese campo con
+    JSON.stringify en vez de pegarlo entre comillas. Es el riesgo más alto de
+    todo el bloque (R3).
+C6. Con el prompt actual, un 422 que nombra un campo hace que el Agente 1
+    explique el error AL CLIENTE y le pida corregirlo: le hablaría de un
+    "resumen" que el cliente nunca escribió, en contra de su regla de no
+    enseñar nombres internos. Es la principal evidencia en contra de la
+    opción (a) de 4.4.
+C7. ReformaAviso lo comparten gate-avisos, la ficha y GET /leads/session. Si
+    el resumen fuera un campo de "reforma", saldría también por la sesión, al
+    Agente 2 (pre-decisión 6). Va en la RAIZ de las dos respuestas.
+C8. COLUMNAS_CASO: añadir ("resumen_solicitud", "l.resumen_solicitud") lo
+    lleva solo a gate-avisos y a la ficha; la sesión y la lista diaria eligen
+    por nombre y no lo ven. El comentario "Las 17 columnas" pasa a 18.
+C9. LeadCreateResponse gana un campo obligatorio (4.4 b): cambian
+    check_schemas y check_leads_endpoint_http.
+C10. leads.mensaje_original: 0 de 32 filas con valor (M1). Su nombre dice
+    "mensaje original", es decir, justo lo que D28.1 rechazó guardar (la
+    conversación, opción B). Reutilizarlo invita a llenarlo mal.
+C11. D28.1 dice "Cuándo: en el bloque del Agente 2, junto con D26.7 (misma
+    migración...)". Lo superó el plan del Agente 2 (10.2: rama 2, migración
+    propia). Solo se anota.
+
+
+4. PRE-DECISIONES DEL TUTOR
+================================================================
+4.1 DÓNDE SE GUARDA (pre-decisión 1; ya decidida, P1 de 10.1). Regla de Tres:
+  (a) Columna nueva leads.resumen_solicitud TEXT NULL + CHECK de longitud.
+      + Nombre que dice lo que es; un ADD COLUMN, solo expand (sin
+        reescritura de la tabla: columna NULL sin DEFAULT).
+      + Defensa doble como m2 con un CHECK sencillo sobre una columna.
+      - Una migración más (paso15) y mensaje_original sigue sin uso.
+  (b) Reutilizar leads.mensaje_original (0/32 con valor, M1).
+      + Sin migración de columna.
+      - El nombre dice "mensaje original" (la conversación, rechazada en
+        D28.1): engañoso de forma permanente (C10). Seguiría haciendo falta
+        una migración para el CHECK.
+  (c) Una clave más en datos_estructurados (JSONB, como m2, D3).
+      + Sin ADD COLUMN.
+      - datos_estructurados es "lo que llegó, inmutable" con los datos de la
+        reforma; el CHECK iría sobre una expresión JSONB (como
+        chk_leads_m2_rango), que garantiza el rango pero no la presencia; y
+        la lectura sería (l.datos_estructurados ->> 'resumen_solicitud'),
+        más frágil que una columna.
+  VALIDADA (a), con los datos: 32 leads, 0 con mensaje_original; ninguna fila
+  que migrar ni rellenar.
+
+4.2 OBLIGATORIO U OPCIONAL (pre-decisión 2; ya decidida, P2 de 10.1).
+  CONFIRMADO: opcional. "resumen_solicitud" puede faltar o ser null; el chat
+  PUBLICADO, que hoy no lo envía, sigue dando 201 desde el merge (prueba
+  CASO 4 y negativa N4). Leads antiguos: resumen_solicitud NULL (las 32 filas
+  de hoy, M1), y gate-avisos y la ficha devuelven null. No se rellenan
+  después: no hay de dónde sacarlos (la conversación no se guardó). El
+  "contract" de expand-contract (hacerlo obligatorio) NO se plantea en N0:
+  el prompt hará que el Agente 1 lo envíe siempre, pero el backend seguirá
+  aceptando su ausencia (un lead sin resumen es mejor que un lead perdido).
+
+4.3 LÍMITE Y NOMBRE (pre-decisión 3; el valor 300 ya decidido, P3 de 10.1).
+  - Nombre único: resumen_solicitud (entrada de POST /leads, columna
+    leads.resumen_solicitud, y clave en GET /gate-avisos y en la ficha).
+  - Límite: 300 caracteres (como texto_cliente). Recortados los espacios de
+    los extremos ANTES de medir. Python len() y Postgres char_length() cuentan
+    los dos puntos de código Unicode: dan lo mismo.
+  - Constante: una NUEVA, MAX_RESUMEN_SOLICITUD = 300, en common.py, y no
+    MAX_TEXTO_VISITA (P7). Mismo valor hoy, pero cosas distintas (una frase
+    sobre la cita frente al resumen del proyecto), cada una con su CHECK:
+    cambiar una no debe cambiar la otra sin querer.
+  - Defensa doble: la evaluación en Python (4.4) y el CHECK
+    chk_leads_resumen_solicitud_longitud, char_length entre 1 y 300. NULL
+    pasa (un CHECK solo rechaza lo FALSO), que es lo que se quiere.
+
+4.4 SI EL RESUMEN NO PASA EL FILTRO (pre-decisión 4). Regla de Tres:
+  (a) 422 que nombra el campo; el agente reescribe el resumen sin preguntar
+      al cliente (como D26.7 en /visits). Es lo que dicen D28.1 y el plan del
+      Agente 2 (C1).
+      + El texto que se guarda siempre lo escribió el agente; nada se pierde
+        si el agente obedece.
+      - El lead ENTERO queda sin guardar hasta que el agente acierte. El
+        prompt actual hace lo contrario de lo pedido: explica el error al
+        cliente y le pide corregirlo (C6); habrá que escribir una excepción y
+        un modelo de lenguaje la cumple de forma probabilística. Un bucle o
+        una confusión pierden el lead: rompe la prioridad de negocio.
+      - El 422 de Pydantic devuelve el texto completo en "input" (K3 del plan
+        del Agente 2): el teléfono que se quería apartar queda en la ejecución
+        de n8n.
+  (b) Guardar el lead con resumen_solicitud NULL y decirlo en la respuesta
+      (un campo nuevo, resumen_solicitud_estado, ver 5.1), con un [AVISO] en
+      stderr que NO repite el texto.
+      + El lead se guarda SIEMPRE, por diseño y no por obediencia del
+        modelo: cumple la prioridad de negocio de forma determinista.
+      + No hay texto rechazado en ningún "input" de 422 (K3 desaparece para
+        estos casos).
+      + El agente no tiene que hacer nada: el prompt solo le dice que no
+        comente ese campo al cliente.
+      - Ese lead se queda sin resumen (administración llama como hoy). Con el
+        prompt de 4.5 del plan del Agente 2 debería ser raro; se medirá
+        contando los resumen_solicitud NULL de leads con lead_token.
+      - Revisa D28.1 en el "rechazo 422" (C1) y cambia la letra de D26.7 (C2).
+  (c) Guardar el lead y recortar o limpiar el texto en el servidor
+      (sustituir el email o el teléfono por "[dato retirado]" y cortar en
+      300).
+      + Lead guardado y casi todo el resumen conservado.
+      - El servidor CAMBIA en silencio un texto que administración leerá como
+        si lo hubiera escrito el agente; cortar a 300 puede invertir el
+        sentido ("no quiere tocar los tabiques" -> "no quiere").
+      - La limpieza solo quita lo que los patrones detectan (R1 de D26.7):
+        da una falsa sensación de texto "limpio".
+  RECOMENDADA (b), pendiente de la decisión de Gabi (P1 de la sección 10).
+  Solo sigue dando 422 lo que es un error de FORMA de la integración, no de
+  contenido: un resumen_solicitud que no sea texto ni null (por ejemplo un
+  número). La tool lo declara 'string', así que no debería pasar.
+  Orden dentro de la evaluación (un solo motivo, el primero que falle):
+  vacío o solo espacios -> sin_resumen; más de 300 -> descartado_longitud;
+  forma de email -> descartado_email; forma de teléfono ->
+  descartado_telefono; si no, guardado (recortado).
+
+4.5 REPETICIÓN CON EL MISMO lead_token (pre-decisión 5). Regla que ya
+  existe (2.1): se devuelve el lead original y los datos nuevos se IGNORAN.
+  Se aplica igual al resumen: NO se sobrescribe ni se rellena, aunque el
+  original fuera NULL. resumen_solicitud_estado en la repetición describe lo
+  GUARDADO (guardado si hay texto, sin_resumen si es NULL), igual que status
+  da el estado ACTUAL de la oportunidad (P3). La evaluación del resumen nuevo
+  de una repetición se hace (va antes del INSERT) pero su resultado se
+  descarta, y no hay [AVISO]. Prueba: CASOS 9 y 10; negativa N6.
+
+4.6 DÓNDE SE VE (pre-decisión 6).
+  - GET /gate-avisos/{id} y GET /oportunidades/{id}/ficha: clave nueva
+    "resumen_solicitud" (texto o null) en la RAIZ de la respuesta, justo
+    después de "reforma". Se lee añadiendo ("resumen_solicitud",
+    "l.resumen_solicitud") a COLUMNAS_CASO (C8): un solo sitio para los dos.
+    NO dentro de ReformaAviso (C7).
+  - GET /llamadas-del-dia: NO lo lleva (D28.1, acumulación). Ninguna línea
+    del servicio ni del esquema del listado cambia. Se demuestra con el CASO
+    14 y con la negativa N2.
+  - GET /leads/session: NO lo lleva (minimización: el Agente 2 no lo
+    necesita en N0, P7 de 10.1). Nada cambia. CASO 15 y negativa N3.
+
+4.7 CONTRATOS PUBLICADOS (pre-decisión 7).
+  - WF2 (publicado) lee GET /gate-avisos por nombre de clave (2.1): una clave
+    más en la raíz no lo rompe. Hasta que el tutor cambie la plantilla, WF2
+    sigue igual y no enseña el resumen.
+  - El chat publicado lee la respuesta de POST /leads solo a través del
+    agente (la tool devuelve el JSON al modelo) y del If gate_HITL, que lee
+    creado y requiere_aprobacion de OTRA respuesta: una clave más no lo
+    rompe.
+  - Scripts con claves exactas que cambian, y los que no: 2.3.
+
+4.8 MIGRACIÓN paso15 (pre-decisión 8). El último aplicado es paso14b.
+  scripts/migraciones_ejecutadas/paso15_resumen_solicitud.py:
+    - Freno: sin --confirmo-paso15 no se conecta (código 2), como paso13b.
+    - Una sola transacción, con SET lock_timeout = '5s' (el ALTER TABLE pide
+      un bloqueo exclusivo de leads; si POST /leads de otro proceso lo
+      tuviera, espera como mucho 5 s y falla sin cambiar nada, en vez de
+      dejar en cola a todo el mundo).
+    - Idempotente: si la columna y el CHECK ya existen con la definición
+      esperada, lo dice y no toca nada; si existe solo una de las dos cosas o
+      con otra definición, se PARA sin tocar nada (estado inesperado).
+    - SQL: ALTER TABLE leads ADD COLUMN resumen_solicitud TEXT NULL;
+           ALTER TABLE leads ADD CONSTRAINT chk_leads_resumen_solicitud_longitud
+             CHECK (char_length(resumen_solicitud) BETWEEN 1 AND 300);
+      Una columna NULL sin DEFAULT no reescribe la tabla; el CHECK se valida
+      sobre las 32 filas (todas NULL: pasan).
+    - Imprime antes y después: columnas y restricciones de leads.
+  scripts/migraciones_ejecutadas/paso15_vuelta_atras.py (ESCRITA, SIN
+  EJECUTAR): DROP CONSTRAINT y DROP COLUMN, en una transacción, con su freno
+  --confirmo-vuelta-atras-paso15. Si alguna fila tiene resumen_solicitud con
+  valor, se PARA: borrar la columna borraría resúmenes reales; para eso haría
+  falta además --borrar-resumenes, y solo tras decirlo Gabi.
+  scripts/check_migracion_resumen_solicitud.py (verificación antes/después):
+    - Catálogo: la columna existe, es text, admite NULL, sin DEFAULT; el
+      CHECK existe con la definición exacta (pg_get_constraintdef).
+    - Comportamiento, dentro de UNA transacción que termina en ROLLBACK, cada
+      intento en su SAVEPOINT (gotcha de CLAUDE.md): un cliente y un lead
+      propios (email @example.com con un valor aleatorio de la ejecución) con
+      resumen NULL (pasa), 'x' (pasa), 300 caracteres (pasa), '' (CHECK lo
+      rechaza) y 301 (CHECK lo rechaza). Cada rechazo esperado lleva su rama
+      else con FALLO "la excepción se ha tragado".
+    - Antes de migrar FALLA (no hay columna): es su primera prueba en
+      negativo. Después, todo CORRECTO.
+    - Conexión abierta con ConexionSinCommit (regla del 2026-10-08), aunque
+      no pase la conexión a código de app/: así, la versión de ensayo de la
+      migración que ejecuta la N5 dentro de la misma transacción tampoco
+      puede confirmar nada. Su autoprueba S0 llama a commit() y exige
+      CommitProhibido, con la rama else.
+  Ensayo antes de aplicar (opción --ensayo <archivo de migración>): el
+  script ejecuta el SQL de ese archivo DENTRO de su transacción, comprueba y
+  hace ROLLBACK. Con paso15 correcto: control, todo CORRECTO sin haber
+  cambiado nada. Con una copia rota sin CHECK: la N5.
+  Después de aplicar: python scripts/dump_schema.py (docs/schema_actual.sql
+  regenerado) y check_schema_actual_ejecutable.
+  Las 4 preguntas (check_migracion_resumen_solicitud, también en ensayo):
+    (1) Escribe en clientes y leads, y en ensayo hace ALTER TABLE leads,
+        todo dentro de una transacción que termina en ROLLBACK.
+    (2) No pasa la conexión a app/; el SQL de ensayo corre en la misma
+        conexión ConexionSinCommit: no puede confirmar (CommitProhibido).
+    (3) Si se corta, Postgres deshace la transacción abierta (nada
+        confirmado). Lo comprueba el propio script en la siguiente ejecución:
+        cuenta los clientes con su dominio de prueba y la columna en el
+        catálogo, y el recuento de la sección 2.2 (32 leads, id_max 10304)
+        se repite al final de la fase 2.
+    (4) En ensayo, el ALTER TABLE bloquea leads mientras dura la transacción
+        (alrededor de un segundo): un POST /leads del uvicorn del 8000
+        esperaría. Por eso se ejecuta en la fase 2, con Docker/n8n cerrados
+        (nadie llama al 8000), y con lock_timeout. No toca datos reales.
+  Aplicar paso15 (la migración de verdad):
+    (1) Sí: cambia el esquema de leads (solo añade).
+    (2) No hay código bajo prueba.
+    (3) Una transacción: o todo o nada; la comprobación después la hace
+        check_migracion_resumen_solicitud.
+    (4) main sigue funcionando: no lee la columna, y sus INSERT llevan lista
+        de columnas (2.1). Se demuestra con los scripts de /leads,
+        gate-avisos y la ficha ejecutados sobre el código de main después de
+        migrar.
+
+4.9 PUERTOS (pre-decisión 9): 2.4. Script HTTP nuevo: 8034.
+
+4.10 FUERA DE ALCANCE (pre-decisión 10): todo lo de n8n (prompt del Agente
+  1, la tool, WF2, la página de la ficha); que el Agente 2 lea o amplíe el
+  resumen; guardar la conversación; C10 y C11 del plan del resumen de la
+  lista diaria; quitar el alias /gate-decisions; una fila en logs al
+  descartar un resumen (P5).
+
+
+5. CONTRATO NUEVO, CAMPO A CAMPO
+================================================================
+5.1 POST /leads
+  Entrada (LeadCreate, sigue extra="forbid"): los campos de siempre, más
+    resumen_solicitud   texto o null, OPCIONAL (si falta, null). Se recortan
+                        los espacios de los extremos; "" o solo espacios =
+                        null. Lo escribe el Agente 1: 1-3 frases sobre QUÉ
+                        quiere el cliente, sin datos de contacto.
+  Respuesta 201 (alta) y 200 (repetición): los 5 campos de siempre, más
+    resumen_solicitud_estado  uno de: "guardado", "sin_resumen",
+                        "descartado_longitud", "descartado_email",
+                        "descartado_telefono". Enum EstadoResumenSolicitud
+                        (app/schemas/leads.py). NUNCA repite el texto. En una
+                        repetición solo "guardado" o "sin_resumen" (4.5).
+  Códigos y orden de las comprobaciones (sin códigos nuevos):
+    1. 401 si falta X-Webhook-Secret o no coincide (antes de leer el cuerpo:
+       un cuerpo inválido sin cabecera sigue dando 401).
+    2. 422 de forma (Pydantic): los de siempre, y resumen_solicitud que no
+       sea texto ni null (loc ["body","resumen_solicitud"]).
+    3. Evaluación del resumen (services/): nunca rechaza; decide el estado.
+    4. Alta (201) o repetición (200).
+  El contenido del resumen no produce nunca un 422 ni un 500: el CHECK no
+  se alcanza porque la evaluación descarta antes lo que pasa de 300 (N8 lo
+  demuestra).
+5.2 GET /gate-avisos/{oportunidad_id}
+  Clave nueva en la raíz, después de "reforma":
+    resumen_solicitud   texto o null: leads.resumen_solicitud del lead de esa
+                        oportunidad, tal cual se guardó. null en los leads
+                        anteriores a este bloque o sin resumen.
+  Nada más cambia (autenticación, códigos, orden).
+5.3 GET /oportunidades/{oportunidad_id}/ficha: la misma clave, en el mismo
+  sitio y con el mismo origen (COLUMNAS_CASO).
+5.4 GET /llamadas-del-dia y GET /leads/session: SIN cambios de contrato.
+5.5 Adenda: fila 1 y 5.1 (POST /leads), filas 7 y 9 con notas en 5.6 y 5.9,
+  y una sección nueva 5.12 con este contrato y lo de 5.6.
+5.6 Lo que necesita n8n (contrato para el tutor; no se implementa aquí):
+  - Tool guardar_datos_reforma: un parámetro más, resumen_solicitud
+    ($fromAI, 'string'), construido de forma que unas comillas o un salto de
+    línea no rompan el JSON (C5; probarlo en n8n antes de publicar).
+  - Prompt del Agente 1 (prompts/agente1_captura.md y el nodo a la vez): 1-3
+    frases, hasta 300 caracteres, sobre lo que quiere el cliente; sin nombre,
+    email, teléfono, dirección ni datos de salud; no comentar al cliente el
+    campo resumen_solicitud_estado.
+  - WF2 y la página de la ficha: pintar el resumen con esc(), y "—" (o nada)
+    si es null; etiquetarlo como "Resumen del asistente" (R6).
+
+
+6. ARCHIVOS QUE CAMBIAN
+================================================================
+Bloque B1 (migración):
+  scripts/migraciones_ejecutadas/paso15_resumen_solicitud.py   (nuevo)
+  scripts/migraciones_ejecutadas/paso15_vuelta_atras.py        (nuevo)
+  scripts/check_migracion_resumen_solicitud.py                 (nuevo)
+  docs/schema_actual.sql                         (regenerado tras aplicar)
+Bloque B2 (código):
+  app/schemas/common.py: MAX_RESUMEN_SOLICITUD = 300; motivo_datos_de_contacto
+    (devuelve "email", "telefono" o None, sin lanzar), que pasa a usar
+    texto_sin_datos_de_contacto por dentro sin cambiar lo que hace (P6);
+    corrección del comentario "LeadCreate.resumen" (C3).
+  app/services/resumen_solicitud.py (nuevo, sin base de datos):
+    evaluar_resumen(texto) -> (texto recortado o None, EstadoResumenSolicitud).
+  app/schemas/leads.py: LeadCreate.resumen_solicitud;
+    EstadoResumenSolicitud; LeadCreateResponse.resumen_solicitud_estado.
+  app/services/leads_service.py: el INSERT lleva la columna; [AVISO] al
+    descartar (motivo y lead_id, nunca el texto); la repetición lee
+    l.resumen_solicitud para dar el estado.
+  app/services/datos_oportunidad.py: un par más en COLUMNAS_CASO.
+  app/schemas/aviso_gate.py y app/services/aviso_gate_service.py: la clave.
+  app/schemas/ficha_oportunidad.py y app/services/ficha_oportunidad_service.py:
+    la clave.
+  app/api/leads.py: sin cambios de código (solo, si hace falta, su
+    docstring).
+  Scripts: check_resumen_solicitud_service.py y check_resumen_solicitud_http.py
+    (nuevos); check_leads_endpoint_http, check_schemas, check_aviso_gate_http,
+    check_ficha_oportunidad_http y check_texto_agente_service (cambiados).
+Bloque D: docs/Adenda_Decisiones_N0_Endpoints_y_Excepciones.txt, CLAUDE.md,
+  nota fechada al final de docs/Decisiones_D28_...md y este plan (resultados
+  y hashes).
+NO cambian: listado_llamadas_service.py, listado_llamadas.py, la sesión
+  (get_lead_session y LeadSessionResponse), ReformaAviso, prompts/ y n8n/.
+Suite: 54 scripts hoy; 57 después (los tres nuevos).
+
+
+7. PRUEBAS
+================================================================
+Las cuentas exactas de cada script se fijan al escribirlo (B1, B2) y van al
+commit; lo previsto abajo es por casos.
+
+7.1 check_resumen_solicitud_service.py (nuevo, SIN base de datos)
+  S1. evaluar_resumen, un caso por comprobación: None, "", "  \n" ->
+      sin_resumen; un texto válido -> guardado e idéntico; "  texto  " ->
+      recortado; 300 caracteres -> guardado; 301 -> descartado_longitud;
+      "escribir a ana@correo.es" -> descartado_email; "llamar al 666 777
+      444" y "+34 666-777-444" -> descartado_telefono; "visita el 19/10/2026
+      a las 10:00" y "unos 12 m2 y 2 ventanas" -> guardado (sin falsos
+      positivos); email y teléfono a la vez -> descartado_email (orden); 301
+      con un email -> descartado_longitud (orden). 14 comprobaciones.
+  S2. Estructura (introspección de los modelos y ast):
+      LeadCreate.resumen_solicitud existe y NO es obligatorio;
+      LeadCreateResponse.resumen_solicitud_estado existe; AvisoGateResponse y
+      FichaOportunidadResponse tienen resumen_solicitud; ningún campo con
+      "resumen" en ReformaAviso, LeadSessionResponse (recorrido completo de
+      sus submodelos), SolicitudLlamada, LlamadaOportunidad, LlamadaVisita ni
+      ListadoLlamadasResponse; NOMBRES_SOLICITUD y NOMBRES_REFORMA_SESION sin
+      él; COLUMNAS_CASO con ("resumen_solicitud", "l.resumen_solicitud");
+      MAX_RESUMEN_SOLICITUD == 300 y evaluar_resumen sin ningún 300 escrito
+      (ast). Unas 11 comprobaciones.
+  Sin base de datos: las 4 preguntas no aplican.
+
+7.2 check_resumen_solicitud_http.py (nuevo, puerto 8034, uvicorn propio SIN
+  --reload, detenido por su PID del log comprobado con netstat)
+  CASO 1. Sin X-Webhook-Secret y con resumen_solicitud = 123: 401 (antes que
+          el 422).
+  CASO 2. resumen_solicitud = 123 con la cabecera: 422 que nombra el campo;
+          ningún lead con ese lead_token.
+  CASO 3. Resumen válido (con un marcador aleatorio de la ejecución): 201,
+          6 claves exactas, estado "guardado"; en la base de datos el texto
+          recortado.
+  CASO 4. Sin la clave (el cuerpo del chat publicado): 201, "sin_resumen",
+          NULL.
+  CASO 5. null explícito: 201, "sin_resumen", NULL.
+  CASO 6. Con email: 201, "descartado_email", NULL, el lead existe; el log
+          del uvicorn tiene el [AVISO] con el motivo y SIN el texto.
+  CASO 7. Con teléfono: lo mismo con "descartado_telefono".
+  CASO 8. 301 caracteres: 201, "descartado_longitud", NULL. 300: 201,
+          "guardado", char_length 300.
+  CASO 9. Repetición del token del CASO 3 con OTRO resumen válido: 200,
+          "guardado", el texto guardado es el ORIGINAL.
+  CASO 10. Repetición del token del CASO 4 con un resumen válido: 200,
+          "sin_resumen", sigue NULL.
+  CASO 11. Caso con Gate y resumen: POST /leads (cambios estructurales) +
+          POST /calculate-estimate (requiere_aprobacion true) + GET
+          /gate-avisos: 200, resumen_solicitud igual al guardado, en la raíz y
+          no en "reforma".
+  CASO 12. Ficha de esa oportunidad: el mismo resumen; ficha de la
+          oportunidad del CASO 4: null.
+  CASO 13. GET /gate-avisos de un caso con Gate SIN resumen: null.
+  CASO 14. GET /llamadas-del-dia: se retrasa 25 h el presupuesto PROPIO del
+          CASO 11 (UPDATE por id exacto) para que salga en
+          gates_sin_decision; su elemento no tiene ninguna clave con
+          "resumen" y el marcador no aparece en el JSON de la respuesta. Solo
+          se miran los elementos de las oportunidades propias (regla del
+          2026-10-12); lo demás, [INFO].
+  CASO 15. GET /leads/session del token del CASO 3: claves exactas de
+          siempre, sin "resumen", y el marcador no aparece.
+  Limpieza: solo las filas propias (clientes @example.com con el valor
+  aleatorio de la ejecución, y los ids sacados de ellos), y se comprueba que
+  quedan 0.
+  Las 4 preguntas:
+    (1) Sí: crea clientes, leads, oportunidades y presupuestos propios, y
+        retrasa SU presupuesto. Confirmados (POST /leads hace commit).
+    (2) No pasa ninguna conexión a app/: el código corre en su uvicorn, con
+        su pool.
+    (3) Si se corta, quedan filas propias, identificadas por el dominio y el
+        valor de la ejecución: la siguiente ejecución las cuenta al empezar
+        como [INFO] y las borra por id (solo las suyas). Mientras tanto, una
+        oportunidad propia con Gate retrasada podría salir en la lista diaria
+        real de WF3; como en los scripts del listado, el riesgo dura lo que
+        dura el script.
+    (4) No toca el 8000 (usa el 8034 y se para si está ocupado). Lee datos
+        reales en gate-avisos/listado pero solo comprueba los suyos.
+
+7.3 Scripts cambiados (recuento antes, sobre main; después, sobre la rama)
+  - check_leads_endpoint_http: 5 -> 6 claves; estado "sin_resumen" en su
+    alta (no envía el campo).
+  - check_schemas: LeadCreateResponse con el campo nuevo; LeadCreate con y
+    sin resumen_solicitud; resumen_solicitud = 123 rechazado.
+  - check_aviso_gate_http y check_ficha_oportunidad_http: CLAVES_RAIZ + 1, y
+    resumen_solicitud null en sus casos (no lo envían).
+  - check_texto_agente_service: casos de motivo_datos_de_contacto (P6), y los
+    de texto_sin_datos_de_contacto sin cambiar.
+  - Regresión sin cambios: check_create_lead_service, check_webhook_auth_http,
+    check_aviso_gate_service, check_ficha_oportunidad_service,
+    check_lead_session_http, check_listado_llamadas_http y _service, y (por
+    P6, que toca el filtro de visitas) TODOS los scripts que crean visitas
+    (regla del 2026-10-12): van en la suite completa.
+
+7.4 Pruebas en negativo (sobre COPIAS de app/ y scripts/, de una en una, con
+  los secretos cargados en el entorno por un lanzador, nunca copiados; cada
+  una con su comprobación de Kernel-Power 506/507). FALLOS previstos:
+  N1. Sin filtro D26.7 (evaluar_resumen no mira email ni teléfono):
+      service S1, 4 FALLOS (los dos de teléfono, el de email y el de
+      email+teléfono); HTTP CASOS 6 y 7 (estado y NULL de cada uno).
+  N2. Resumen en la lista diaria (añadido a NOMBRES_SOLICITUD y a
+      SolicitudLlamada): service S2, 2 FALLOS; HTTP CASO 14;
+      check_listado_llamadas_http, CLAVES_SOLICITUD en cada elemento propio.
+  N3. Resumen en /leads/session (metido en ReformaAviso, el error natural de
+      C7): service S2; HTTP CASOS 11 (en "reforma") y 15;
+      check_lead_session_http (CLAVES_REFORMA); check_aviso_gate_http y
+      check_ficha_oportunidad_http (CLAVES_REFORMA).
+  N4. Campo obligatorio (sin "= None"): service S2, 1 FALLO; HTTP CASO 4
+      (422 en vez de 201); y TODOS los scripts que hacen POST /leads sin el
+      campo (check_leads_endpoint_http, ...): es exactamente el chat publicado
+      roto.
+  N5. Límite sin CHECK: ensayo de check_migracion_resumen_solicitud con una
+      copia de paso15 sin el ADD CONSTRAINT: 3 FALLOS (la definición del CHECK
+      y los INSERT de '' y 301, que no fallan).
+  N6. Repetición que sobrescribe (UPDATE del resumen en la repetición): HTTP
+      CASOS 9 y 10.
+  N7. Resumen fuera de COLUMNAS_CASO (la clave sale siempre null): service S2,
+      1 FALLO; HTTP CASOS 11 y 12.
+  N8. Evaluación sin la comprobación de longitud: service S1 (301 y 301 con
+      email); HTTP CASO 8 recibe un 500 (el CHECK, segunda barrera, lo para):
+      demuestra a la vez que el CHECK funciona y que la primera barrera hace
+      falta.
+  N9. Opción (a) en vez de (b) (ValueError en Pydantic): HTTP CASOS 6, 7 y 8
+      (422 y ningún lead).
+  N10. [AVISO] que imprime el texto: HTTP CASO 6 (el log contiene el
+      marcador).
+  Control: la copia limpia da el mismo recuento que el código de la rama.
+
+7.5 Suite completa en UNA pasada (57 scripts), con la regla de uso
+  (enchufado, tapa abierta) y sin Kernel-Power 506/507 entre el inicio y el
+  fin; salida de los scripts de P4 revisada a mano; datos reales iguales
+  antes y después (SHA-256 por tabla de las filas con id <= id_base, como en
+  D33), salvo la columna nueva, que se compara aparte (32 NULL).
+
+
+8. RIESGOS Y LIMITACIONES
+================================================================
+R1. El filtro no detecta un nombre, una dirección ni datos de salud
+    escritos en prosa (R1 de D26.7). Lo cubre solo el prompt.
+R2. Falsos positivos ("referencia 123 456 789"): con (b), ese lead se queda
+    sin resumen, pero se guarda.
+R3. C5: comillas o saltos de línea en el resumen pueden romper el JSON de la
+    tool en n8n y perder el lead ENTERO, con cualquier opción del backend. Se
+    comprueba en n8n antes de publicar el prompt.
+R4. Con (b), un descarte deja rastro en la respuesta (que ve el agente y la
+    ejecución de n8n) y en stderr del uvicorn, no en logs (P5).
+R5. El agente podría comentar al cliente un estado "descartado_*": lo evita
+    el prompt (5.6).
+R6. El resumen lo escribe un modelo de lenguaje: puede resumir mal o añadir
+    algo que el cliente no dijo. Administración debe tratarlo como
+    orientativo; el email y la ficha lo etiquetan "Resumen del asistente".
+R7. RGPD: es un dato personal sobre el proyecto, con la misma retención que
+    el lead. No se copia en logs (POST /leads no escribe en logs), el
+    [AVISO] no lo repite y no viaja en la lista diaria.
+R8. La migración bloquea leads un instante (lock_timeout 5 s).
+R9. Los leads antiguos (32 hoy) quedan con NULL para siempre: WF2 y la ficha
+    deben pintar null sin romperse.
+R10. Sin tope en Pydantic (P4), un resumen enorme se acepta en la petición y
+    se descarta. El que llama está autenticado (WEBHOOK_SECRET).
+
+
+9. FUERA DE ALCANCE
+================================================================
+n8n (prompt del Agente 1, la tool, WF2, la página de la ficha); que el
+Agente 2 lea o amplíe el resumen (N1); guardar la conversación (rechazado en
+D28.1); C10 y C11 del plan del resumen de la lista diaria; quitar el alias
+/gate-decisions (bloque 5, otra rama); una fila en logs por descarte (P5);
+hacer el campo obligatorio (4.2).
+
+
+10. PREGUNTAS ABIERTAS PARA GABI (y el tutor)
+================================================================
+P1. ¿Qué pasa si el resumen no pasa el filtro? Recomendación: (b), guardar el
+    lead con resumen NULL y decirlo en la respuesta (4.4). Revisa D28.1 en el
+    "rechazo 422" (C1): si se acepta, nota fechada en D28 en el Bloque D.
+P2. ¿Campo de respuesta resumen_solicitud_estado con los 5 valores de 5.1,
+    o un simple booleano resumen_guardado? Recomendación: los 5 valores (dice
+    el motivo sin repetir el texto, y sirve para medir).
+P3. En una repetición, ¿el estado describe lo GUARDADO (guardado /
+    sin_resumen)? Recomendación: sí, como status (4.5).
+P4. ¿Tope técnico en Pydantic para el resumen (por ejemplo 5.000 caracteres
+    -> 422)? Recomendación: no; con (b) todo contenido se descarta sin perder
+    el lead, y el que llama está autenticado (R10).
+P5. ¿Una fila en logs al descartar un resumen (sin el texto)?
+    Recomendación: no en N0; basta con la respuesta y el [AVISO]. Se puede
+    medir después contando NULL en leads con lead_token.
+P6. ¿motivo_datos_de_contacto en common.py, que también usará el filtro de
+    visitas (un solo sitio), o llamar a los patrones directamente desde
+    evaluar_resumen sin tocar el filtro de visitas? Recomendación: la
+    función compartida; obliga a la regresión de TODOS los scripts que crean
+    visitas, que ya va en la suite completa.
+P7. ¿Constante nueva MAX_RESUMEN_SOLICITUD = 300 o reutilizar
+    MAX_TEXTO_VISITA? Recomendación: nueva (4.3).
+P8. ¿paso15 se aplica en esta rama, antes de B2 (como paso12 y paso13), y no
+    después del merge? Recomendación: sí. Es solo expand y main no lee la
+    columna: se demuestra con los scripts de main después de migrar.
+P9. ¿La clave va en la raíz de gate-avisos y de la ficha, después de
+    "reforma"? Recomendación: sí (C7).
+
+
+11. BLOQUES
+================================================================
+A.  Este plan. Commit solo del plan, push, [PARA].
+B1. Migración, fase 1 (con Docker/n8n abiertos): paso15, su vuelta atrás y
+    check_migracion_resumen_solicitud, comentados línea a línea y medidos;
+    ast.parse; commit "SIN ejecutar"; push; [PARA].
+B1-fase 2 (cuando Gabi lo diga; memoria >= 1,5 GB, sin chrome, msedge ni
+    docker/vmmem, Kernel-Power 506/507): ensayo con paso15 (control) y con
+    la copia rota (N5); check_migracion_resumen_solicitud ANTES (FALLA);
+    [PARA] con la frase LITERAL "confirmo la migración paso15"; aplicar;
+    check DESPUÉS (todo CORRECTO); scripts de /leads, gate-avisos y la ficha
+    sobre el código de main (siguen pasando); dump_schema y
+    check_schema_actual_ejecutable; commit; push; [PARA].
+B2. Código y scripts de 6 y 7, fase 1: comentados, medidos (sentencias en
+    tramos de más de 4 sin comentario, recuento en el mensaje), ast.parse;
+    commit "SIN ejecutar"; push; [PARA].
+C.  Fase 2: recuentos ANTES (main) y DESPUÉS (rama) de 7.3; 7.1 y 7.2; N1-N10
+    de una en una sobre copias; suite completa en una pasada; datos reales
+    iguales; commit con recuentos y SHA-256 de los scripts del scratchpad;
+    push; [PARA].
+D.  Documentación: Adenda (fila 1, 5.1, notas en 5.6 y 5.9, sección 5.12),
+    CLAUDE.md, nota fechada en D28 y resultados en este plan; commit; push;
+    y los comandos de merge para Gabi (git merge --ff-only), que NO ejecuta
+    Claude.
