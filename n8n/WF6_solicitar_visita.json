@@ -1,0 +1,525 @@
+{
+  "name": "WF6_solicitar_visita",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "lead_token"
+            },
+            {
+              "name": "oportunidad_id",
+              "type": "number"
+            },
+            {
+              "name": "tipo_reforma"
+            },
+            {
+              "name": "fecha"
+            },
+            {
+              "name": "hora"
+            },
+            {
+              "name": "texto_cliente"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -896,
+        112
+      ],
+      "id": "a404fc4a-c2a9-4bce-ab4f-c48d07661456",
+      "name": "Al ser llamado"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/visits",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_token: $json.lead_token, fecha: $json.fecha, hora: $json.hora, texto_cliente: $json.texto_cliente }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -672,
+        112
+      ],
+      "id": "52f65f58-5b31-4a69-8cfe-0f27f337bb81",
+      "name": "pedir_visita",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gTDaybyghgymxX1C",
+          "name": "X-Webhook-Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF6_solicitar_visita · Preparar las llamadas a WF5 (D33, opción A). 2026-10-15.\n// Lee la respuesta de POST /visits y decide qué copiar al calendario:\n//   sustituye_a                -> WF5 'borrar' la solicitud anterior (el cliente cambió de día)\n//   visita en 'solicitada'     -> WF5 'guardar' como PENDIENTE (morado)\n// Un 200 con la visita ya 'confirmada' no se copia: su evento ya es verde y lleva\n// el nombre real; reescribirlo pondría \"Solicitud del chat\" en el título.\n// El título no lleva el nombre: este flujo no tiene la llave de administración\n// (X-Gate-Secret) y el Agente 2 nunca debe tenerla cerca. Al confirmar, el\n// formulario actualiza el MISMO evento con el nombre real.\n// Salida: 1 elemento por llamada a WF5, o { sin_calendario: true }.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\nconst resp = $('pedir_visita').first().json;          // respuesta completa del backend\nconst ent = $('Al ser llamado').first().json;         // lo que mandó el agente (y n8n)\nconst estado = resp.statusCode;                       // 201, 200, 409, 422...\nconst b = resp.body ?? {};                            // el cuerpo (\"?? {}\": vacío si no hay)\n\n// Sin solicitud registrada: nada que copiar.\nif ((estado !== 201 && estado !== 200) || !b.visita_id) return [{ json: { sin_calendario: true } }];\n\n// Lo común: título genérico, tipo de reforma y oportunidad (para el enlace a la ficha).\nconst comun = { nombre: 'Solicitud del chat', tipo_reforma: ent.tipo_reforma ?? '', oportunidad_id: ent.oportunidad_id };\nconst llamadas = [];                                  // en orden: primero borrar, después guardar\n// 1. La solicitud anterior que el backend ha cancelado al sustituirla.\nif (b.sustituye_a) {\n  llamadas.push({ accion: 'borrar', visita_id: b.sustituye_a, estado_visita: '', inicio: '', fin: '', ...comun });\n}\n// 2. La solicitud nueva (o repetida), solo si sigue pendiente. Inicio y fin, del backend.\nif (b.estado === 'solicitada') {\n  llamadas.push({ accion: 'guardar', visita_id: b.visita_id, estado_visita: 'solicitada',\n                  inicio: b.fecha_propuesta ?? '', fin: b.fecha_fin_visita ?? '', ...comun });\n}\nif (llamadas.length === 0) return [{ json: { sin_calendario: true } }];\n// Un elemento por llamada: llamar_calendario (modo \"each\") llama a WF5 una vez por cada uno.\nreturn llamadas.map((j) => ({ json: j }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        112
+      ],
+      "id": "4ee4d511-3c73-424f-b444-ee40de3c9a27",
+      "name": "preparar_calendario"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "0a0085fd-6db2-457e-8c7f-1a095f26503a",
+              "leftValue": "={{ $json.sin_calendario !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -224,
+        112
+      ],
+      "id": "15c62241-c8d0-42d0-ad8f-ede9827abc8f",
+      "name": "necesita_calendario"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "hJQF6yGml9qaUDKf",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/hJQF6yGml9qaUDKf",
+          "cachedResultName": "WF5_calendario_visita"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "accion": "={{ $json.accion }}",
+            "visita_id": "={{ $json.visita_id }}",
+            "estado_visita": "={{ $json.estado_visita }}",
+            "inicio": "={{ $json.inicio }}",
+            "fin": "={{ $json.fin }}",
+            "nombre": "={{ $json.nombre }}",
+            "tipo_reforma": "={{ $json.tipo_reforma }}",
+            "oportunidad_id": "={{ $json.oportunidad_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "accion",
+              "displayName": "accion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "visita_id",
+              "displayName": "visita_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "estado_visita",
+              "displayName": "estado_visita",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "inicio",
+              "displayName": "inicio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "fin",
+              "displayName": "fin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nombre",
+              "displayName": "nombre",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "tipo_reforma",
+              "displayName": "tipo_reforma",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a4ea102a-8967-4e37-b465-c66659405668",
+      "name": "llamar_calendario",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF6_solicitar_visita · Respuesta para el agente y ¿aviso técnico? 2026-10-15.\n// Recibe de tres sitios (se sabe cuál con $prevNode.name):\n//   pedir_visita         -> su salida de ERROR: el backend no respondió\n//   necesita_calendario  -> no había nada que copiar al calendario\n//   llamar_calendario    -> 1 resultado de WF5 por llamada (o { error } si WF5 no se ejecutó)\n// Salida (1 elemento): { respuesta, aviso, nodo_fallo, mensaje_error }\n//   respuesta: lo ÚNICO que verá el agente. Sin ids internos, sin importes y sin\n//              el \"input\" de los 422 (podría repetir el texto con datos del cliente).\n//   aviso:     true si hay que avisar al técnico (WF4). Si WF5 se ejecutó y falló,\n//              ya avisó él: aquí no se avisa otra vez.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// Corregido 2026-10-15 (prueba 98): $('pedir_visita').first(0), ver abajo.\n// ---------------------------------------------------------------------------\nconst origen = $prevNode.name;\n\n// Texto de un error de n8n sin el objeto entero.\nfunction textoError(e) {\n  if (!e) return 'sin detalle';\n  if (typeof e === 'string') return e;\n  const partes = [e.code, e.message, e.description].filter((x) => typeof x === 'string' && x.trim() !== '');\n  return partes.length > 0 ? partes.join(' · ') : 'error sin texto';\n}\n\nlet respuesta;                 // para el agente\nlet aviso = false;             // ¿avisar al técnico?\nlet nodo_fallo = '';           // qué paso falló (para el aviso)\nlet mensaje_error = '';        // qué pasó (para el aviso, sin datos del cliente)\n\nif (origen === 'pedir_visita') {\n  // El backend no respondió (red, uvicorn parado...).\n  respuesta = { resultado: 'no_disponible' };\n  aviso = true; nodo_fallo = 'pedir_visita';\n  mensaje_error = `Sin respuesta del backend en POST /visits: ${textoError($input.first().json.error)}`;\n} else {\n  // first(0): la salida 0 (respuesta) de pedir_visita. Sin el 0, n8n elegiría la\n  // salida por la que este nodo está conectado a pedir_visita, que es la de ERROR\n  // (vacía): eso rompió la prueba 98 (workflow-data-proxy.ts, n8n 2.16.1).\n  const r = $('pedir_visita').first(0).json;          // la respuesta del backend\n  const estado = r.statusCode;\n  const b = r.body ?? {};\n  const d = b.detail;                                  // los errores vienen en \"detail\"\n  if (estado === 201 || estado === 200) {\n    // Registrada. fecha_propuesta: \"2026-10-23T09:45:00+02:00\" -> fecha y hora de Madrid.\n    const fp = String(b.fecha_propuesta ?? '');\n    respuesta = { resultado: 'solicitud_registrada', estado_visita: b.estado,\n                  fecha: fp.slice(0, 10), hora: fp.slice(11, 16),\n                  sustituye_otra_solicitud: b.sustituye_a != null,\n                  ya_estaba_registrada: b.creado === false };\n  } else if (estado === 422 && Array.isArray(d)) {\n    // 422 de formato (Pydantic): solo el campo y el problema, nunca el \"input\".\n    respuesta = { resultado: 'error', motivo: 'datos_mal_formados',\n                  campos: d.map((x) => ({ campo: (x.loc ?? []).slice(-1)[0] ?? '', problema: x.msg ?? '' })) };\n  } else if (d && typeof d === 'object' && typeof d.motivo === 'string' && estado !== 503) {\n    // Error de negocio (404, 409, 422 de fecha): motivo y mensaje del backend.\n    respuesta = { resultado: 'error', motivo: d.motivo, mensaje: d.mensaje ?? '' };\n    if (Array.isArray(d.huecos_libres)) respuesta.huecos_libres = d.huecos_libres;\n    if (d.horas_validas) respuesta.horas_validas = d.horas_validas;\n  } else {\n    // 401, 500, 503 u otra respuesta: fallo técnico.\n    respuesta = { resultado: 'no_disponible' };\n    aviso = true; nodo_fallo = 'pedir_visita';\n    mensaje_error = `POST /visits respondió ${estado}${d && d.motivo ? ` (${d.motivo})` : ''}.`;\n  }\n\n  // El calendario: solo hace falta avisar aquí si WF5 NO llegó a ejecutarse.\n  if (origen === 'llamar_calendario') {\n    const pedidas = $('preparar_calendario').all().map((i) => i.json);\n    const res = $input.all().map((i) => i.json);\n    const falloLlamada = res.length !== pedidas.length || res.some((x) => typeof x.ok !== 'boolean');\n    if (falloLlamada) {\n      aviso = true; nodo_fallo = 'llamar_calendario';\n      mensaje_error = `WF5 no se pudo ejecutar (${res.length} de ${pedidas.length} respuestas): ` +\n        res.map((x) => textoError(x.error)).join(' | ');\n    }\n  }\n}\nreturn [{ json: { respuesta, aviso, nodo_fallo, mensaje_error } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        112
+      ],
+      "id": "aeb46544-b782-483f-9973-829ff702b8c4",
+      "name": "evaluar"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ab7e9e6e-3b13-4278-b7ac-dd411054fe3b",
+              "leftValue": "={{ $json.aviso === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        112
+      ],
+      "id": "2ceaeb48-4355-48fc-b346-674d1ad7d49a",
+      "name": "hay_aviso"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF6_solicitar_visita · Preparar el aviso técnico (WF4). 2026-10-15.\n// RGPD: ni nombre ni texto del cliente; solo el paso, el código y la oportunidad.\n// Mode: Run Once for All Items.\n// ---------------------------------------------------------------------------\nconst r = $input.first().json;                                   // la salida de evaluar\nlet oportunidad_id = null;                                       // de quien nos llamó\ntry { oportunidad_id = $('Al ser llamado').first().json.oportunidad_id ?? null; } catch (e) { oportunidad_id = null; }\nreturn [{ json: {\n  flujo: $workflow.name,                 // este subflujo\n  nodo: r.nodo_fallo,                    // el paso que ha fallado\n  mensaje_error: r.mensaje_error,        // qué ha pasado\n  oportunidad_id,                        // para buscar el caso\n  ejecucion_id: String($execution.id),   // para buscar la ejecución\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "c485a892-9600-45b7-aa30-44576262fcc2",
+      "name": "preparar_aviso"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "jVVsWYknS0DDKhaO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jVVsWYknS0DDKhaO",
+          "cachedResultName": "WF4_aviso_tecnico"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "oportunidad_id": "={{ $json.oportunidad_id }}",
+            "flujo": "={{ $json.flujo }}",
+            "nodo": "={{ $json.nodo }}",
+            "mensaje_error": "={{ $json.mensaje_error }}",
+            "ejecucion_id": "={{ $json.ejecucion_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "flujo",
+              "displayName": "flujo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nodo",
+              "displayName": "nodo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "ejecucion_id",
+              "displayName": "ejecucion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        896,
+        0
+      ],
+      "id": "379a5451-ea2c-4e6e-a3ee-2fd507e543f4",
+      "name": "llamar_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF6_solicitar_visita · Devolver al agente SOLO la respuesta preparada. 2026-10-15.\n// La tool \"Call n8n Workflow Tool\" entrega al agente el JSON del primer elemento\n// del último nodo (comprobado en el código de n8n 2.16.1, WorkflowToolService).\n// Mode: Run Once for All Items.\n// ---------------------------------------------------------------------------\nreturn [{ json: $('evaluar').first().json.respuesta }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        112
+      ],
+      "id": "fb10afc1-99b4-4021-b75c-d748e3b9d882",
+      "name": "devolver"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Al ser llamado": {
+      "main": [
+        [
+          {
+            "node": "pedir_visita",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pedir_visita": {
+      "main": [
+        [
+          {
+            "node": "preparar_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "evaluar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_calendario": {
+      "main": [
+        [
+          {
+            "node": "necesita_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "necesita_calendario": {
+      "main": [
+        [
+          {
+            "node": "llamar_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "evaluar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "llamar_calendario": {
+      "main": [
+        [
+          {
+            "node": "evaluar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "evaluar": {
+      "main": [
+        [
+          {
+            "node": "hay_aviso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hay_aviso": {
+      "main": [
+        [
+          {
+            "node": "preparar_aviso",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "devolver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_aviso": {
+      "main": [
+        [
+          {
+            "node": "llamar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "llamar_aviso_tecnico": {
+      "main": [
+        [
+          {
+            "node": "devolver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "XyWcmtuXIy3yT4eY",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "id": "IGRqzTq3tzzWruOb",
+  "tags": []
+}
