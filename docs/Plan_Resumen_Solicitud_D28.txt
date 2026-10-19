@@ -430,6 +430,9 @@ C11. D28.1 dice "Cuándo: en el bloque del Agente 2, junto con D26.7 (misma
   - Tool guardar_datos_reforma: un parámetro más, resumen_solicitud
     ($fromAI, 'string'), construido de forma que unas comillas o un salto de
     línea no rompan el JSON (C5; probarlo en n8n antes de publicar).
+    REQUISITO (nota 2026-10-19, lo asume el tutor en n8n): el cuerpo de la
+    tool tiene que ser JSON válido con CUALQUIER texto en sus campos libres.
+    Afecta también hoy a nombre, email y telefono, no solo al resumen.
   - Prompt del Agente 1 (prompts/agente1_captura.md y el nodo a la vez): 1-3
     frases, hasta 300 caracteres, sobre lo que quiere el cliente; sin nombre,
     email, teléfono, dirección ni datos de salud; no comentar al cliente el
@@ -698,3 +701,34 @@ D.  Documentación: Adenda (fila 1, 5.1, notas en 5.6 y 5.9, sección 5.12),
     CLAUDE.md, nota fechada en D28 y resultados en este plan; commit; push;
     y los comandos de merge para Gabi (git merge --ff-only), que NO ejecuta
     Claude.
+
+
+12. NOTA 2026-10-19: RESPUESTAS DE GABI Y DEL TUTOR AL BLOQUE A
+================================================================
+P1 = (b): el lead se guarda con resumen_solicitud NULL y se dice en
+     resumen_solicitud_estado. D28.1 queda REVISADA en el "rechazo 422": nota
+     fechada en D28 en el Bloque D, citando C1 y C6, sin reescribir el texto
+     original.
+P2 = los 5 valores. P3 = sí (la repetición describe lo guardado). P4 = no
+     (sin tope en Pydantic). P5 = no en N0 (sin fila en logs).
+P6 = la función compartida en common.py, con la regresión de TODOS los
+     scripts que crean visitas.
+P7 = constante nueva MAX_RESUMEN_SOLICITUD = 300.
+P8 = sí: paso15 en esta rama, antes de B2, solo con la confirmación literal
+     de Gabi ("confirmo la migración paso15").
+P9 = sí, en la raíz de gate-avisos y de la ficha.
+C5 lo asume el tutor en n8n; queda como REQUISITO en 5.6.
+
+Bloque B1, fase 1 (2026-10-19, SIN ejecutar nada contra la base de datos):
+  - scripts/migraciones_ejecutadas/paso15_resumen_solicitud.py: las órdenes en
+    la constante SENTENCIAS (SET LOCAL lock_timeout, ADD COLUMN, ADD
+    CONSTRAINT) y la ejecución en main(), solo con __name__ == "__main__",
+    para que el ensayo pueda leer las órdenes sin aplicarlas.
+  - scripts/migraciones_ejecutadas/paso15_vuelta_atras.py.
+  - scripts/check_migracion_resumen_solicitud.py, con --ensayo <archivo>.
+    Defensa añadida al escribirlo: el ensayo se niega a ejecutar una orden con
+    COMMIT, END o ROLLBACK escritos en el SQL, porque confirmaría sin pasar
+    por ConexionSinCommit.commit().
+  Recuentos previstos (sin ejecutar todavía): sin migrar, 2/12 (S0 y "nada
+  queda"); ensayo con paso15, 13/13; ensayo con la copia sin ADD CONSTRAINT
+  (N5), 10/13 (el CHECK, "" y 301); después de migrar, 12/12.
