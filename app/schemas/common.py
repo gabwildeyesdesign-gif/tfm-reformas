@@ -48,8 +48,11 @@ class TipoReforma(str, Enum):
     # A la izquierda, el NOMBRE con el que se usa desde Python
     # (TipoReforma.BANO). A la derecha, el VALOR real que viaja por el
     # JSON y que se guarda en la base de datos.
+    # Obras en el baño y en la cocina (enteras o parciales).
     BANO = "bano"
     COCINA = "cocina"
+    # Reforma de toda la vivienda, y trabajos generales que no son de una
+    # sola estancia (pintura, electricidad o fontanería).
     INTEGRAL_VIVIENDA = "integral_vivienda"
     PARCIAL_ACABADOS = "parcial_acabados"
 
@@ -252,6 +255,20 @@ MAX_LEAD_TOKEN = 100
 # seguro.
 MAX_TEXTO_VISITA = 300
 
+# Longitud máxima de leads.resumen_solicitud: el resumen corto que escribe
+# el Agente 1 sobre QUÉ quiere el cliente (D28.1). Mismo valor que
+# MAX_TEXTO_VISITA hoy, pero es OTRA constante a propósito (P7 del plan
+# docs/Plan_Resumen_Solicitud_D28.txt): son textos distintos, cada uno con
+# su CHECK, y cambiar uno no debe cambiar el otro sin querer.
+#
+# Defensa doble: el mismo valor está en el CHECK
+# chk_leads_resumen_solicitud_longitud (migración paso15, 1..300). Si se
+# cambia aquí, hay que cambiarlo también allí. A diferencia de
+# MAX_TEXTO_VISITA, NO se aplica en Pydantic con un 422: un resumen más
+# largo se descarta y el lead se guarda igual (P1 = b del plan; ver
+# app/services/resumen_solicitud.py).
+MAX_RESUMEN_SOLICITUD = 300
+
 # Longitud máxima de decisiones_gate.informe: lo que anota administración
 # tras la llamada al cliente en un caso de Gate (POST /gate-decisions). Es
 # más largo que el texto de una visita porque es un resumen de una
@@ -334,8 +351,11 @@ def texto_sin_espacios_en_los_extremos(valor):
 # libre los esparce por sitios que no los esperan. Este filtro los rechaza
 # con un 422 y el agente reescribe el texto sin ellos.
 #
-# Vive aquí, y no en visits.py, porque la rama 2 del plan lo reutilizará
-# para el resumen de la solicitud (LeadCreate.resumen): un solo sitio.
+# Vive aquí, y no en visits.py, porque lo reutiliza también el resumen de
+# la solicitud (LeadCreate.resumen_solicitud, D28.1): un solo sitio. Las
+# visitas lo usan con 422 (texto_sin_datos_de_contacto); el resumen, sin
+# 422: si tiene un dato de contacto, se descarta y el lead se guarda igual
+# (motivo_datos_de_contacto, P1 = b de docs/Plan_Resumen_Solicitud_D28.txt).
 #
 # Solo en Pydantic, nunca en un CHECK: una expresión regular escrita en SQL
 # divergiría con el tiempo de la de Python (P3 del plan).
@@ -390,6 +410,31 @@ MENSAJE_TELEFONO_EN_TEXTO = (
 )
 
 
+# Los dos motivos que devuelve motivo_datos_de_contacto (textos fijos).
+MOTIVO_EMAIL = "email"
+MOTIVO_TELEFONO = "telefono"
+
+
+# El detector, SIN lanzar error: lo usan el filtro de visitas (aquí debajo)
+# y la evaluación del resumen (app/services/resumen_solicitud.py).
+def motivo_datos_de_contacto(valor):
+    """
+    Dice qué dato de contacto tiene el texto: MOTIVO_EMAIL, MOTIVO_TELEFONO
+    o None si no tiene ninguno. No lanza nada: cada uno decide qué hacer.
+    El email se mira antes que el teléfono: si hay los dos, se dice email.
+    """
+    # re.search busca el patrón en cualquier punto del texto.
+    if PATRON_EMAIL_EN_TEXTO.search(valor):
+        # Forma de email.
+        return MOTIVO_EMAIL
+    # Igual con la forma de teléfono.
+    if PATRON_TELEFONO_EN_TEXTO.search(valor):
+        # Forma de teléfono.
+        return MOTIVO_TELEFONO
+    # Ninguno de los dos.
+    return None
+
+
 # El filtro: lo llama VisitaCreate desde un @field_validator (visits.py).
 def texto_sin_datos_de_contacto(valor):
     """
@@ -397,14 +442,18 @@ def texto_sin_datos_de_contacto(valor):
     ValueError (que Pydantic convierte en un 422 que nombra el campo).
     Se llama DESPUÉS de que Pydantic haya comprobado el tipo y la longitud,
     así que valor ya es un str recortado. Devuelve el texto sin tocar.
+
+    Desde el 2026-10-20 (P6 del plan del resumen) pregunta al detector
+    motivo_datos_de_contacto; el comportamiento no cambia: mismo orden
+    (email antes que teléfono) y mismos mensajes.
     """
-    # re.search busca el patrón en cualquier punto del texto. Si encuentra
-    # un email, se rechaza con su mensaje (se mira antes que el teléfono:
-    # si hay los dos, basta con un mensaje).
-    if PATRON_EMAIL_EN_TEXTO.search(valor):
+    # Qué dato de contacto tiene, si tiene alguno.
+    motivo = motivo_datos_de_contacto(valor)
+    # Un email: se rechaza con su mensaje.
+    if motivo == MOTIVO_EMAIL:
         raise ValueError(MENSAJE_EMAIL_EN_TEXTO)
-    # Igual con la forma de teléfono.
-    if PATRON_TELEFONO_EN_TEXTO.search(valor):
+    # Un teléfono: igual, con el suyo.
+    if motivo == MOTIVO_TELEFONO:
         raise ValueError(MENSAJE_TELEFONO_EN_TEXTO)
     # Sin datos de contacto: el texto se devuelve tal cual.
     return valor

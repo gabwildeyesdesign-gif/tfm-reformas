@@ -185,6 +185,10 @@ class FichaOportunidadResponse(BaseModel):
     # los mismos objetos que GET /gate-avisos.
     contacto: ContactoAviso
     reforma: ReformaAviso
+    # El resumen del Agente 1 (leads.resumen_solicitud, D28.1), o null. La
+    # misma clave y en el mismo sitio que en GET /gate-avisos: en la raíz,
+    # no en "reforma" (ver aviso_gate.py; P9 del plan del resumen).
+    resumen_solicitud: str | None = Field(description="Resumen del asistente sobre lo que quiere el cliente (o null)")
     # Las rutas de las fotos tal como se guardaron (P5, opción a).
     fotos: list[str] = Field(description=f"Rutas de las fotos del lead (0 a {MAX_FOTOS_LEAD})")
     # null si la oportunidad todavía no tiene presupuesto.

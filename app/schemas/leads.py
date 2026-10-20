@@ -34,6 +34,9 @@ import re
 # tienen representación exacta.
 from decimal import Decimal
 
+# Enum: el conjunto cerrado de valores de resumen_solicitud_estado.
+from enum import Enum
+
 # Import completo (app.schemas.common) y no relativo (.common): así, al
 # leer cualquier línea de abajo, se ve exactamente de qué archivo del
 # proyecto sale cada nombre, sin tener que deducirlo.
@@ -71,6 +74,31 @@ _DECORACION_TELEFONO = re.compile(r"[\s\-.()]")
 # un teléfono escrito con esos símbolos pasaría la validación y llegaría
 # a la base de datos. [0-9] son exactamente los diez dígitos de siempre.
 _FORMATO_TELEFONO = re.compile(r"\+?[0-9]{9,15}")
+
+
+class EstadoResumenSolicitud(str, Enum):
+    """
+    Qué ha pasado con el resumen de la solicitud en POST /leads (D28.1; P1 =
+    b y P2 de docs/Plan_Resumen_Solicitud_D28.txt, secciones 4.4, 5.1 y 12).
+
+    El resumen NUNCA provoca un 422 ni hace perder el lead: si no pasa el
+    filtro, el lead se guarda con resumen_solicitud NULL y este valor dice
+    por qué. Nunca se repite el texto (podría llevar un dato de contacto).
+
+    (str, Enum): cada valor es también un texto normal, como TipoReforma.
+    """
+
+    # Se guardó (recortados los espacios de los extremos).
+    GUARDADO = "guardado"
+    # No llegó (ausente, null, vacío o solo espacios), o, en una repetición,
+    # el lead original no tiene resumen.
+    SIN_RESUMEN = "sin_resumen"
+    # Más de MAX_RESUMEN_SOLICITUD caracteres: no se guardó.
+    DESCARTADO_LONGITUD = "descartado_longitud"
+    # Tenía forma de email: no se guardó.
+    DESCARTADO_EMAIL = "descartado_email"
+    # Tenía forma de teléfono (9 o más cifras seguidas): no se guardó.
+    DESCARTADO_TELEFONO = "descartado_telefono"
 
 
 class PhotoUploadSlot(BaseModel):
@@ -228,6 +256,21 @@ class LeadCreate(BaseModel):
     # que aplicar exactamente las mismas reglas.
     lead_token: str = Field(min_length=MIN_LEAD_TOKEN, max_length=MAX_LEAD_TOKEN)
 
+    # Resumen corto de lo que quiere el cliente, escrito por el Agente 1
+    # (D28.1). OPCIONAL (P2 del plan del Agente 2 y 4.2 de
+    # docs/Plan_Resumen_Solicitud_D28.txt): "= None" hace que pueda faltar,
+    # así el chat publicado, que todavía no lo envía, sigue dando 201.
+    #
+    # Aquí SOLO se comprueba el tipo (texto o null; un número da 422, que
+    # sería un error de la integración). Ni la longitud ni los datos de
+    # contacto dan 422: los evalúa app/services/resumen_solicitud.py y, si
+    # no pasan, el lead se guarda con resumen NULL (P1 = b; sin tope en
+    # Pydantic, P4).
+    resumen_solicitud: str | None = Field(
+        default=None,
+        description="Resumen de lo que quiere el cliente (opcional; si no pasa el filtro, no se guarda)",
+    )
+
     # ------------------------------------------------------------------
     # Validación del email: todo a minúsculas
     # ------------------------------------------------------------------
@@ -289,6 +332,7 @@ class LeadCreate(BaseModel):
                 "teléfono no válido: tras quitar espacios, guiones, puntos "
                 "y paréntesis debe quedar un '+' opcional y de 9 a 15 dígitos"
             )
+        # Válido: se guarda el número ya limpio ("+34666777444").
         return limpio
 
 
@@ -302,6 +346,7 @@ class LeadCreateResponse(BaseModel):
     default nextval('..._id_seq'). No son UUID.
     """
 
+    # Los ids del lead y del cliente (nuevo o reutilizado por su email).
     lead_id: int
     cliente_id: int
 
@@ -355,6 +400,13 @@ class LeadCreateResponse(BaseModel):
     # Sin valor por defecto: es obligatorio, para que services/ tenga que
     # decidirlo siempre de forma explícita.
     creado: bool
+
+    # Qué ha pasado con el resumen (EstadoResumenSolicitud, arriba). En un
+    # alta: guardado, sin_resumen o uno de los tres descartado_*. En una
+    # repetición describe lo GUARDADO en el lead original (guardado o
+    # sin_resumen, P3): el resumen nuevo se ignora, como los demás datos.
+    # Obligatorio, como creado. Nunca lleva el texto del resumen.
+    resumen_solicitud_estado: EstadoResumenSolicitud
 
 
 class PresupuestoSesion(BaseModel):

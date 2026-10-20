@@ -787,3 +787,34 @@ las oportunidades propias y que el teléfono de la ficha lleve la marca
 aleatoria de la ejecución, con su prueba antes y después. Pendiente de
 decidir dónde (esta rama o una propia): sin arreglarlo, la suite del Bloque C
 tendría un rojo conocido.
+
+
+14. NOTA 2026-10-20: BLOQUE B2, FASE 1 (solo app/, SIN ejecutar)
+================================================================
+Reparto: la sección 11 ponía en B2 "código y scripts". Para que el bloque
+sea pequeño, B2 es solo app/; los scripts de 7.1-7.3 van en un bloque B3
+(fase 1, SIN ejecutar) antes de C.
+Antes, en su propio commit 21a83c8: H-B1-1 arreglado (CASO 10 de
+check_listado_llamadas_http, 109/109).
+Archivos:
+  - app/schemas/common.py: MAX_RESUMEN_SOLICITUD = 300 (P7);
+    motivo_datos_de_contacto (MOTIVO_EMAIL / MOTIVO_TELEFONO / None, sin
+    lanzar); texto_sin_datos_de_contacto lo usa por dentro, mismo orden y
+    mismos mensajes (P6: obliga a la regresión de TODOS los scripts que
+    crean visitas en C); comentario "LeadCreate.resumen" corregido (C3).
+  - app/schemas/leads.py: EstadoResumenSolicitud (5 valores, P2);
+    LeadCreate.resumen_solicitud: str | None = None (P2; solo el tipo, sin
+    tope, P4); LeadCreateResponse.resumen_solicitud_estado (obligatorio).
+  - app/services/resumen_solicitud.py (nuevo): evaluar_resumen (orden de 4.4)
+    y estado_guardado (P3); ESTADOS_DESCARTADO.
+  - app/services/leads_service.py: create_lead evalúa antes de escribir y,
+    en un alta con descarte, [AVISO] en stderr con lead_id y motivo, nunca el
+    texto (P5: sin logs); el INSERT lleva resumen_solicitud; la repetición
+    lee l.resumen_solicitud para el estado.
+  - app/services/datos_oportunidad.py: COLUMNAS_CASO con 18 pares
+    (+ resumen_solicitud).
+  - app/schemas/aviso_gate.py y ficha_oportunidad.py, y sus servicios:
+    resumen_solicitud en la raíz, después de reforma (P9).
+Sin cambios (git diff main vacío): listado_llamadas_service.py,
+listado_llamadas.py, app/api/, visits.py y visits_service.py; ReformaAviso,
+SolicitudLlamada y LeadSessionResponse sin ningún campo "resumen" (ast).

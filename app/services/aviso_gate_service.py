@@ -139,8 +139,9 @@ def obtener_aviso(oportunidad_id: int) -> AvisoGateResponse:
         # 2. El caso: solo se llega aquí si hay Gate
         # --------------------------------------------------------------
         # SQL, por partes:
-        #   - Las 17 columnas del caso (contacto de la solicitud, reforma,
-        #     fotos, presupuesto y umbral vigente) salen de
+        #   - Las 18 columnas del caso (contacto de la solicitud, reforma,
+        #     fotos, resumen de la solicitud desde el 2026-10-20,
+        #     presupuesto y umbral vigente) salen de
         #     columnas_caso_sql(), en datos_oportunidad.py, donde se explica
         #     cada una. Detrás, las 4 de la decisión, que son solo de aquí.
         #   - JOIN normal con leads y presupuestos: siempre existen (claves
@@ -209,6 +210,8 @@ def obtener_aviso(oportunidad_id: int) -> AvisoGateResponse:
         # de clientes.
         contacto=contacto_desde(caso),
         reforma=reforma_desde(caso),
+        # El resumen tal cual se guardó, o None (D28.1; de COLUMNAS_CASO).
+        resumen_solicitud=caso["resumen_solicitud"],
         # Lista vacía si la columna es NULL (plan, 1.5).
         fotos=fotos_desde(caso),
         # Los 8 campos, con el sin IVA deducido con el IVA de ESTE

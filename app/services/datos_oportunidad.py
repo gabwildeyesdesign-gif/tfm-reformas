@@ -38,7 +38,8 @@ from app.services.reglas_visita import ZONA_MADRID
 # Las columnas del caso
 # ======================================================================
 
-# Las 17 columnas del caso, EN ORDEN, como pares (nombre, expresión SQL).
+# Las 18 columnas del caso, EN ORDEN, como pares (nombre, expresión SQL).
+# (Eran 17 hasta el 2026-10-20: se añadió resumen_solicitud, D28.1.)
 # Las expresiones usan los alias de las consultas que las incluyen:
 #   o = oportunidades, l = leads, p = presupuestos, u = umbrales_gate.
 # Son textos FIJOS del programa (ningún dato del usuario entra aquí).
@@ -68,6 +69,13 @@ COLUMNAS_CASO = (
     ("cambios_estructurales", "(l.datos_estructurados ->> 'incluye_cambios_estructurales')::boolean"),
     # Las rutas de las fotos (JSONB: psycopg2 lo entrega como lista).
     ("fotos_urls", "l.fotos_urls"),
+    # El resumen de lo que quiere el cliente (D28.1, columna de paso15), o
+    # NULL. Lo leen GET /gate-avisos y la ficha porque leen TODAS estas
+    # columnas. GET /leads/session (NOMBRES_REFORMA_SESION) y GET
+    # /llamadas-del-dia (NOMBRES_SOLICITUD) eligen las suyas por nombre y
+    # NO lo piden: nunca va a la lista diaria (acumulación, D26 1.3) ni al
+    # Agente 2 (pre-decisión 6 del plan del resumen).
+    ("resumen_solicitud", "l.resumen_solicitud"),
     # El presupuesto: fecha, motivo del Gate, IVA aplicado e importes.
     ("fecha_presupuesto", "p.created_at"),
     ("motivo_gate", "p.motivo_gate"),

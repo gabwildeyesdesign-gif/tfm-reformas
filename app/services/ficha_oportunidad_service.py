@@ -43,7 +43,7 @@ from app.schemas.ficha_oportunidad import (
 from app.schemas.common import EstadoOportunidad
 from app.schemas.gate_decisions import DecisionGate
 
-# Lo compartido con GET /gate-avisos (Bloque B1): las 17 columnas del caso
+# Lo compartido con GET /gate-avisos (Bloque B1): las 18 columnas del caso
 # y las funciones que construyen sus piezas.
 from app.services.datos_oportunidad import (
     COLUMNAS_CASO,
@@ -203,7 +203,7 @@ def construir_historial(
 # Las consultas (plan, sección 3)
 # ======================================================================
 
-# Consulta 1, la cabecera: las 17 columnas del caso y, detrás, el id y
+# Consulta 1, la cabecera: las 18 columnas del caso y, detrás, el id y
 # requiere_aprobacion del presupuesto, el alta y el cliente_id (solo para
 # la consulta 5; nunca se devuelve). Se monta al llamarla, como en
 # aviso_gate_service. Diferencia con gate-avisos: LEFT JOIN con
@@ -302,7 +302,8 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
             "oportunidad_no_encontrada",
             f"No existe ninguna oportunidad con id {oportunidad_id}.",
         )
-    # Las 17 primeras columnas, con sus nombres; las 4 últimas, aparte.
+    # Las 18 primeras columnas (las del caso), con sus nombres; las 4
+    # últimas, aparte.
     n_caso = len(COLUMNAS_CASO)
     caso = caso_desde_fila(fila[:n_caso])
     presupuesto_id, requiere_aprobacion, fecha_alta, cliente_id = fila[n_caso:]
@@ -384,6 +385,8 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
         # Las piezas compartidas con gate-avisos.
         contacto=contacto_desde(caso),
         reforma=reforma_desde(caso),
+        # El resumen tal cual se guardó, o None (D28.1; de COLUMNAS_CASO).
+        resumen_solicitud=caso["resumen_solicitud"],
         fotos=fotos_desde(caso),
         # Sin presupuesto, null. Con él, los 8 campos compartidos ("**"
         # reparte el diccionario como argumentos con nombre) y si hubo Gate.

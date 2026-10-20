@@ -31,6 +31,7 @@ from psycopg2.errors import UniqueViolation
 
 from app.db.connection import get_db_connection, get_transactional_connection
 from app.schemas.leads import (
+    EstadoResumenSolicitud,
     LeadCreate,
     LeadCreateResponse,
     LeadSessionResponse,
@@ -45,6 +46,11 @@ from app.services.datos_oportunidad import COLUMNAS_CASO
 
 # El plazo orientativo de D18.7: cuándo se puede dar y cómo se lee.
 from app.services.plazo_orientativo import leer_plazo, plazo_aplicable
+
+# El resumen de la solicitud (D28.1): su evaluación (se guarda o se
+# descarta, nunca un 422), el estado de uno ya guardado (repetición) y los
+# tres estados de descarte (para el [AVISO]).
+from app.services.resumen_solicitud import ESTADOS_DESCARTADO, estado_guardado, evaluar_resumen
 
 # Los datos de la reforma para GET /leads/session (plan del Agente 2, B2):
 # los NOMBRES de sus columnas dentro de COLUMNAS_CASO, en este orden, y sus
@@ -105,10 +111,19 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
 
     Si una repetición trae el mismo token pero DATOS DISTINTOS, se
     devuelve el lead original y los datos nuevos se ignoran: eso es lo
-    que significa idempotente.
+    que significa idempotente. El resumen nuevo también (P3 del plan
+    docs/Plan_Resumen_Solicitud_D28.txt): no se sobrescribe ni se rellena.
+
+    El resumen (D28.1) se evalúa ANTES de escribir nada y nunca rechaza la
+    petición: si no pasa el filtro, el lead se guarda con resumen NULL y
+    resumen_solicitud_estado dice por qué (P1 = b).
     """
+    # Se guarda (texto recortado) o se descarta (None), y por qué.
+    resumen, estado_resumen = evaluar_resumen(data.resumen_solicitud)
+    # try: el alta puede chocar con un lead_token ya usado.
     try:
-        return _crear_lead_nuevo(data)
+        # El alta completa, con el resumen ya evaluado.
+        respuesta = _crear_lead_nuevo(data, resumen, estado_resumen)
     except UniqueViolation as error:
         # error.diag.constraint_name es el nombre de la restricción que ha
         # saltado, tal como lo informa Postgres. Si NO es la del lead_token,
@@ -118,7 +133,22 @@ def create_lead(data: LeadCreate) -> LeadCreateResponse:
         # inesperado.
         if error.diag.constraint_name != RESTRICCION_LEAD_TOKEN:
             raise
+        # Repetición: el lead original, con el estado de SU resumen guardado.
+        # Sin [AVISO]: el resumen nuevo se ignora, no se ha descartado nada.
         return _buscar_lead_por_token(data.lead_token)
+    # Alta nueva con un resumen descartado: una línea en stderr (consola del
+    # uvicorn) con el lead y el motivo, NUNCA con el texto, que podría
+    # llevar el dato de contacto que se ha querido apartar (R7 del plan). No
+    # se escribe en logs (P5).
+    if estado_resumen in ESTADOS_DESCARTADO:
+        print(
+            f"[AVISO] POST /leads: resumen_solicitud no guardado en el lead {respuesta.lead_id} "
+            f"({estado_resumen.value})",
+            file=sys.stderr,
+            flush=True,
+        )
+    # La respuesta del alta (201).
+    return respuesta
 
 
 def _buscar_lead_por_token(lead_token: str) -> LeadCreateResponse:
@@ -141,9 +171,13 @@ def _buscar_lead_por_token(lead_token: str) -> LeadCreateResponse:
         # que el esquema permitiría varias oportunidades por lead. Hoy
         # create_lead solo crea una; si algún día hubiera más, se devuelve
         # la primera, que es la que nació con el lead.
+        #
+        # l.resumen_solicitud (D28.1): solo para saber si el lead original
+        # tiene resumen (P3); el texto no sale en la respuesta.
+        # SQL: el lead del token, su primera oportunidad y su resumen.
         cursor.execute(
             """
-            SELECT l.id, l.cliente_id, o.id, o.estado
+            SELECT l.id, l.cliente_id, o.id, o.estado, l.resumen_solicitud
             FROM leads l
             JOIN oportunidades o ON o.lead_id = l.id
             WHERE l.lead_token = %s
@@ -163,17 +197,21 @@ def _buscar_lead_por_token(lead_token: str) -> LeadCreateResponse:
             f"lead_token {lead_token!r} chocó con la UNIQUE pero no se encuentra el lead"
         )
 
-    lead_id, cliente_id, oportunidad_id, estado = fila
+    lead_id, cliente_id, oportunidad_id, estado, resumen_guardado = fila
     return LeadCreateResponse(
         lead_id=lead_id,
         cliente_id=cliente_id,
         oportunidad_id=oportunidad_id,
         status=estado,
         creado=False,
+        # Lo GUARDADO en el lead original: guardado o sin_resumen (P3).
+        resumen_solicitud_estado=estado_guardado(resumen_guardado),
     )
 
 
-def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
+def _crear_lead_nuevo(
+    data: LeadCreate, resumen: str | None, estado_resumen: EstadoResumenSolicitud
+) -> LeadCreateResponse:
     """
     Da de alta un lead completo: cliente, lead y oportunidad.
 
@@ -196,6 +234,11 @@ def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
               m2 es mayor que cero y que tipo_reforma y nivel_acabados
               son valores existentes en tarifas_base. Esta función NO
               vuelve a comprobar nada de eso.
+        resumen: lo que se guarda en leads.resumen_solicitud, ya evaluado
+              por create_lead (texto recortado, o None si no llegó o se
+              descartó).
+        estado_resumen: su EstadoResumenSolicitud, que va tal cual en la
+              respuesta.
 
     Devuelve:
         LeadCreateResponse con los tres identificadores creados y el
@@ -249,6 +292,7 @@ def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
         # Hasta el 2026-09-24 este comentario ya lo afirmaba, pero era
         # FALSO: solo se guardaban los cuatro datos de la reforma, así que
         # con un email repetido el nombre y el teléfono nuevos se perdían.
+        # SQL: el cliente, nuevo o reutilizado por su email; devuelve su id.
         cursor.execute(
             """
             INSERT INTO clientes (nombre, email, telefono, created_at)
@@ -298,13 +342,20 @@ def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
         # chat, pero la conversación vive en la memoria de n8n, no en el
         # backend: POST /leads solo recibe los datos ya confirmados, no el
         # texto de la conversación, así que aquí no hay nada que guardar.
+        #
+        # resumen_solicitud (D28.1, migración paso15): el resumen que escribe
+        # el Agente 1, YA evaluado por create_lead; None si no llegó o se
+        # descartó. El CHECK de 1..300 es la segunda barrera: con la
+        # evaluación hecha, nunca debería saltar. NO es mensaje_original: la
+        # conversación sigue sin guardarse (opción B de D28.1, rechazada).
+        # SQL: el lead, con el resumen como último dato antes de la fecha.
         cursor.execute(
             """
             INSERT INTO leads (
                 cliente_id, canal, mensaje_original, lead_token,
-                fotos_urls, datos_estructurados, created_at
+                fotos_urls, datos_estructurados, resumen_solicitud, created_at
             )
-            VALUES (%s, %s, NULL, %s, %s, %s, now())
+            VALUES (%s, %s, NULL, %s, %s, %s, %s, now())
             RETURNING id;
             """,
             (
@@ -351,6 +402,8 @@ def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
                         },
                     }
                 ),
+                # resumen_solicitud: el texto ya evaluado, o None (NULL).
+                resumen,
             ),
         )
         lead_id = cursor.fetchone()[0]
@@ -382,6 +435,7 @@ def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
         # escrito. Así el status de la respuesta no es una etiqueta que
         # escribimos aparte en Python y que podría desincronizarse del
         # dato: es el valor que tiene la fila en la base de datos.
+        # SQL: la oportunidad del lead, en 'nueva'; devuelve id y estado.
         cursor.execute(
             """
             INSERT INTO oportunidades (
@@ -411,6 +465,8 @@ def _crear_lead_nuevo(data: LeadCreate) -> LeadCreateResponse:
         status=estado,
         # Esta llamada ha creado el lead: es la única ruta que llega aquí.
         creado=True,
+        # El estado que decidió create_lead al evaluar el resumen.
+        resumen_solicitud_estado=estado_resumen,
     )
 
 
@@ -469,6 +525,7 @@ def get_lead_session(lead_token: str) -> LeadSessionResponse:
         #
         # Los importes (importe_min_con_iva, importe_max_con_iva) NO se
         # seleccionan, a propósito.
+        # SQL: el lead del token, su oportunidad, su presupuesto y su reforma.
         cursor.execute(
             """
             SELECT l.id,

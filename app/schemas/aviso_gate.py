@@ -169,6 +169,12 @@ class AvisoGateResponse(BaseModel):
     # Los cuatro objetos anidados de arriba.
     contacto: ContactoAviso
     reforma: ReformaAviso
+    # El resumen de lo que quiere el cliente que escribió el Agente 1
+    # (leads.resumen_solicitud, D28.1), o null en los leads sin resumen o
+    # anteriores al 2026-10-20. En la RAÍZ y no dentro de "reforma" a
+    # propósito: ReformaAviso es también la "reforma" de GET /leads/session,
+    # y por ahí llegaría al Agente 2 (P9 del plan del resumen).
+    resumen_solicitud: str | None = Field(description="Resumen del asistente sobre lo que quiere el cliente (o null)")
     # Las rutas de las fotos tal como se guardaron (0 a MAX_FOTOS_LEAD).
     # Field(description=...) solo añade la explicación a /docs.
     fotos: list[str] = Field(description=f"Rutas de las fotos del lead (0 a {MAX_FOTOS_LEAD})")
