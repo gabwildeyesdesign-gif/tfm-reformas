@@ -112,23 +112,13 @@ class Dias:
         return self.lunes + timedelta(weeks=semana, days=dia)
 
 
-def exigir_libres(script: str, patron_propio: str, tramos: list[tuple[datetime, datetime]]) -> None:
+def _visitas_en_tramos(script: str, patron_propio: str, tramos: list[tuple[datetime, datetime]]) -> dict:
     """
-    Comprueba, en SOLO LECTURA, que ninguna visita activa ajena ocupa los
-    tramos (desde, hasta) que va a usar el script. Una visita ocupa
-    [inicio, inicio + duracion_visita_min), así que se solapa con un tramo si
-    empieza antes de su final y termina después de su principio.
-    (Nota 2026-10-13, D32: desde paso14 una visita ocupa además
-    desplazamiento_min tras su fin, y la de prueba también; los dos lados se
-    alargan con duración + desplazamiento, como choca() de reglas_visita.)
-
-    Ajena =la de un cliente cuyo email no cumple el patrón del script. Las
-    propias (de una ejecución anterior cortada) no cuentan: las borra la
-    limpieza del propio script.
-
-    Si hay alguna ajena: FALLO con la explicación y sys.exit(1), sin borrar
-    nada. Si no: una línea [INFO], que no cuenta como comprobación (los
-    recuentos de los scripts no cambian).
+    La consulta de SOLO LECTURA de exigir_libres, movida aquí SIN cambios el
+    2026-10-20 (H-C-2, plan docs/Plan_Resumen_Solicitud_D28.txt, sección 17)
+    para que la use también tramos_sin_ajenas. Devuelve {id de visita:
+    (inicio, estado, propia)} de las visitas activas que se solapan con algún
+    tramo, contando duración + desplazamiento en los dos lados (D32).
     """
     # Conexión propia, de solo lectura (Postgres rechazaría cualquier escritura).
     cn = psycopg2.connect(DATABASE_URL)
@@ -191,6 +181,50 @@ def exigir_libres(script: str, patron_propio: str, tramos: list[tuple[datetime, 
     finally:
         # Cerrada.
         cn.close()
+    # Todas las encontradas, propias y ajenas.
+    return encontradas
+
+
+def tramos_sin_ajenas(script: str, patron_propio: str, tramos: list[tuple[datetime, datetime]]) -> list[bool]:
+    """
+    Para cada tramo, True si NINGUNA visita activa ajena lo ocupa (con la
+    MISMA consulta que exigir_libres). No para nada: sirve para ELEGIR horas
+    libres antes de llamar a exigir_libres, que sigue siendo la guarda
+    (H-C-2, 2026-10-20). Las propias no cuentan, como en exigir_libres.
+    """
+    # Un tramo cada vez, con su propia consulta.
+    libres = []
+    # En orden.
+    for tramo in tramos:
+        # Las visitas que tocan solo este tramo.
+        encontradas = _visitas_en_tramos(script, patron_propio, [tramo])
+        # Libre si ninguna es ajena (el tercer valor dice si es propia).
+        libres.append(not any(not propia for _, _, propia in encontradas.values()))
+    # Un booleano por tramo, en el mismo orden.
+    return libres
+
+
+def exigir_libres(script: str, patron_propio: str, tramos: list[tuple[datetime, datetime]]) -> None:
+    """
+    Comprueba, en SOLO LECTURA, que ninguna visita activa ajena ocupa los
+    tramos (desde, hasta) que va a usar el script. Una visita ocupa
+    [inicio, inicio + duracion_visita_min), así que se solapa con un tramo si
+    empieza antes de su final y termina después de su principio.
+    (Nota 2026-10-13, D32: desde paso14 una visita ocupa además
+    desplazamiento_min tras su fin, y la de prueba también; los dos lados se
+    alargan con duración + desplazamiento, como choca() de reglas_visita.)
+
+    Ajena =la de un cliente cuyo email no cumple el patrón del script. Las
+    propias (de una ejecución anterior cortada) no cuentan: las borra la
+    limpieza del propio script.
+
+    Si hay alguna ajena: FALLO con la explicación y sys.exit(1), sin borrar
+    nada. Si no: una línea [INFO], que no cuenta como comprobación (los
+    recuentos de los scripts no cambian).
+    """
+    # Las visitas activas que tocan los tramos (la consulta de solo lectura,
+    # movida SIN cambios a _visitas_en_tramos el 2026-10-20, H-C-2).
+    encontradas = _visitas_en_tramos(script, patron_propio, tramos)
     # Las ajenas, ordenadas por fecha.
     ajenas = sorted((v for v in encontradas.items() if not v[1][2]), key=lambda v: v[1][0])
     # Las propias, solo para la línea de información.

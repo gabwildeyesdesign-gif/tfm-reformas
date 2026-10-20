@@ -909,3 +909,40 @@ Evidencia de que no es de esta rama: el id 7891 es <= id_base de visitas
 (7896) de la foto inicial, las 11 visitas reales siguen IGUALES y el script
 no toca nada del resumen. No se toca la visita (no es de ningún script).
 Pendiente de decidir con Gabi (sección 10 del [PARA]).
+
+
+17. NOTA 2026-10-20: H-C-2 ARREGLADO (commit propio)
+================================================================
+Decisión del tutor (corrige su propio punto 1, que movía el día): el CASO 12
+de check_resultados_llamada_http prueba el apartado e) (próximo laborable),
+así que el DÍA no se mueve; se eligen las HORAS. Papeles y orden, iguales que
+con las horas fijas de antes:
+  DIA (dia_visitas de la lista): 1.ª -> me (pedida y confirmar_hora a la
+  misma hora), 2.ª -> me_conf (visita_acordada), 3.ª -> md2 (otra_hora);
+  antes 08:30, 09:45 y 12:15.
+  OTRO_DIA: el primer laborable desde DIA + 7 con 2 horas libres, como mucho
+  10 laborables (dias_oferta_visita): 1.ª -> md, 2.ª -> md2; antes DIA + 7 a
+  las 08:30 y 09:45.
+Las horas candidatas son las que ofrece GET /huecos-libres ese día; se
+quedan las que la guarda da por libres (fechas_prueba.tramos_sin_ajenas,
+MISMA consulta). Si el DIA no tiene 3 u OTRO_DIA no aparece: FALLO y se para
+sin crear nada. exigir_libres vuelve a comprobar las cinco elegidas.
+scripts/fechas_prueba.py (lo importan 12 scripts: 11 de los 19 de visitas y
+check_mcp_huecos_libres): el bloque de solo lectura de exigir_libres pasa a
+_visitas_en_tramos SIN cambios (ast.dump: las 3 sentencias del bloque y las
+4 del resto, iguales que en main); tramos_sin_ajenas es nueva.
+Ejecución (2.400 MB libres a las 14:12:43; sin chrome, msedge, docker, vmmem
+ni WINWORD; a las 14:09:15 había un proceso docker: se paró y se avisó;
+ningún Kernel-Power 506/507 entre 14:12 y 14:36; datos reales de las 10
+tablas IGUALES antes y después):
+  - antes (copia de main): para en el CASO 12 por la visita AJENA 7891,
+    código 1; "no toca nada ajeno" y "no quedan datos propios".
+  - na (copia: horas_libres sin el filtro de la guarda): elige DIA 08:30,
+    09:45 y 12:15 (el backend ofrece las 09:45: acabar justo cuando empieza
+    otra no choca); exigir_libres PARA por la 7891, código 1.
+  - nb (copia: las horas fijas de antes): exigir_libres PARA igual, código 1.
+  - después (repositorio): 202/202, horas elegidas DIA 2026-10-21 08:30,
+    12:15 y 17:00; OTRO_DIA 2026-10-28 08:30 y 09:45.
+  - Los 19 que crean visitas: 19/19 con código 0; y check_mcp_huecos_libres
+    17/17.
+Suite tras esta rama: 57 scripts (sin cambios por este arreglo).

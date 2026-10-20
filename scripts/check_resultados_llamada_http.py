@@ -717,16 +717,82 @@ try:
     # El próximo laborable lo dice la propia lista.
     lista = cuerpo_de(pedir("GET", "/llamadas-del-dia"))
     DIA = date.fromisoformat(lista["dia_visitas"])
-    OTRO_DIA = DIA + timedelta(days=7)
-    # B5-0: estas visitas tienen que ser del próximo laborable y de una
-    # semana después (es lo que se prueba), así que no pueden ir al bloque
-    # lejano. Antes de crearlas, sus cinco horas no pueden estar ocupadas por
+    # H-C-2 (2026-10-20; plan docs/Plan_Resumen_Solicitud_D28.txt, sección
+    # 17). Antes, las cinco horas eran FIJAS (DIA 08:30, 09:45 y 12:15; DIA+7
+    # 08:30 y 09:45), y una visita real del próximo laborable las bloqueaba.
+    # El DÍA no se puede mover: el caso prueba el apartado e) (próximo
+    # laborable). Se eligen las HORAS: las primeras libres de la rejilla, en
+    # orden, con los MISMOS papeles que antes:
+    #   DIA:      1.ª -> me (pedida y confirmar_hora a la misma hora),
+    #             2.ª -> me_conf (visita_acordada), 3.ª -> md2 (otra_hora).
+    #   OTRO_DIA: 1.ª -> md (pedida y confirmar_hora), 2.ª -> md2 (pedida).
+    # OTRO_DIA: el primer laborable desde DIA + 7 con dos horas libres, como
+    # mucho LIMITE_LABORABLES (10, el horizonte que el negocio ofrece al
+    # cliente, dias_oferta_visita). La guarda exigir_libres no cambia.
+    LIMITE_LABORABLES = 10
+
+    def horas_libres(dia):
+        """Las horas de inicio libres de ese día, en orden ("HH:MM"): las que
+        ofrece GET /huecos-libres y que, además, ninguna visita AJENA ocupa
+        según la MISMA consulta de la guarda (fechas_prueba.tramos_sin_ajenas)."""
+        # Lo que ofrece el backend ese día (modo un día).
+        j = cuerpo_de(pedir("GET", f"/huecos-libres?fecha={dia}"))
+        # Mañana y tarde juntas, en orden ("08:30" < "17:00" como texto).
+        candidatas = sorted(j.get("manana", []) + j.get("tarde", []))
+        # El tramo de un minuto de cada una, como en la guarda.
+        tramos = [(datetime.fromisoformat(madrid(dia, int(h[:2]), int(h[3:]))),
+                   datetime.fromisoformat(madrid(dia, int(h[:2]), int(h[3:]))) + timedelta(minutes=1))
+                  for h in candidatas]
+        # Si son libres para la guarda (True / False, en el mismo orden).
+        libres = fechas_prueba.tramos_sin_ajenas("check_resultados_llamada_http", PATRON, tramos)
+        # Solo las libres, en orden.
+        return [h for h, libre in zip(candidatas, libres) if libre]
+
+    # Las tres del próximo laborable; sin tres, no se puede probar e): FALLO
+    # y se para sin crear nada (el finally limpia y comprueba lo ajeno).
+    LIBRES_DIA = horas_libres(DIA)
+    if len(LIBRES_DIA) < 3:
+        # La explicación, como la de la guarda.
+        print(f"  [FALLO] check_resultados_llamada_http: el próximo laborable ({DIA}) no tiene 3 horas libres "
+              f"({LIBRES_DIA}); no se crea ni se borra nada.")
+        # Código 1.
+        sys.exit(1)
+    # Las tres primeras, en orden (H1 < H2 < H3).
+    H1, H2, H3 = LIBRES_DIA[:3]
+    # OTRO_DIA: el primer laborable desde DIA + 7 con dos horas libres.
+    OTRO_DIA, O1, O2 = None, None, None
+    # El primer candidato.
+    candidato = DIA + timedelta(days=7)
+    # Como mucho LIMITE_LABORABLES días laborables.
+    for _ in range(LIMITE_LABORABLES):
+        # Sábado (5) y domingo (6) no son laborables: se saltan.
+        while candidato.weekday() >= 5:
+            candidato += timedelta(days=1)
+        # Sus horas libres.
+        libres = horas_libres(candidato)
+        # Con dos, ese es el día.
+        if len(libres) >= 2:
+            OTRO_DIA, O1, O2 = candidato, libres[0], libres[1]
+            break
+        # Si no, el siguiente día.
+        candidato += timedelta(days=1)
+    # Ninguno en el límite: FALLO y se para sin crear nada.
+    if OTRO_DIA is None:
+        # La explicación.
+        print(f"  [FALLO] check_resultados_llamada_http: ningún laborable de los {LIMITE_LABORABLES} desde "
+              f"{DIA + timedelta(days=7)} tiene 2 horas libres; no se crea ni se borra nada.")
+        # Código 1.
+        sys.exit(1)
+    # Constancia (no cuenta como comprobación: el recuento no cambia).
+    print(f"  [INFO] horas elegidas: DIA {DIA} {H1}, {H2}, {H3}; OTRO_DIA {OTRO_DIA} {O1}, {O2}")
+    # B5-0: antes de crearlas, sus cinco horas no pueden estar ocupadas por
     # una visita AJENA (una real, por ejemplo): si lo están, FALLO con la
     # explicación y se para. Cada tramo es el minuto de inicio de la visita.
+    # La guarda vuelve a comprobar las horas ELEGIDAS, como antes las fijas.
     fechas_prueba.exigir_libres("check_resultados_llamada_http", PATRON, [
-        (datetime.fromisoformat(madrid(d, h, m)), datetime.fromisoformat(madrid(d, h, m)) + timedelta(minutes=1))
-        # D32: horas de la rejilla (antes 10:00, 11:00, 10:00, 09:00 y 12:00).
-        for d, h, m in ((OTRO_DIA, 8, 30), (OTRO_DIA, 9, 45), (DIA, 8, 30), (DIA, 9, 45), (DIA, 12, 15))])
+        (datetime.fromisoformat(madrid(d, int(h[:2]), int(h[3:]))),
+         datetime.fromisoformat(madrid(d, int(h[:2]), int(h[3:]))) + timedelta(minutes=1))
+        for d, h in ((OTRO_DIA, O1), (OTRO_DIA, O2), (DIA, H1), (DIA, H2), (DIA, H3))])
     # a) Gate de más de 24 h; y uno de menos (no sale, pero se registra, D25.14).
     _, ma = lead(estructural=True)
     envejecer(ma, 30)
@@ -739,12 +805,13 @@ try:
     _, mc = seguimiento_abierto()
     # d): dos pedidas otro día; e): una pedida para el próximo laborable.
     # D32: horas de la rejilla.
-    _, md = confirmacion(OTRO_DIA, "08:30")
-    _, md2 = confirmacion(OTRO_DIA, "09:45")
-    _, me = confirmacion(DIA, "08:30")
+    # H-C-2: con las horas elegidas (mismos papeles que las fijas de antes).
+    _, md = confirmacion(OTRO_DIA, O1)
+    _, md2 = confirmacion(OTRO_DIA, O2)
+    _, me = confirmacion(DIA, H1)
     # e) confirmada: un Gate con visita acordada el próximo laborable.
     _, me_conf = lead(estructural=True)
-    r = registrar(me_conf, {"resultado": "visita_acordada", "fecha": str(DIA), "hora": "09:45"})
+    r = registrar(me_conf, {"resultado": "visita_acordada", "fecha": str(DIA), "hora": H2})
     # Sin ella no hay caso: se para.
     assert r.status_code == 201, r.text
 
@@ -768,9 +835,10 @@ try:
                 ma_reciente: {"resultado": "descartar", "motivo": "precio"},
                 mb: {"resultado": "descartar", "motivo": "plazo"},
                 mc: {"resultado": "descartar", "motivo": "otro"},
-                md: {"resultado": "confirmar_hora", "fecha": str(OTRO_DIA), "hora": "08:30"},
-                md2: {"resultado": "otra_hora", "fecha": str(DIA), "hora": "12:15"},
-                me: {"resultado": "confirmar_hora", "fecha": str(DIA), "hora": "08:30"}}
+                # H-C-2: confirmar_hora a SU hora; otra_hora a la 3.ª del DIA.
+                md: {"resultado": "confirmar_hora", "fecha": str(OTRO_DIA), "hora": O1},
+                md2: {"resultado": "otra_hora", "fecha": str(DIA), "hora": H3},
+                me: {"resultado": "confirmar_hora", "fecha": str(DIA), "hora": H1}}
     for op, cuerpo in REGISTRO.items():
         r = registrar(op, cuerpo)
         comprobar(f"oportunidad {op} ({cuerpo['resultado']}) -> 201", r.status_code == 201, f"({r.status_code} {r.text[:150]})")
