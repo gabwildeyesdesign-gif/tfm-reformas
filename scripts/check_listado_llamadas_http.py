@@ -55,6 +55,9 @@ import threading
 import time
 # uuid: marcas y tokens únicos de cada ejecución.
 import uuid
+# json: el texto de los elementos propios, para buscar en él (CASO 10,
+# H-B1-1).
+import json
 # Fechas. "time" se renombra a hora_del_dia para no chocar con el módulo time.
 from datetime import date, datetime, time as hora_del_dia, timedelta
 # Decimal: para inyectar valores de reglas en memoria.
@@ -671,8 +674,10 @@ try:
     # Email compartido por B1 y B2. B1 crea la ficha de clientes con SU nombre y
     # teléfono; B2 llega con otros (la ficha no se sobrescribe, D2).
     EMAIL_B = f"http-listado-{uuid.uuid4().hex[:8]}@example.com"
-    B1 = lead_http("B1", email=EMAIL_B, nombre=f"Ficha Primera {RUN}", telefono="600000101")
-    B2 = lead_http("B2", email=EMAIL_B, nombre=f"Solicitud Segunda {RUN}", telefono="600000102")
+    # Sin teléfono fijo (H-B1-1, 2026-10-20): lead_http pone a cada uno uno
+    # aleatorio de esta ejecución, que ningún dato ajeno puede tener.
+    B1 = lead_http("B1", email=EMAIL_B, nombre=f"Ficha Primera {RUN}")
+    B2 = lead_http("B2", email=EMAIL_B, nombre=f"Solicitud Segunda {RUN}")
     # B2 se calcula (queda sin Gate) y se atrasa a 48 h + 5 min: sale en b).
     assert calcular(B2[0]) == "presupuesto_enviado"
     retrasar_presupuesto(B2[0], 48, 5)
@@ -681,7 +686,10 @@ try:
     EMAIL_L = f"http-listado-{uuid.uuid4().hex[:8]}@example.com"
     EMAILS.append(EMAIL_L)
     # Nombre y teléfono de SU FICHA: no deben aparecer nunca en la respuesta.
-    NOMBRE_FICHA_L, TEL_FICHA_L = f"Ficha Antigua {RUN}", "600000103"
+    # El teléfono, "6" + 8 cifras aleatorias de esta ejecución (como en
+    # lead_http): antes era el fijo "600000103", que un lead ajeno del chat
+    # tenía también y hacía fallar el CASO 10 sin nada roto (H-B1-1).
+    NOMBRE_FICHA_L, TEL_FICHA_L = f"Ficha Antigua {RUN}", "6" + str(uuid.uuid4().int)[:8]
     # SQL: el cliente del lead antiguo, con su ficha completa; RETURNING id
     # devuelve su id.
     cur.execute("INSERT INTO clientes (nombre, email, telefono) VALUES (%s, %s, %s) RETURNING id;",
@@ -1021,13 +1029,23 @@ try:
     # ==================================================================
     print("\nCASO 10 - El contacto es el del LEAD, no el de la ficha")
     # ==================================================================
+    # Dónde se busca la ficha (H-B1-1, 2026-10-20): en el texto de los
+    # elementos de las oportunidades PROPIAS (mios, del CASO 9), de los cinco
+    # apartados, y no en toda la respuesta, donde un cliente ajeno podía
+    # coincidir. Es donde saldría la fuga si el endpoint leyera la ficha.
+    # Se deja fuera el elemento de B1: su contacto legítimo es esa ficha.
+    texto_propio = json.dumps([e for n in (*APARTADOS_OP, *APARTADOS_VI) for e in L.get(n, [])
+                               if e["oportunidad_id"] in mios and e["oportunidad_id"] != B1[0]],
+                              ensure_ascii=False)
     # B2: su contacto es el de SU solicitud, no el de la ficha (que es de B1).
     e = B.get(B2[0], {})
     comprobar("B2 (mismo email que B1): nombre y teléfono de SU solicitud, origen 'solicitud'",
               e.get("contacto") == {"nombre": B2[2], "telefono": B2[3], "origen": "solicitud"}, f"({e.get('contacto')})")
-    # Ni el nombre ni el teléfono de B1 aparecen en el texto.
+    # Ni el nombre ni el teléfono de B1 aparecen en los elementos propios. Se
+    # exige además que B2 esté en la lista: sin él, "no aparece" sería verdad
+    # por estar vacío.
     comprobar("ni el nombre ni el teléfono de la ficha (los de B1) aparecen",
-              B1[2] not in R.text and B1[3] not in R.text)
+              B2[0] in B and B1[2] not in texto_propio and B1[3] not in texto_propio)
     # Y su resumen también es el de SU lead (m2 y nivel distintos de los de
     # B1): si el listado leyera el primer lead del cliente, traería los de B1.
     comprobar("B2: solicitud de SU lead, no la de B1 (m2 y nivel distintos)",
@@ -1037,9 +1055,10 @@ try:
     e = B.get(OP_L, {})
     comprobar("lead sin 'contacto': nombre y telefono null, origen 'no_disponible'",
               e.get("contacto") == {"nombre": None, "telefono": None, "origen": "no_disponible"}, f"({e.get('contacto')})")
-    # ...y nada de su ficha en el texto.
+    # ...y nada de su ficha en los elementos propios; también se exige que su
+    # elemento esté en la lista (si no, "nada" sería verdad por vacío).
     comprobar("nada de la ficha de ese lead en la respuesta",
-              NOMBRE_FICHA_L not in R.text and TEL_FICHA_L not in R.text)
+              OP_L in B and NOMBRE_FICHA_L not in texto_propio and TEL_FICHA_L not in texto_propio)
 
     # ==================================================================
     print("\nCASO 11 - Fechas con el desfase de Madrid")
