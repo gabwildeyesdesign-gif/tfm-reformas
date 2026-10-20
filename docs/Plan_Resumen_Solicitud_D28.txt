@@ -861,3 +861,51 @@ check_migracion_paso13b, check_migracion_resultado_llamadas,
 check_migracion_visitas, check_resultados_llamada_http,
 check_resultados_llamada_service, check_visits_http y check_visits_service
 (lanzador del scratchpad regresion_visitas.py). Van también en la suite.
+
+
+16. NOTA 2026-10-20: BLOQUE C, FASE 2 (primera tanda: 29 scripts)
+================================================================
+Memoria: 2.699 MB libres a las 13:33:45; ningún chrome, msedge, docker,
+vmmem ni WINWORD. Ningún Kernel-Power 506/507 entre 13:33 y 13:52. Ningún
+script usa el 8000 (grep de "port=8000", ":8000" y PUERTO = 8000: 0) y sus
+14 puertos estaban libres.
+Datos reales: foto (scratchpad foto_datos_reales.py) de las 10 tablas, filas
+con id <= id_base (umbrales_gate entera, por tipo_reforma), antes (11:34:41
+UTC) y después (11:51:25 UTC): TODAS IGUALES (mismo id_base, filas y
+SHA-256).
+Tanda 13:35:13-13:51:11, uno detrás de otro (unión de los 2 nuevos, los 5
+cambiados, los 8 que no cambian y los 19 que crean visitas = 29):
+  Nuevos y cambiados (previsto en B3 -> real): check_resumen_solicitud_service
+  38/38 -> 38/38; check_resumen_solicitud_http 62/62 -> 62/62;
+  check_leads_endpoint_http 24 -> 24; check_schemas 66 -> 66;
+  check_aviso_gate_http 76/76 -> 76/76; check_ficha_oportunidad_http 70/70 ->
+  70/70; check_texto_agente_service 49/49 -> 49/49.
+  Sin cambios: check_create_lead_service 52, check_webhook_auth_http 15,
+  check_lead_session_http 69/69, check_aviso_gate_service 18/18,
+  check_ficha_oportunidad_service 40/40, check_listado_llamadas_service 69/69,
+  check_listado_llamadas_http 109/109, check_migracion_resumen_solicitud
+  12/12.
+  Visitas (P6): check_disponibilidad_service 60/60, check_followup_tasks_http
+  125/125, check_gate_decisions_http 129/129, check_gate_decisions_service
+  14/14, check_huecos_libres_http 45/45, check_huecos_libres_service 32/32,
+  check_migracion_decisiones_gate 38/38, check_migracion_paso13b 6/6,
+  check_migracion_resultado_llamadas 50/50, check_migracion_visitas 28/28,
+  check_resultados_llamada_service 51/51, check_visits_http 98/98,
+  check_visits_service 23/23; y check_resultados_llamada_http código 1, sin
+  RESULTADO (H-C-2).
+  28 de 29 con código 0.
+
+H-C-2 (hallazgo, NO causado por esta rama): check_resultados_llamada_http
+llega bien hasta el CASO 11; al empezar el CASO 12 (matriz lista <->
+registro), su guarda fechas_prueba.exigir_libres encuentra el hueco de prueba
+ocupado por la visita AJENA 7891 (confirmada, 2026-10-21 11:00 de Madrid,
+creada el 2026-10-15 19:23 desde chat_web con email @example.com; oportunidad
+12852 en 'visita_agendada'). La guarda hace lo que debe (B5-0): FALLO y se
+para sin crear ni borrar nada; el script confirma "no toca nada ajeno", "no
+quedan datos propios" y 0 respuestas 500. El CASO 12 necesita el PRÓXIMO
+LABORABLE (dia_visitas de la lista = 21/10) a las 08:30, 09:45 y 12:15; la
+visita de las 11:00 (60 min + 15 de desplazamiento) choca con uno de ellos.
+Evidencia de que no es de esta rama: el id 7891 es <= id_base de visitas
+(7896) de la foto inicial, las 11 visitas reales siguen IGUALES y el script
+no toca nada del resumen. No se toca la visita (no es de ningún script).
+Pendiente de decidir con Gabi (sección 10 del [PARA]).
