@@ -957,3 +957,75 @@ orden). Los reales, de los archivos de ese commit, son:
     e99fa48759023e917ed61dd3932895125e9632007059291354f132d37534a1ba
 El resto del mensaje de 088a22b (salidas, recuentos y los demás SHA-256)
 es correcto. No se reescribe el commit (ya está en GitHub).
+
+
+18. NOTA 2026-10-20: BLOQUE C, FASE 2 (negativas N1-N10 y suite completa)
+================================================================
+Regla nueva del tutor (2026-10-20, tras 088a22b): ningún SHA-256, recuento o
+salida se escribe en un commit en la misma orden que lo calcula.
+
+Pruebas en negativo (14:55:20-15:08:30), sobre COPIAS de app/, scripts/ y
+docs/ del árbol de trabajo, de una en una; 2.738 MB libres a las 14:54:44,
+sin chrome, msedge, docker, vmmem ni WINWORD. Previsiones escritas ANTES
+(scratchpad negativas/PREVISTO.txt, SHA-256
+d0a80ca5925232899f4c873fbda3446f5aaac70eacb026ec32008a337679c7fd).
+Previsto -> real:
+  control  38/38, 62/62 -> igual.
+  N1 sin filtro D26.7: 31/38, 56/62 -> igual.
+  N2 en la lista diaria: 36/38, 60/62, listado_http 108/109, listado_service
+     69/69 -> 36/38, 60/62, 107/109, 68/69. Diferencia: lo detectan MÁS
+     comprobaciones de las previstas: check_listado_llamadas_service
+     comprueba que COLUMNAS_SOLICITUD_SQL son exactamente las tres (yo
+     preví que no lo veía) y check_listado_llamadas_http exige también que la
+     solicitud de un lead sin datos sea exactamente {tres null}.
+  N3 en ReformaAviso: 36/38, 58/62, lead_session con FALLO, aviso_gate 74/76,
+     ficha 69/70 -> igual (lead_session 56/69). En la primera tanda,
+     aviso_gate y ficha acabaron con FileNotFoundError: mi lanzador no
+     copiaba docs/ y esos scripts leen docs/schema_actual.sql; corregido y
+     repetido (15:05-15:08).
+  N4 obligatorio: 36/38, 54/62, leads_endpoint y schemas con código != 0 ->
+     igual; esos dos scripts antiguos lo detectan con una traza (KeyError
+     sobre el 422 y un LeadCreate construido fuera de sus funciones), no con
+     un FALLO contado: fragilidad que ya traían de main.
+  N5 sin CHECK: no repetible tras aplicar paso15; vale B1: 10/13 (c5114ef).
+  N6 sobrescribe: 38/38, 59/62 -> 38/38, 57/62. Diferencia: no conté la
+     cadena; la ficha del CASO 3 enseña el texto sobrescrito y la del CASO 4
+     un texto donde debía haber null (CASO 12).
+  N7 fuera de COLUMNAS_CASO: 37/38, 59/62, aviso_gate 76/76, ficha 70/70 ->
+     igual (los dos antiguos no lo ven; por eso existe el script nuevo).
+  N8 sin longitud: 35/38, 58/62 -> igual.
+  N9 opción (a): 38/38, 51/62, schemas 64/66 -> igual.
+  N10 [AVISO] con el texto: 37/38, 60/62 -> igual.
+
+Suite completa, 57 scripts:
+  - Primera pasada 15:08:56-15:28:16, 57/57 con código 0: NO VALE. Hubo un
+    Modern Standby (Kernel-Power 506 a las 15:21:31, 507 a las 15:27:20),
+    probablemente por la pantalla a 30 min sin tocar el portátil.
+  - A las 15:32:05, un proceso docker (PID 19532): se paró y se avisó.
+  - Segunda pasada, VÁLIDA: 15:32:52-15:51:42, 57/57 con código 0; 2.249 MB
+    libres a las 15:32:47, sin chrome, msedge, docker, vmmem ni WINWORD;
+    Gabi junto al portátil; ningún Kernel-Power 506/507 entre 15:32 y 15:52.
+    check_graceful_shutdown desde una copia en el 8030 (RESULTADO: OK);
+    check_mcp_connection desde una copia en el 8031 contra un uvicorn propio
+    SIN --reload: PID del log 25376 = netstat, detenido por ese PID
+    (lanzador 25196, terminado con él). Salida revisada a mano de los que no
+    dan línea de resultado: check_connection 10/10 tablas; check_foreign_keys
+    "no se ha modificado nada"; check_mcp_connection, las 3 tools;
+    check_pool_connections "Ninguna fila" (gotcha de Supavisor);
+    check_pool_transaction_state 0 filas persistidas; check_rls_estado RLS
+    activado, sin FORCE, 0 políticas. Recuentos: los de la sección 16 y 17
+    se repiten (resumen 38/38 y 62/62, resultados_llamada_http 202/202,
+    schemas 66, leads_endpoint 24, aviso_gate 76/76, ficha 70/70,
+    texto_agente 49/49, migracion_resumen_solicitud 12/12...).
+Datos reales: foto de las 10 tablas (14:55, antes de las negativas) igual
+después de las negativas (15:08) y después de la suite válida (15:52):
+TODAS IGUALES.
+SHA-256 (scratchpad): negativas_lanzar.py
+79a5752fe6f762d9ad9bed246e3e17f633ce67fcb929b941d70748f06e48ea09 (con
+docs/; la primera tanda usó la versión sin docs/,
+037c6e3def342b0d2f3647b56b9371958f06115a93b4bf7e38817e9a7430fe62);
+suite_lanzar.py e082e249ea0d116ccfe39aefe8226d337d5f0733a0a39cab09f6f4a2a2a1372c;
+foto_datos_reales.py b78a82586b94d3ce25d64f2a5af460878a7f68d0b24c87ef581b6a69254a5439;
+salida de las negativas e2c64c71e3154944bda667169d208849ee96d1ab71a401b28bfad6685b0e33e9,
+de N3/N7 repetidas 9f33f41986c90436b7fe1fc32fd541c65166c6aadc73f7dd8d73f2c2dd400a83,
+de la suite válida 3f7993f4b57019fdd979cbf032fd76b59e8ba889576b32eda8469fd7c36c6fda.
