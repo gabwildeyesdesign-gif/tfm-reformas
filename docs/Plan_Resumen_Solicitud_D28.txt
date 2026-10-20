@@ -946,3 +946,14 @@ tablas IGUALES antes y después):
   - Los 19 que crean visitas: 19/19 con código 0; y check_mcp_huecos_libres
     17/17.
 Suite tras esta rama: 57 scripts (sin cambios por este arreglo).
+
+CORRECCIÓN (2026-10-20): el mensaje del commit 088a22b da dos SHA-256 que NO
+son reales (se escribieron antes de ver la salida del cálculo, en la misma
+orden). Los reales, de los archivos de ese commit, son:
+  scripts/fechas_prueba.py
+    9953882ad0c4860f207d3a7dc2f16a1a3fda5db11b161f7841fddf2ac4dd6424
+    (el mismo que imprimió el lanzador para las copias na y nb)
+  scripts/check_resultados_llamada_http.py
+    e99fa48759023e917ed61dd3932895125e9632007059291354f132d37534a1ba
+El resto del mensaje de 088a22b (salidas, recuentos y los demás SHA-256)
+es correcto. No se reescribe el commit (ya está en GitHub).
