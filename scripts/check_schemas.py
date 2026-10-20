@@ -199,9 +199,41 @@ debe_aceptar(
 debe_aceptar(
     "LeadCreateResponse con creado = False (repeticion con el mismo token)",
     LeadCreateResponse,
+    # Desde el 2026-10-20 (D28.1) la respuesta lleva también
+    # resumen_solicitud_estado, obligatorio.
     {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1,
-     "status": "pendiente_aprobacion", "creado": False},
+     "status": "pendiente_aprobacion", "creado": False, "resumen_solicitud_estado": "guardado"},
     lambda o: True if o.creado is False else f"creado={o.creado!r}",
+)
+# D28.1: el resumen es OPCIONAL. Sin la clave (el chat publicado de hoy),
+# vale None.
+debe_aceptar(
+    "LeadCreate sin resumen_solicitud -> None (opcional, D28.1)",
+    LeadCreate,
+    LEAD_VALIDO,
+    lambda o: True if o.resumen_solicitud is None else f"resumen_solicitud={o.resumen_solicitud!r}",
+)
+# Con null explícito, también None.
+debe_aceptar(
+    "LeadCreate con resumen_solicitud = null -> None",
+    LeadCreate,
+    con(resumen_solicitud=None),
+    lambda o: True if o.resumen_solicitud is None else f"resumen_solicitud={o.resumen_solicitud!r}",
+)
+# Con un texto que tiene un email: Pydantic lo ACEPTA (el filtro no da 422
+# en el resumen, P1 = b; lo descarta el servicio) y lo deja tal cual.
+debe_aceptar(
+    "LeadCreate con un resumen con email -> aceptado tal cual (lo evalúa el servicio, sin 422)",
+    LeadCreate,
+    con(resumen_solicitud="  escribir a ana@example.com  "),
+    lambda o: True if o.resumen_solicitud == "  escribir a ana@example.com  " else f"{o.resumen_solicitud!r}",
+)
+# Y uno de 400 caracteres: sin tope en Pydantic (P4).
+debe_aceptar(
+    "LeadCreate con un resumen de 400 caracteres -> aceptado (sin tope en Pydantic, P4)",
+    LeadCreate,
+    con(resumen_solicitud="x" * 400),
+    lambda o: True if len(o.resumen_solicitud) == 400 else f"len={len(o.resumen_solicitud)}",
 )
 debe_aceptar(
     "PhotoUploadSlot valido",
@@ -217,11 +249,22 @@ debe_aceptar(
 debe_aceptar(
     "LeadCreateResponse con los 3 ids enteros + status",
     LeadCreateResponse,
-    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1, "status": "nueva", "creado": True},
+    # Con resumen_solicitud_estado (D28.1), obligatorio desde el 2026-10-20.
+    {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1, "status": "nueva", "creado": True,
+     "resumen_solicitud_estado": "sin_resumen"},
     lambda o: True if o.oportunidad_id == 1 else f"oportunidad_id={o.oportunidad_id}",
 )
 
 print("\n=== B. LO QUE DEBE RECHAZARSE ===")
+# D28.1: el ÚNICO 422 del resumen es por el tipo (un número no es texto).
+debe_rechazar("resumen_solicitud = 123 (no es texto)", LeadCreate, con(resumen_solicitud=123), "string_type")
+# La respuesta sin resumen_solicitud_estado: es obligatorio.
+debe_rechazar("LeadCreateResponse sin resumen_solicitud_estado", LeadCreateResponse,
+              {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1, "status": "nueva", "creado": True}, "missing")
+# Y con un valor que no es de los cinco.
+debe_rechazar("LeadCreateResponse con resumen_solicitud_estado inventado", LeadCreateResponse,
+              {"lead_id": 1, "cliente_id": 1, "oportunidad_id": 1, "status": "nueva", "creado": True,
+               "resumen_solicitud_estado": "recortado"}, "enum")
 debe_rechazar("m2 = 0", LeadCreate, con(m2=0), "greater_than")
 debe_rechazar("m2 negativo (-5)", LeadCreate, con(m2=-5), "greater_than")
 # El tope nuevo (MAX_M2_LEAD). Sin el, un lead de 60.000 m2 se aceptaba

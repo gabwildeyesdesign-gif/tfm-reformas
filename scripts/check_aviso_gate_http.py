@@ -98,8 +98,10 @@ PATRON_EMAIL = "http-aviso-%@example.com"
 MADRID = ZoneInfo("Europe/Madrid")
 # Las claves EXACTAS de cada nivel de la respuesta (plan, 1.5), copiadas
 # del PLAN y no del código, para no depender de lo que se está probando.
+# Desde el 2026-10-20 (D28.1; plan docs/Plan_Resumen_Solicitud_D28.txt, 5.2)
+# la raíz lleva también resumen_solicitud: 9 claves.
 CLAVES_RAIZ = {"oportunidad_id", "estado_oportunidad", "fecha_solicitud", "contacto",
-               "reforma", "fotos", "presupuesto", "decision"}
+               "reforma", "resumen_solicitud", "fotos", "presupuesto", "decision"}
 CLAVES_CONTACTO = {"nombre", "email", "telefono", "origen"}
 CLAVES_REFORMA = {"tipo_reforma", "m2", "nivel_acabados", "incluye_cambios_estructurales"}
 CLAVES_PRESUPUESTO = {"fecha_presupuesto", "motivo_gate", "iva_pct_aplicado", "importe_min_con_iva",
@@ -689,6 +691,11 @@ try:
         comprobar(f"{etiqueta}: ninguna clave prohibida en ningún nivel",
                   not (claves_anidadas(datos) & CLAVES_PROHIBIDAS), f"({claves_anidadas(datos) & CLAVES_PROHIBIDAS})")
     comprobar("X: claves de decision = las del contrato", set(dx) == CLAVES_DECISION, f"({sorted(dx)})")
+    # D28.1: los leads de este script no envían resumen; la clave está en la
+    # raíz con null (los resúmenes con texto los prueba
+    # check_resumen_solicitud_http).
+    comprobar("A y X: resumen_solicitud presente y null (sus leads no lo envían)",
+              all("resumen_solicitud" in d and d["resumen_solicitud"] is None for d in (a, x)))
     # Corrección del tutor sobre el Bloque B: el estado es uno de los 8 del CHECK.
     comprobar("se leyeron 8 estados del CHECK de schema_actual.sql", len(ESTADOS_CHECK) == 8, f"({len(ESTADOS_CHECK)})")
     comprobar("estado_oportunidad es uno de los 8 del CHECK (A, B2, L, X, Z)",

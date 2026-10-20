@@ -112,9 +112,11 @@ MADRID = ZoneInfo("Europe/Madrid")
 # es un conjunto: no importa el orden, y se compara con set(respuesta).
 # La raíz de la respuesta: los 12 campos. (Nota 2026-10-11, Bloque B2 de
 # docs/Plan_Resultado_Llamadas.txt: 13 desde B2, con llamada_registrable, P9.)
-CLAVES_RAIZ = {"oportunidad_id", "estado_oportunidad", "fecha_solicitud", "contacto", "reforma", "fotos",
-               "presupuesto", "visitas", "llamadas", "llamada_registrable", "historial", "historial_cuadra",
-               "otras_oportunidades_mismo_email"}
+# (Nota 2026-10-20, D28.1; plan docs/Plan_Resumen_Solicitud_D28.txt, 5.3:
+# 14, con resumen_solicitud.)
+CLAVES_RAIZ = {"oportunidad_id", "estado_oportunidad", "fecha_solicitud", "contacto", "reforma",
+               "resumen_solicitud", "fotos", "presupuesto", "visitas", "llamadas", "llamada_registrable",
+               "historial", "historial_cuadra", "otras_oportunidades_mismo_email"}
 # Los objetos compartidos con /gate-avisos: contacto y reforma.
 CLAVES_CONTACTO = {"nombre", "email", "telefono", "origen"}
 CLAVES_REFORMA = {"tipo_reforma", "m2", "nivel_acabados", "incluye_cambios_estructurales"}
@@ -835,6 +837,11 @@ try:
             if any(tiene != esperadas for tiene, esperadas in niveles):
                 malas.append(c["oportunidad_id"])
         comprobar(f"claves exactas en todos los niveles de las {len(cuerpos_200)} fichas", not malas, f"({malas})")
+        # D28.1: ningún lead de este script envía resumen; en todas sus fichas
+        # la clave está con null (los resúmenes con texto los prueba
+        # check_resumen_solicitud_http).
+        comprobar(f"resumen_solicitud null en las {len(cuerpos_200)} fichas (sus leads no lo envían)",
+                  all(c.get("resumen_solicitud", "falta") is None for c in cuerpos_200))
         # Todas las claves de todas las fichas, cruzadas ("&") con las prohibidas.
         prohibidas = set().union(*(claves_anidadas(c) for c in cuerpos_200)) & CLAVES_PROHIBIDAS
         comprobar("ninguna clave prohibida (2.6) en ningún nivel", not prohibidas, f"({sorted(prohibidas)})")

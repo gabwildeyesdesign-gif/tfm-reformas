@@ -162,10 +162,19 @@ try:
 
     comprobar("Codigo HTTP 201 Created", resp.status_code == 201, f"({resp.status_code})")
     cuerpo_resp = resp.json()
-    # Fase 2: el contrato gana la clave "creado" (5 claves).
-    comprobar("La respuesta trae las 5 claves del contrato",
-              set(cuerpo_resp) == {"lead_id", "cliente_id", "oportunidad_id", "status", "creado"},
+    # Fase 2: el contrato gana la clave "creado" (5 claves). Desde el
+    # 2026-10-20 (D28.1, plan docs/Plan_Resumen_Solicitud_D28.txt, 5.1),
+    # también resumen_solicitud_estado: 6 claves.
+    comprobar("La respuesta trae las 6 claves del contrato",
+              set(cuerpo_resp) == {"lead_id", "cliente_id", "oportunidad_id", "status", "creado",
+                                   "resumen_solicitud_estado"},
               f"({sorted(cuerpo_resp)})")
+    # Este cuerpo no envía resumen_solicitud (como el chat publicado de hoy):
+    # el alta es 201 igual y el estado lo dice.
+    comprobar("Sin resumen_solicitud en el cuerpo: resumen_solicitud_estado == 'sin_resumen'",
+              cuerpo_resp.get("resumen_solicitud_estado") == "sin_resumen",
+              f"({cuerpo_resp.get('resumen_solicitud_estado')})")
+    # Lo de antes de D28.1: el estado de la oportunidad y el tipo de los ids.
     comprobar("status == 'nueva'", cuerpo_resp.get("status") == "nueva")
     comprobar("Los 3 ids son enteros",
               all(isinstance(cuerpo_resp[k], int)

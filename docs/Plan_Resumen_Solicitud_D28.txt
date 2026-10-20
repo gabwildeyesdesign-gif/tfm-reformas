@@ -818,3 +818,46 @@ Archivos:
 Sin cambios (git diff main vacío): listado_llamadas_service.py,
 listado_llamadas.py, app/api/, visits.py y visits_service.py; ReformaAviso,
 SolicitudLlamada y LeadSessionResponse sin ningún campo "resumen" (ast).
+
+
+15. NOTA 2026-10-20: BLOQUE B3, FASE 1 (scripts, SIN ejecutar)
+================================================================
+Hallazgo del tutor D37.1 (revisión de B2): el patrón de teléfono marca como
+teléfono un rango de importes con guion ("presupuesto 15.000-20.000 euros",
+"8.000 - 10.000 €" -> descartado_telefono); "entre 15.000 y 20.000 euros" se
+guarda. No se cambia el patrón (P6); se corrige en el prompt del Agente 1
+después del merge. check_resumen_solicitud_service lo fija con su resultado
+de HOY como "límite conocido D37.1, no un fallo" (si alguien cambia el
+patrón, el script avisa). Se añade a los riesgos: R2b.
+Scripts:
+  - check_resumen_solicitud_service.py (nuevo, sin base de datos): S1 23
+    (incluye comillas dobles y salto de línea en medio, 300/301, 300 con
+    espacios alrededor, email + teléfono -> email, 301 con email ->
+    longitud, y los 3 de D37.1), S2 2, S3 13 (introspección y ast). Previsto
+    38/38.
+  - check_resumen_solicitud_http.py (nuevo, puerto 8034): CASOS 1-17 de 7.2;
+    el nombre del cliente lleva otra marca (RUN) que el resumen (MARCA),
+    porque la lista diaria enseña el nombre. Previsto 62/62.
+  - check_leads_endpoint_http (6 claves y sin_resumen; previsto 24),
+    check_schemas (+4 aceptar, +3 rechazar; previsto 66),
+    check_aviso_gate_http (9 claves en la raíz y null en A y X; previsto
+    76/76), check_ficha_oportunidad_http (14 claves y null en sus fichas,
+    todas propias; previsto 70/70), check_texto_agente_service (S8, el
+    detector; S1-S7 sin tocar; previsto 49/49).
+Deuda de comentarios previa de main (check_leads_endpoint_http 157,
+check_schemas 122, check_aviso_gate_http 171): NO se arregla aquí (mismo
+criterio que el tutor dio para check_migracion_decisiones_gate). Las líneas
+nuevas: 0 sentencias en tramos largos (medidor de cambios); la deuda baja a
+156, 113 y 171.
+Regresión de visitas (P6), PREPARADA, sin ejecutar: 19 scripts que crean
+visitas (INSERT INTO visitas, POST /visits, servicio o resultado con visita):
+check_aviso_gate_http, check_disponibilidad_service,
+check_ficha_oportunidad_http, check_ficha_oportunidad_service,
+check_followup_tasks_http, check_gate_decisions_http,
+check_gate_decisions_service, check_huecos_libres_http,
+check_huecos_libres_service, check_listado_llamadas_http,
+check_listado_llamadas_service, check_migracion_decisiones_gate,
+check_migracion_paso13b, check_migracion_resultado_llamadas,
+check_migracion_visitas, check_resultados_llamada_http,
+check_resultados_llamada_service, check_visits_http y check_visits_service
+(lanzador del scratchpad regresion_visitas.py). Van también en la suite.

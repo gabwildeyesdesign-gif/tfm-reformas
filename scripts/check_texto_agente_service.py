@@ -57,6 +57,10 @@ from app.schemas.common import (
     MENSAJE_TELEFONO_EN_TEXTO,
     texto_sin_datos_de_contacto,
 )
+# Desde el 2026-10-20 (P6 del plan docs/Plan_Resumen_Solicitud_D28.txt): el
+# detector compartido, sin error, que usan el filtro de visitas y el resumen
+# de la solicitud, con sus dos motivos.
+from app.schemas.common import MOTIVO_EMAIL, MOTIVO_TELEFONO, motivo_datos_de_contacto
 
 # El esquema del cuerpo de POST /visits.
 from app.schemas.visits import VisitaCreate
@@ -304,6 +308,37 @@ comprobar("301 caracteres con un email -> solo string_too_long (el filtro va des
           f"({[e['type'] for e in errores]})")
 # Un texto válido de los del tutor pasa también por el esquema completo.
 comprobar("'a las 9:30' -> pasa por VisitaCreate", errores_visita("a las 9:30") == [])
+
+# ----------------------------------------------------------------------
+print("\nS8 - El detector compartido motivo_datos_de_contacto (P6, 2026-10-20)")
+# ----------------------------------------------------------------------
+# Las secciones S1-S7 no cambian: demuestran que el filtro de visitas hace
+# lo mismo que antes ahora que pregunta a este detector. Aquí, el detector
+# solo: dice el motivo y NUNCA lanza error.
+CASOS_DETECTOR = [
+    # Un email, un teléfono, los dos (gana el email) y ninguno.
+    ("escribir a pepe@gmail.com", MOTIVO_EMAIL),
+    ("llamar al 666 777 444", MOTIVO_TELEFONO),
+    ("pepe@gmail.com o el 666 777 444", MOTIVO_EMAIL),
+    ("a las 9:30 el 19/10/2026", None),
+]
+# Se prueba cada texto.
+for texto, esperado in CASOS_DETECTOR:
+    # try/except: si lanzara algo, FALLO contado (no debe lanzar nunca).
+    try:
+        # Lo que dice el detector.
+        obtenido = motivo_datos_de_contacto(texto)
+    # Cualquier excepción es un fallo.
+    except Exception as error:
+        # Se cuenta con su nombre.
+        comprobar(f"detector: {texto!r}", False, f"(excepción: {type(error).__name__})")
+    # Sin excepción: se compara.
+    else:
+        # El motivo esperado.
+        comprobar(f"detector: {texto!r} -> {esperado}", obtenido == esperado, f"(obtenido: {obtenido})")
+# Los dos motivos son los textos del plan.
+comprobar("MOTIVO_EMAIL = 'email' y MOTIVO_TELEFONO = 'telefono'",
+          (MOTIVO_EMAIL, MOTIVO_TELEFONO) == ("email", "telefono"), f"({MOTIVO_EMAIL}, {MOTIVO_TELEFONO})")
 
 # ----------------------------------------------------------------------
 # Resumen: total y lista de fallos.
