@@ -31,6 +31,11 @@ formulario solo necesita estos campos:
 `llamada_registrable` la calcula el backend con la MISMA regla que usa al registrar: el formulario no tiene que
 deducir nada.
 
+**[Nota 2026-10-20, D28.1]** La ficha trae también `resumen_solicitud` (texto o `null`, en la raíz): el resumen que
+escribió el Agente 1 sobre lo que quiere el cliente. El formulario NO lo necesita para decidir nada; si lo enseña al
+operador, con `esc()` y como "Resumen del asistente" (orientativo; `null` en las solicitudes anteriores al
+2026-10-20). Contrato: Adenda, 5.12.
+
 | `tipo_llamada` | Cuándo | `resultados` |
 |---|---|---|
 | `gate` | Caso con Gate pendiente | `visita_acordada`, `descartar` |

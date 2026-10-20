@@ -909,6 +909,20 @@ Evidencia de que no es de esta rama: el id 7891 es <= id_base de visitas
 (7896) de la foto inicial, las 11 visitas reales siguen IGUALES y el script
 no toca nada del resumen. No se toca la visita (no es de ningún script).
 Pendiente de decidir con Gabi (sección 10 del [PARA]).
+(Resuelto en la sección 17: H-C-2 arreglado en 088a22b.)
+
+Añadido 2026-10-20 (Bloque D), valores calculados y LEÍDOS antes de
+escribirlos:
+  - Resumen de esta primera tanda (scratchpad bloque_c/resumen.txt), que el
+    mensaje de 60c055f no traía: SHA-256
+    6d77a82b7fd13604c3c7b8cd854bbfaed547f40c32e0df868c6dc7a6bb0f9957.
+  - Los dos SHA-256 reales de los archivos de 088a22b (el mensaje de ese
+    commit da dos valores que NO son reales; corregido también en 77bb371),
+    calculados con git show 088a22b:<archivo> | sha256sum:
+      scripts/fechas_prueba.py
+        9953882ad0c4860f207d3a7dc2f16a1a3fda5db11b161f7841fddf2ac4dd6424
+      scripts/check_resultados_llamada_http.py
+        e99fa48759023e917ed61dd3932895125e9632007059291354f132d37534a1ba
 
 
 17. NOTA 2026-10-20: H-C-2 ARREGLADO (commit propio)
@@ -1029,3 +1043,23 @@ foto_datos_reales.py b78a82586b94d3ce25d64f2a5af460878a7f68d0b24c87ef581b6a69254
 salida de las negativas e2c64c71e3154944bda667169d208849ee96d1ab71a401b28bfad6685b0e33e9,
 de N3/N7 repetidas 9f33f41986c90436b7fe1fc32fd541c65166c6aadc73f7dd8d73f2c2dd400a83,
 de la suite válida 3f7993f4b57019fdd979cbf032fd76b59e8ba889576b32eda8469fd7c36c6fda.
+
+
+19. NOTA 2026-10-20/21: BLOQUE D (documentación, fase 1, sin ejecutar nada)
+================================================================
+  - docs/Decisiones_D28_...md: nota fechada (D28.1 revisada por D36.8,
+    opción b; lo implementado; límite conocido D37.1; pendiente en n8n). El
+    texto original no se toca.
+  - Sección 16 de este plan: los SHA-256 reales de 088a22b (git show
+    088a22b:<archivo> | sha256sum) y el del resumen de la primera tanda.
+  - Adenda: notas en las filas 1, 7 y 9 y en 5.1, 5.6 y 5.9; sección nueva
+    5.12 (contrato completo, los 5 valores de resumen_solicitud_estado,
+    orden de las comprobaciones, limitaciones y verificación).
+  - docs/Contrato_Formulario_Llamadas.md: nota sobre resumen_solicitud en la
+    ficha (el formulario no lo necesita para decidir).
+  - CLAUDE.md: notas fechadas en "Dos puertas", estado actual, suite (57) y
+    lista de docs/.
+  Revisados sin cambios: n8n/README.md (describe los flujos publicados; la
+  plantilla de WF2 aún no cambia) y los registros históricos de docs/
+  (decisiones D16-D29, planes de bloques cerrados y resúmenes de sesión: no
+  se reescriben). No hay README en la raíz.

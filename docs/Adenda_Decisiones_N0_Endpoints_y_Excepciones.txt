@@ -10,15 +10,15 @@ endpoints y revisión técnica final.
 
 | # | Endpoint | Input | Output | Trigger real |
 |---|---|---|---|---|
-| 1 | POST /leads | nombre, email (se guarda entero en minúsculas), telefono (se normaliza; ver 5.1), tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token (máx. 100 caracteres; clave de idempotencia, ver 5.1) | 201 (alta nueva) o 200 (repetición con el mismo lead_token): lead_id, cliente_id, oportunidad_id, status, creado (ver 5.1) | Webhook n8n, al confirmar el cliente los datos en el chat web (Agente 1) |
+| 1 | POST /leads | nombre, email (se guarda entero en minúsculas), telefono (se normaliza; ver 5.1), tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token (máx. 100 caracteres; clave de idempotencia, ver 5.1) | 201 (alta nueva) o 200 (repetición con el mismo lead_token): lead_id, cliente_id, oportunidad_id, status, creado (ver 5.1) | Webhook n8n, al confirmar el cliente los datos en el chat web (Agente 1) **[Nota 2026-10-20, rama feat/n0-resumen-solicitud]** Entrada: resumen_solicitud OPCIONAL (texto o null; solo el tipo da 422). Respuesta: también resumen_solicitud_estado (guardado | sin_resumen | descartado_longitud | descartado_email | descartado_telefono). El resumen NUNCA da 422 ni hace perder el lead (D36.8, opción b). Ver 5.12 |
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
 | 3 | POST /gate-decisions | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) **[Nota 2026-10-11, rama feat/n0-resultado-llamadas]** Desde el Bloque B1 es el ALIAS, con este mismo contrato y solo para casos con Gate, de POST /resultados-llamada (fila 10, 5.10): la misma función del servicio. Se quitará cuando el formulario de n8n use la ruta nueva (D26.6). Ver la nota de 5.5  **[Nota 2026-10-12, rama feat/n0-agente2]** El alias gana el 409 hueco_ocupado con huecos_libres (D31, P17): ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
 | 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** texto_cliente baja a 1..300 caracteres y da 422 si tiene forma de email o de teléfono (D26.7); 409 hueco_ocupado con huecos_libres si la visita se solapa con otra activa (D31). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`. **[Nota 2026-10-07]** La base del plazo es presupuestos.created_at (la pre-estimación), no la creación de la oportunidad; las 48 h viven en reglas_negocio.horas_seguimiento_presupuesto (migración paso11), no en el código. Las oportunidades que cumplen la condición las da GET /llamadas-del-dia (fila 8, apartado seguimientos_por_abrir); este endpoint sigue sin implementar (rama siguiente). **[Nota 2026-10-08, rama feat/n0-create-followup-task]** Implementado. Contrato real: entrada oportunidad_id (entero > 0) y motivo (solo 'sin_respuesta_visita' en N0, D25.13), cabecera X-Gate-Secret; salida log_id, oportunidad_id, motivo, estado_oportunidad (el "status" de esta fila, con el nombre de los endpoints recientes; P6 de su plan), fecha_apertura y creado; 201 (abre el seguimiento) o 200 (ya abierto, no escribe); 404, 409 con seis motivos, 422, 503 sin log. Trigger: WF3, por cada elemento de seguimientos_por_abrir de GET /llamadas-del-dia. Solo REST. Ver 5.8 |
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** Añade reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales} y plazo_orientativo (D18.7; null salvo baño o cocina con presupuesto, sin Gate y sin cambios); 503 configuracion_incompleta solo si hace falta un plazo y su regla falta. Sigue sin importes. Ver 5.11 |
-| 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura |
+| 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 |
 | 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura. **[Nota 2026-10-11, rama feat/n0-resumen-lista-diaria, D26.1]** Cada elemento lleva además el objeto "solicitud" {m2 (texto exacto o null), nivel_acabados, incluye_cambios_estructurales}, siempre presente, después de tipo_reforma; los de visita (d y e), además, texto_cliente de ESA visita. Siguen sin salir email e importes. Ver la nota del 2026-10-11 en 5.7 |
-| 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura |
+| 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 |
 | 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
 | 11 | GET /huecos-libres | Sin parámetros (modo días) o ?fecha=AAAA-MM-DD (modo un día); cualquier otro parámetro, 422. Cabecera X-Gate-Secret, puesta en el router (ver 5.11 e) | 200 siempre que la petición sea válida. Modo días: modo, generado_en, dias [{fecha, dia_semana, manana, tarde, num_horas_libres, etiqueta}]. Modo un día: modo, generado_en, fecha, dia_semana, manana, tarde, horas, sin_horas_motivo (null, fecha_pasada, fin_de_semana o dia_completo). NUNCA datos de otras visitas. 401, 422 de forma, 503 configuracion_incompleta sin log | **[Añadido 2026-10-13, D32]** El formulario de n8n de POST /resultados-llamada, en sus páginas "Día" y "Hora". El Agente 2 tiene la misma consulta como tool MCP consultar_huecos_libres (sin etiqueta). Solo lectura. Forma exacta: docs/Contrato_Formulario_Llamadas.md |
 
@@ -328,6 +328,15 @@ WWW-Authenticate: APIKey), para no dar pistas a quien pruebe valores. El
 secreto se compara en tiempo constante (secrets.compare_digest).
 Implementación: app/api/security.py. Verificación:
 scripts/check_webhook_auth_http.py.
+
+(Nota 2026-10-20, rama feat/n0-resumen-solicitud, D28.1 revisada por D36.8.)
+POST /leads admite el campo OPCIONAL resumen_solicitud y su respuesta, 201 o
+200, añade resumen_solicitud_estado. El contenido del resumen nunca da un 422
+ni un 500: si no pasa el filtro, el lead se guarda con resumen NULL y el
+estado dice por qué. Solo da 422 un resumen_solicitud que no sea texto ni
+null (por ejemplo, un número), y el 401 sigue antes que cualquier 422. En una
+repetición con el mismo lead_token el resumen nuevo se ignora, como los demás
+datos. Contrato completo: 5.12.
 
 5.2 POST /calculate-estimate y tool MCP calculate_estimate (añadido el
 2026-09-19, en el mismo bloque que el código)
@@ -740,6 +749,11 @@ docs/Contrato_Formulario_Llamadas.md. Ver 5.11.)
 
 5.6 GET /gate-avisos/{oportunidad_id} (añadido el 2026-10-03, rama
 feat/n0-aviso-gate)
+
+(Nota 2026-10-20, rama feat/n0-resumen-solicitud.) La raíz de la respuesta
+gana UNA clave, resumen_solicitud (texto o null), justo después de reforma: el
+resumen que escribió el Agente 1 (leads.resumen_solicitud). WF2 lee las
+claves por nombre, así que una clave más no lo rompe. Ver 5.12.
 
 (Nota 2026-10-11, rama feat/n0-resultado-llamadas, hallazgo C17 validado por
 el tutor.) decision.motivo admite también 'sin_decision' (D29.3): un Gate
@@ -1227,6 +1241,10 @@ abrir (b) se puede registrar también sin haberlo abierto antes.
 
 5.9 GET /oportunidades/{oportunidad_id}/ficha (añadido el 2026-10-10, rama
 feat/n0-ficha-oportunidad)
+
+(Nota 2026-10-20, rama feat/n0-resumen-solicitud.) La raíz gana la misma
+clave que GET /gate-avisos: resumen_solicitud (texto o null), después de
+reforma. Ver 5.12.
 
 Para qué: la ficha completa de CUALQUIER oportunidad, con o sin Gate, para
 que administración sepa qué pidió el cliente antes de llamarle (D26.2): un
@@ -1812,6 +1830,76 @@ de desplazamiento, seis horas de inicio al día; D31 se escribió sin ella.
   check_mcp_huecos_libres 17/17, check_visits_http 93/93,
   check_resultados_llamada_http 185/185, check_gate_decisions_http 125/125,
   pruebas en negativo N1-N14 (sección 12 del plan) y suite completa 53/53.
+
+5.12 Resumen de la solicitud, D28.1 (añadido el 2026-10-20, rama
+feat/n0-resumen-solicitud)
+
+Para qué: que administración sepa QUÉ quiere el cliente antes de llamar. El
+Agente 1 escribe un resumen corto al capturar los datos (un campo más de lo
+que envía a POST /leads); se guarda en leads.resumen_solicitud y se ve en el
+aviso del Gate (GET /gate-avisos, email de WF2) y en la ficha. NUNCA sale en
+GET /llamadas-del-dia (acumulación, D26 sección 1.3) ni en GET /leads/session
+(el Agente 2 no lo necesita en N0). La conversación completa NO se guarda
+(D28.1, opción B rechazada). Plan, decisiones (P1-P9) y pruebas:
+docs/Plan_Resumen_Solicitud_D28.txt.
+
+Base de datos (migración paso15, aplicada el 2026-10-20 a las 12:42:46):
+columna leads.resumen_solicitud TEXT NULL, sin DEFAULT, con el CHECK
+chk_leads_resumen_solicitud_longitud (char_length de 1 a 300). Los leads
+anteriores tienen NULL. Defensa doble: la evaluación en Python
+(MAX_RESUMEN_SOLICITUD = 300) y el CHECK.
+
+POST /leads, entrada:
+  resumen_solicitud   OPCIONAL: texto o null; si falta, null. El chat
+                      publicado, que no lo envía, sigue dando 201.
+POST /leads, respuesta (201 alta y 200 repetición): los campos de siempre más
+  resumen_solicitud_estado, uno de estos cinco valores:
+    guardado             se guardó, recortados los espacios de los extremos
+                         (en una repetición: el lead original tiene resumen).
+    sin_resumen          no llegó: ausente, null, vacío o solo espacios (en
+                         una repetición: el original no tiene resumen).
+    descartado_longitud  más de 300 caracteres tras recortar: no se guarda
+                         (nunca se corta: podría cambiar el sentido).
+    descartado_email     tiene forma de email: no se guarda.
+    descartado_telefono  tiene 9 o más cifras seguidas con separadores de
+                         teléfono: no se guarda.
+  La respuesta NUNCA repite el texto del resumen.
+Evaluación (app/services/resumen_solicitud.py), en este orden y con un solo
+motivo: vacío -> longitud -> email -> teléfono -> guardado. Usa el MISMO
+detector que visitas.texto_cliente (D26.7, app/schemas/common.py), pero sin
+422: el lead se guarda SIEMPRE (D36.8, opción b; revisa el "rechazo 422" de
+D28.1 por C1 y C6 del plan). En un alta con descarte, el servidor escribe en
+stderr "[AVISO] POST /leads: resumen_solicitud no guardado en el lead N
+(motivo)", sin el texto. No se escribe en logs.
+Códigos y orden: 401 (cabecera) -> 422 de forma (también un
+resumen_solicitud que no sea texto ni null) -> evaluación del resumen (nunca
+rechaza) -> 201 alta / 200 repetición. Sin códigos nuevos.
+Repetición con el mismo lead_token: el resumen nuevo se IGNORA (no
+sobrescribe ni rellena); el estado describe lo guardado.
+
+GET /gate-avisos/{id} y GET /oportunidades/{id}/ficha: la raíz añade
+  resumen_solicitud   texto tal cual se guardó, o null.
+En la raíz y NO dentro de "reforma": ese objeto (ReformaAviso) es también la
+"reforma" de GET /leads/session, y por ahí llegaría al Agente 2.
+
+Limitaciones:
+  - El filtro no detecta un nombre, una dirección ni datos de salud escritos
+    en prosa: lo cubre solo el prompt del Agente 1 (R1 de D26.7).
+  - Falsos positivos: un texto inocente con 9 o más cifras seguidas se
+    descarta (el lead se guarda). Límite conocido D37.1: un rango de importes
+    con guion ("15.000-20.000 euros", "8.000 - 10.000 €") se descarta como
+    teléfono; "entre 15.000 y 20.000 euros" se guarda. Se corrige en el
+    prompt del Agente 1, en n8n.
+  - Un descarte solo deja rastro en la respuesta y en stderr, no en logs.
+  - Lo escribe un modelo de lenguaje: es orientativo ("Resumen del
+    asistente").
+  - En n8n (fuera del backend): el cuerpo de la tool guardar_datos_reforma
+    tiene que ser JSON válido con cualquier texto (comillas, saltos de
+    línea): requisito C5, que afecta también a nombre, email y teléfono.
+Verificación (2026-10-20): check_migracion_resumen_solicitud 12/12 (2/12 antes
+de migrar; ensayo sin CHECK 10/13), check_resumen_solicitud_service 38/38,
+check_resumen_solicitud_http 62/62 (puerto 8034), pruebas en negativo N1-N10
+y suite completa 57/57 en una pasada válida (secciones 15-18 del plan).
 
 6. Revisión técnica final — hallazgos y resolución
 

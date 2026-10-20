@@ -279,6 +279,13 @@ merge), POST /visits, POST /resultados-llamada y el alias /gate-decisions
 responden además fecha_fin_visita (inicio + duracion_visita_min, mismo
 formato y desfase; null sin visita), para el subflujo WF5 de n8n que copia
 las visitas a Google Calendar. Sin endpoints ni tools nuevos.)
+(Nota 2026-10-20, D28.1: en la rama feat/n0-resumen-solicitud (pendiente de
+merge), POST /leads admite resumen_solicitud (opcional) y responde
+resumen_solicitud_estado (guardado | sin_resumen | descartado_longitud |
+descartado_email | descartado_telefono; nunca 422 por el resumen, D36.8);
+GET /gate-avisos y la ficha lo devuelven en la raíz; NUNCA la lista diaria
+ni /leads/session. Columna leads.resumen_solicitud (paso15, APLICADA el
+2026-10-20). Detalle: Adenda 5.12 y docs/Plan_Resumen_Solicitud_D28.txt.)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -692,6 +699,22 @@ SOLO REST.
 > cambia). Misma regla de siempre: no hacer merge sin la confirmación
 > explícita de Gabi, después de la revisión del tutor, y siempre con
 > `--ff-only`.
+>
+> **(Nota 2026-10-20.)** `feat/n0-fecha-fin-visita` (D33) ya está en `main`.
+> **Bloque actual: D28.1, resumen de la solicitud**, implementado y verificado
+> en la rama `feat/n0-resumen-solicitud`, **pendiente de merge** (bloques A,
+> B1, B2, B3, C y D; plan docs/Plan_Resumen_Solicitud_D28.txt, con los hashes
+> y resultados en sus secciones 13-19; contrato en la Adenda 5.12). OJO: la
+> migración paso15 (leads.resumen_solicitud + CHECK 1..300) YA ESTÁ APLICADA
+> (2026-10-20 12:42:46; solo expand, main sigue funcionando). D36.8 revisa
+> D28.1: el resumen nunca da 422 (nota fechada en D28). En la rama también:
+> H-B1-1 (21a83c8) y H-C-2 (088a22b; los dos SHA-256 de su mensaje no son
+> reales, corregidos en 77bb371 y en la sección 16 del plan). Suite 57/57 en
+> una pasada válida. Misma regla de siempre: no hacer merge sin la
+> confirmación explícita de Gabi, después de la revisión del tutor, y siempre
+> con `--ff-only`. Después del merge: reiniciar el uvicorn del 8000 SIN
+> --reload (app/ cambia); en n8n, la tool del Agente 1 (requisito C5), su
+> prompt (D37.1: rangos como "entre X y Y") y la plantilla de WF2.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1077,6 +1100,12 @@ scripts, sin ninguno nuevo. 54/54 con código 0 en UNA pasada
 y sin Kernel-Power 506/507 entre 16:08 y 16:35; uvicorn del 8031 detenido
 por su PID 13944 (log = netstat); datos reales iguales (SHA-256 de las 10
 tablas). check_migracion_paso14b ya da 3/3 (paso14b aplicada).)
+(Nota 2026-10-20, rama feat/n0-resumen-solicitud: la suite tiene ahora 57
+scripts (check_migracion_resumen_solicitud, check_resumen_solicitud_service
+y check_resumen_solicitud_http, puerto 8034). 57/57 en UNA pasada válida
+(15:32:52-15:51:42), sin Kernel-Power 506/507; la de 15:08-15:28 NO valió
+(Modern Standby 15:21-15:27). Regla nueva: ningún SHA-256, recuento o salida
+se escribe en un commit en la misma orden que lo calcula.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1432,6 +1461,12 @@ rápida, no sustituye esa documentación. Contiene:
   y el alias; P1-P3 con alternativas, pruebas en negativo N1-N4 con sus
   resultados, y resultados de la fase 2 con los SHA-256 (sección 7). D33 lo
   tiene el tutor en el Proyecto de claude.ai.
+- Plan_Resumen_Solicitud_D28.txt — plan de D28.1 (rama
+  feat/n0-resumen-solicitud): dónde se guarda, opcional, límite, qué pasa si
+  no pasa el filtro (P1 = b, D36.8), repetición, dónde se ve; migración
+  paso15; pruebas en negativo N1-N10 con previsto y real; H-B1-1, H-C-2,
+  D37.1; suite 57/57 (secciones 12-19). D36 y D37 los tiene el tutor en el
+  Proyecto de claude.ai.
 - Decisiones_D28_Resumen_Conversacion_y_Enlace_Ficha.md y
   Decisiones_D29_Me_Lo_Pienso_y_Ultima_Llamada.md — D28 (resumen de la
   conversación, rama 2) y D29 (copiados del Proyecto de claude.ai el
