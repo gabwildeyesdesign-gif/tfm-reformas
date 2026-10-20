@@ -732,3 +732,58 @@ Bloque B1, fase 1 (2026-10-19, SIN ejecutar nada contra la base de datos):
   Recuentos previstos (sin ejecutar todavía): sin migrar, 2/12 (S0 y "nada
   queda"); ensayo con paso15, 13/13; ensayo con la copia sin ADD CONSTRAINT
   (N5), 10/13 (el CHECK, "" y 301); después de migrar, 12/12.
+
+
+13. NOTA 2026-10-20: BLOQUE B1, FASE 2 (paso15 APLICADA)
+================================================================
+Tanda previa (11:46-11:48): 2,28 GB libres a las 11:46:46 tras "wsl
+--shutdown" de Gabi (a las 11:46:00 quedaba vmmemWSL: se paró y se avisó);
+ningún chrome, msedge, docker ni vmmem; ningún Kernel-Power 506/507 entre
+11:45 y 11:48.
+  - Ensayo con paso15 (control): 13/13, código 0.
+  - Ensayo N5 (copia sin ADD CONSTRAINT, scratchpad n5/paso15_sin_check.py,
+    SHA-256 22ffeea282016818d8ecde4c6b51f31ce803144deff7cf0ccb90a73f1ce56810):
+    10/13, código 1 (el CHECK no existe; "" y 301 se aceptan: "la excepción
+    se ha tragado").
+  - Inspector antes de migrar: 2/12, código 1 (42703 en los cinco intentos).
+  - paso15 sin --confirmo-paso15: no se conecta, código 2.
+Primer intento de aplicar (12:06:18): 718 MB libres y 17 procesos msedge: se
+paró sin migrar y se avisó; Gabi cerró Edge.
+Aplicación, tras "confirmo la migración paso15" de Gabi: 2.596 MB libres a
+las 12:42:38, ningún chrome, msedge, docker ni vmmem. paso15 APLICADA el
+2026-10-20 a las 12:42:46 (código 0; foto antes: sin columna ni CHECK, 32
+leads; foto después: text y CHECK (((char_length(resumen_solicitud) >= 1) AND
+(char_length(resumen_solicitud) <= 300))), 32 leads).
+  - Inspector después: 12/12, código 0.
+  - Lectura READ ONLY + ROLLBACK (scratchpad medir_leads_paso15.py, SHA-256
+    7b68dcc00d072d197ef0567732423ba7cc48aac302bd55b54e442762851fb901): 32
+    leads, 32 con resumen_solicitud NULL, 0 con valor, id máximo 10304.
+  - main sigue funcionando con la columna (git diff main -- app/ vacío;
+    12:43:28-12:48:08): check_schemas 59 correctas, check_create_lead_service
+    52, check_leads_endpoint_http 23, check_webhook_auth_http 15,
+    check_lead_session_http 69/69, check_aviso_gate_service 18/18,
+    check_aviso_gate_http 75/75, check_ficha_oportunidad_service 40/40,
+    check_ficha_oportunidad_http 69/69, check_listado_llamadas_service 69/69
+    (todos código 0) y check_listado_llamadas_http 108/109 (código 1, ver
+    H-B1-1). Datos ajenos iguales antes y después en las 7 tablas que fotografía
+    ese script.
+  - dump_schema: docs/schema_actual.sql regenerado (columna y CHECK nuevos;
+    18 CHECK). check_schema_actual_ejecutable 10/10.
+  - Ningún Kernel-Power 506/507 entre 12:41 y 12:50.
+
+H-B1-1 (hallazgo, NO causado por paso15): el CASO 10 de
+check_listado_llamadas_http busca el teléfono FIJO de su ficha "600000103" en
+TODO el texto de la respuesta ("nada de la ficha de ese lead en la
+respuesta"). Una lectura de solo lectura (scratchpad buscar_telefono_fijo.py,
+SHA-256 ef30ecebd5ac02c92fd5dfb2d2ecf9b2ac2a2815bf661bcb3e84650364b53625)
+encontró ese número en una fila AJENA: el lead 10303 (cliente 10178),
+canal chat_web, email @example.com, creado el 2026-10-15 a las 20:18 UTC,
+oportunidad 12855 en 'pendiente_aprobacion' (probablemente una prueba a mano
+desde el chat de n8n). Con más de 24 h en Gate, sale en gates_sin_decision con
+su teléfono, y el CASO 10 da FALLO sin que nada esté roto. Es el tipo H-B5-1
+("los scripts solo comprueban SUS datos"). La fila no se toca (no es de ningún
+script). Arreglo propuesto: que la comprobación mire solo los elementos de
+las oportunidades propias y que el teléfono de la ficha lleve la marca
+aleatoria de la ejecución, con su prueba antes y después. Pendiente de
+decidir dónde (esta rama o una propia): sin arreglarlo, la suite del Bloque C
+tendría un rojo conocido.

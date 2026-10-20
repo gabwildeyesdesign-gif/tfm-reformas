@@ -1,7 +1,7 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-10-13 19:08:17 UTC
+-- Generado por scripts/dump_schema.py el 2026-10-20 10:49:11 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
@@ -14,7 +14,7 @@
 
 
 -- ------------------------------------------------------------------------
--- Tabla: clientes   (19 filas en el momento del volcado)
+-- Tabla: clientes   (24 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE clientes (
     id                       SERIAL NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE clientes (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: leads   (27 filas en el momento del volcado)
+-- Tabla: leads   (32 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE leads (
     id                       SERIAL NOT NULL,
@@ -37,14 +37,16 @@ CREATE TABLE leads (
     datos_estructurados      JSONB,
     created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     lead_token               VARCHAR(100),
+    resumen_solicitud        TEXT,
     CONSTRAINT leads_cliente_id_fkey FOREIGN KEY (cliente_id) REFERENCES clientes(id),
     CONSTRAINT leads_pkey PRIMARY KEY (id),
     CONSTRAINT leads_lead_token_key UNIQUE (lead_token),
-    CONSTRAINT chk_leads_m2_rango CHECK ((((datos_estructurados ->> 'm2'::text))::numeric > (0)::numeric) AND (((datos_estructurados ->> 'm2'::text))::numeric <= (500)::numeric))
+    CONSTRAINT chk_leads_m2_rango CHECK ((((datos_estructurados ->> 'm2'::text))::numeric > (0)::numeric) AND (((datos_estructurados ->> 'm2'::text))::numeric <= (500)::numeric)),
+    CONSTRAINT chk_leads_resumen_solicitud_longitud CHECK ((char_length(resumen_solicitud) >= 1) AND (char_length(resumen_solicitud) <= 300))
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: logs   (28 filas en el momento del volcado)
+-- Tabla: logs   (52 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE logs (
     id                       SERIAL NOT NULL,
@@ -57,7 +59,7 @@ CREATE TABLE logs (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: oportunidades   (27 filas en el momento del volcado)
+-- Tabla: oportunidades   (32 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE oportunidades (
     id                       SERIAL NOT NULL,
@@ -78,7 +80,7 @@ CREATE TABLE oportunidades (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: presupuestos   (19 filas en el momento del volcado)
+-- Tabla: presupuestos   (24 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE presupuestos (
     id                       SERIAL NOT NULL,
@@ -99,7 +101,7 @@ CREATE TABLE presupuestos (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: reglas_negocio   (20 filas en el momento del volcado)
+-- Tabla: reglas_negocio   (21 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE reglas_negocio (
     id                       SERIAL NOT NULL,
@@ -143,7 +145,7 @@ CREATE TABLE umbrales_gate (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: visitas   (3 filas en el momento del volcado)
+-- Tabla: visitas   (11 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE visitas (
     id                       SERIAL NOT NULL,
@@ -161,7 +163,7 @@ CREATE TABLE visitas (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: decisiones_gate   (9 filas en el momento del volcado)
+-- Tabla: decisiones_gate   (15 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE decisiones_gate (
     id                       SERIAL NOT NULL,
