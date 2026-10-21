@@ -1,8 +1,13 @@
 """
 Lógica de negocio del resultado de las llamadas de administración: POST
-/resultados-llamada y su alias POST /gate-decisions (plan:
-docs/Plan_Resultado_Llamadas.txt, secciones 2.2-2.9 con sus notas fechadas;
-la lógica del Gate es la de docs/Plan_Endpoint_Gate_Decisions.txt).
+/resultados-llamada (plan: docs/Plan_Resultado_Llamadas.txt, secciones
+2.2-2.9 con sus notas fechadas; la lógica del Gate es la de
+docs/Plan_Endpoint_Gate_Decisions.txt).
+
+Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión
+anterior en aba39c4. Con él se fueron registrar_decision, el parámetro
+solo_gate y todo lo que solo servía al alias (sus mensajes, el 409 sin_gate,
+el 409 decision_ya_registrada y el origen de log "gate_decisions").
 
 Historia: en el Bloque B1 (2026-10-11) este archivo se llamaba
 gate_decisions_service.py y se movió aquí sin cambiar nada. En el Bloque B2
@@ -12,11 +17,6 @@ gate_decisions_service.py y se movió aquí sin cambiar nada. En el Bloque B2
   confirmacion_visita  confirmar_hora | otra_hora | cliente_cancela (D25.11)
 El tipo NO lo envía el formulario: lo deduce app/services/tipo_llamada.py.
 
-El alias (registrar_decision, al final) llama a la MISMA función con
-solo_gate=True: solo casos con Gate, y los motivos, mensajes y el orden de
-POST /gate-decisions (Adenda 5.5), para que el formulario publicado no note
-nada.
-
 Todo ocurre en UNA transacción (READ COMMITTED), con la fila de la
 oportunidad bloqueada (FOR UPDATE): POST /visits y POST /create-followup-task
 bloquean la misma fila, así que las operaciones sobre una oportunidad se
@@ -24,8 +24,8 @@ ponen en fila.
 
 Como todo services/, este archivo NO importa fastapi ni fastmcp. Cuando un
 resultado no se puede registrar, lanza una excepción con un "motivo" (código
-estable) y un "mensaje"; los adaptadores app/api/resultados_llamada.py y
-app/api/gate_decisions.py deciden el código HTTP.
+estable) y un "mensaje"; el adaptador app/api/resultados_llamada.py decide
+el código HTTP.
 """
 
 # Json: le dice a psycopg2 que un diccionario de Python va a una columna
@@ -35,9 +35,7 @@ from psycopg2.extras import Json
 # La conexión de escritura del pool: commit al salir del "with" si todo va
 # bien, rollback si se lanza una excepción dentro.
 from app.db.connection import get_transactional_connection
-# Los esquemas ANTIGUOS (los del alias, sin cambios).
-from app.schemas.gate_decisions import GateDecisionCreate, GateDecisionResponse
-# Los esquemas NUEVOS y las reglas de qué acompaña a cada resultado.
+# Los esquemas de la ruta y las reglas de qué acompaña a cada resultado.
 from app.schemas.resultados_llamada import (
     CON_FECHA,
     ResultadoLlamada,
@@ -62,7 +60,7 @@ from app.services.reglas_visita import (
 )
 # La deducción del tipo de llamada (la misma que usa la ficha) y los
 # resultados que admite cada tipo.
-from app.services.tipo_llamada import ESTADO_GATE, deducir_tipo_llamada, resultados_de
+from app.services.tipo_llamada import deducir_tipo_llamada, resultados_de
 
 # Estados de visita y de oportunidad que ya define POST /visits (se importan,
 # no se copian: D3).
@@ -78,15 +76,13 @@ from app.services.visits_service import (
 # Constantes
 # ======================================================================
 
-# Origen del log de configuración incompleta (P12): el alias firma como
-# antes; la ruta nueva, con su nombre.
-ORIGEN_LOG = "gate_decisions"
-ORIGEN_LOG_NUEVO = "resultados_llamada"
+# Origen del log de configuración incompleta (P12). (Cambio 2026-10-22: el
+# del alias, "gate_decisions", se quitó con él; antes esta se llamaba
+# ORIGEN_LOG_NUEVO. Los logs antiguos con "gate_decisions" siguen en la tabla.)
+ORIGEN_LOG = "resultados_llamada"
 
 # Estado al que pasa la oportunidad al perderse (descartar, cliente_cancela).
 ESTADO_PERDIDA = "perdida"
-# El estado del Gate (el alias de antes lo llamaba así).
-ESTADO_PENDIENTE_APROBACION = ESTADO_GATE
 
 # Textos fijos de las visitas que confirma administración por teléfono
 # (visitas.texto_cliente es NOT NULL). El del Gate es el de siempre (P2 de
@@ -104,12 +100,7 @@ LOG_ENTITY_TYPE_OPORTUNIDAD = "oportunidad"
 ACCION_DECISION_REGISTRADA = "gate_decision_registrada"
 ACCION_LLAMADA_REGISTRADA = "llamada_registrada"
 
-# Mensajes del alias, IGUALES a los de POST /gate-decisions (Adenda 5.5).
-MENSAJE_ALIAS_SIN_PRESUPUESTO = (
-    "La oportunidad todavía no tiene presupuesto calculado, así que no hay ningún Gate que decidir.")
-MENSAJE_ALIAS_SIN_GATE = ("El presupuesto de esta oportunidad no requiere aprobación (no tiene Gate): "
-                          "no hay ninguna decisión que registrar.")
-# Mensajes de la ruta nueva.
+# Mensajes de la ruta.
 MENSAJE_SIN_PRESUPUESTO = "La oportunidad todavía no tiene presupuesto: no hay ninguna llamada que registrar."
 # El 503 de las visitas (el mismo texto de siempre).
 MENSAJE_CONFIG_VISITAS = ("No se puede registrar la visita por un problema de configuración de las visitas "
@@ -146,12 +137,10 @@ class OportunidadNoEncontrada(ResultadoRechazado):
 
 class EstadoNoPermiteResultado(ResultadoRechazado):
     """
-    La oportunidad no admite ESTE resultado (-> 409). Motivos de la ruta
-    nueva: sin_presupuesto, resultado_ya_registrado, estado_no_permitido,
+    La oportunidad no admite ESTE resultado (-> 409). Motivos:
+    sin_presupuesto, resultado_ya_registrado, estado_no_permitido,
     con_gate, contacto_registrado, visita_existente, plazo_no_cumplido,
-    resultado_no_admitido, visita_cambiada y visita_activa_existente. Del
-    alias, los de siempre: sin_presupuesto, sin_gate, decision_ya_registrada,
-    estado_no_permitido y visita_activa_existente.
+    resultado_no_admitido, visita_cambiada y visita_activa_existente.
     """
 
 
@@ -160,12 +149,11 @@ class EstadoNoPermiteResultado(ResultadoRechazado):
 # ======================================================================
 
 
-def registrar_resultado(data: ResultadoLlamadaCreate, solo_gate: bool = False) -> ResultadoLlamadaResponse:
+def registrar_resultado(data: ResultadoLlamadaCreate) -> ResultadoLlamadaResponse:
     """
     Registra el resultado de la llamada, en UNA transacción: o se aplican
     todos los cambios (visitas, resultado, estado y log) o ninguno.
 
-    solo_gate=True: el camino del alias (ver registrar_decision).
     El rechazo diferido (503 con su log) se lanza DESPUÉS del commit, para
     que el log se conserve (mismo mecanismo que /visits).
     """
@@ -174,7 +162,7 @@ def registrar_resultado(data: ResultadoLlamadaCreate, solo_gate: bool = False) -
         # El cursor se cierra SIEMPRE al salir de este bloque.
         with conn.cursor() as cursor:
             # El trabajo; devuelve la respuesta o un rechazo diferido.
-            respuesta, rechazo_diferido = registrar_resultado_con_cursor(cursor, data, solo_gate)
+            respuesta, rechazo_diferido = registrar_resultado_con_cursor(cursor, data)
     # Fuera del "with": la transacción ya se ha confirmado (con el log del
     # 503 dentro, si lo hubo). El 503 se lanza ahora.
     if rechazo_diferido is not None:
@@ -183,7 +171,7 @@ def registrar_resultado(data: ResultadoLlamadaCreate, solo_gate: bool = False) -
     return respuesta
 
 
-def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_gate: bool = False):
+def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate):
     """
     Todo el trabajo, con el cursor de quien llama y DENTRO de su
     transacción (no hace commit ni rollback: así las pruebas lo ejecutan con
@@ -191,8 +179,8 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
 
     Devuelve (respuesta, rechazo_diferido): uno de los dos es None.
 
-    Orden (plan 2.8; el del alias, Adenda 5.5):
-      404 -> 409 sin_presupuesto -> [alias: 409 sin_gate] -> ¿hay resultado?
+    Orden (plan 2.8):
+      404 -> 409 sin_presupuesto -> ¿hay resultado?
       (igual: 200, o 503 si es con visita y faltan sus reglas (D33, P1);
       distinto: 409) -> tipo (409 estado_no_permitido o el
       criterio de b); 503 de la regla de 48 h) -> 409 resultado_no_admitido
@@ -235,24 +223,19 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
     oportunidad_id, estado, presupuesto_id, requiere_aprobacion, ahora = fila
 
     # ------------------------------------------------------------------
-    # 2. Presupuesto y, solo en el alias, Gate (409)
+    # 2. Presupuesto (409)
     # ------------------------------------------------------------------
-    # Sin presupuesto no hay ninguna llamada que registrar.
+    # Sin presupuesto no hay ninguna llamada que registrar. (No hay sin_gate:
+    # un seguimiento no tiene Gate; era solo del alias, quitado el 2026-10-22.)
     if presupuesto_id is None:
-        raise EstadoNoPermiteResultado(
-            "sin_presupuesto", MENSAJE_ALIAS_SIN_PRESUPUESTO if solo_gate else MENSAJE_SIN_PRESUPUESTO)
-    # El alias es solo para casos con Gate, y lo dice antes que lo demás (su
-    # orden de siempre). La ruta nueva no tiene sin_gate: un seguimiento no
-    # tiene Gate.
-    if solo_gate and not requiere_aprobacion:
-        raise EstadoNoPermiteResultado("sin_gate", MENSAJE_ALIAS_SIN_GATE)
+        raise EstadoNoPermiteResultado("sin_presupuesto", MENSAJE_SIN_PRESUPUESTO)
 
     # ------------------------------------------------------------------
     # 3. ¿Ya hay un resultado registrado? (200 o 409)
     # ------------------------------------------------------------------
     # Va ANTES que el tipo: tras el 201 el estado ya cambió, y un reintento
     # legítimo de n8n daría 409 en vez de 200.
-    previa = _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gate)
+    previa = _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio)
     # Repetición exacta: lo que ya estaba, sin escribir nada; desde D33 es ya
     # el par (respuesta, rechazo_diferido), por el 503 de P1.
     if previa is not None:
@@ -261,32 +244,20 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
     # ------------------------------------------------------------------
     # 4. El tipo de llamada (409 o 503)
     # ------------------------------------------------------------------
-    # El alias conserva su regla de siempre: solo desde 'pendiente_aprobacion'
-    # (sin mirar visitas: así un caso con Gate con una visita hecha a mano
-    # sigue dando el 409 visita_activa_existente de siempre).
-    if solo_gate:
-        # Otro estado: 409 estado_no_permitido, con el mensaje de siempre.
-        if estado != ESTADO_PENDIENTE_APROBACION:
-            raise EstadoNoPermiteResultado(
-                "estado_no_permitido",
-                f"La oportunidad está en estado '{estado}', y solo se puede registrar una decisión "
-                f"del Gate en '{ESTADO_PENDIENTE_APROBACION}'.",
-            )
-        tipo, solicitada_id, fecha_pedida = TipoLlamada.GATE, None, None
-    else:
-        # La deducción compartida con la ficha.
-        deducido = deducir_tipo_llamada(cursor, oportunidad_id, estado, ahora)
-        # La regla de 48 h está rota: 503, sin log (como create-followup-task).
-        if deducido.motivo_no == "configuracion_incompleta":
-            raise ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIG_SEGUIMIENTO, deducido.faltan)
-        # No corresponde ninguna llamada: 409 con su motivo.
-        if deducido.tipo is None:
-            raise EstadoNoPermiteResultado(
-                deducido.motivo_no,
-                MENSAJES_CRITERIO.get(deducido.motivo_no,
-                                      f"La oportunidad está en estado '{estado}': no tiene ninguna llamada pendiente."),
-            )
-        tipo, solicitada_id, fecha_pedida = deducido.tipo, deducido.visita_id, deducido.fecha_pedida
+    # La deducción compartida con la ficha.
+    deducido = deducir_tipo_llamada(cursor, oportunidad_id, estado, ahora)
+    # La regla de 48 h está rota: 503, sin log (como create-followup-task).
+    if deducido.motivo_no == "configuracion_incompleta":
+        raise ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIG_SEGUIMIENTO, deducido.faltan)
+    # No corresponde ninguna llamada: 409 con su motivo.
+    if deducido.tipo is None:
+        raise EstadoNoPermiteResultado(
+            deducido.motivo_no,
+            MENSAJES_CRITERIO.get(deducido.motivo_no,
+                                  f"La oportunidad está en estado '{estado}': no tiene ninguna llamada pendiente."),
+        )
+    # El tipo y, en una confirmación, la visita pedida y su fecha.
+    tipo, solicitada_id, fecha_pedida = deducido.tipo, deducido.visita_id, deducido.fecha_pedida
 
     # ------------------------------------------------------------------
     # 5. ¿El resultado es de ESE tipo? (409)
@@ -312,8 +283,7 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
         # Con problemas: rastro para administración y 503 DIFERIDO (el log
         # se confirma con el commit de quien llama).
         if problemas:
-            registrar_configuracion_incompleta(cursor, oportunidad_id, problemas,
-                                               ORIGEN_LOG if solo_gate else ORIGEN_LOG_NUEVO)
+            registrar_configuracion_incompleta(cursor, oportunidad_id, problemas, ORIGEN_LOG)
             return None, ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIG_VISITAS, problemas)
         # confirmar_hora: tiene que ser la hora que administración leyó al
         # cliente (C11): si el cliente la cambió desde el chat, 409.
@@ -348,7 +318,7 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
                 )
         # D31: el hueco tiene que estar libre (409 hueco_ocupado), la última
         # comprobación antes de escribir, con la MISMA función que /visits
-        # (P16; también por el alias, P17). La visita pedida de la propia
+        # (P16). La visita pedida de la propia
         # oportunidad no cuenta: confirmar_hora la confirma y otra_hora la
         # cancela en esta misma transacción (C8). Bloquea el día (P15).
         comprobar_hueco_libre(cursor, inicio, ahora, reglas, [solicitada_id] if solicitada_id is not None else [])
@@ -360,7 +330,7 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate, solo_ga
     return _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id, fecha_pedida, reglas), None
 
 
-def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gate):
+def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio):
     """
     Si ya hay un resultado: la respuesta de la repetición (si es la MISMA
     petición) o un 409 (si es otra). Si no hay ninguno, None.
@@ -412,8 +382,7 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gat
             # Rotas: el rastro para administración y el 503 DIFERIDO (el log
             # se confirma con el commit de quien llama), como en el paso 6.
             if problemas:
-                registrar_configuracion_incompleta(cursor, oportunidad_id, problemas,
-                                                   ORIGEN_LOG if solo_gate else ORIGEN_LOG_NUEVO)
+                registrar_configuracion_incompleta(cursor, oportunidad_id, problemas, ORIGEN_LOG)
                 # Sin respuesta, y el 503 como rechazo diferido.
                 return None, ConfiguracionIncompleta("configuracion_incompleta", MENSAJE_CONFIG_VISITAS, problemas)
             # Bien: el fin, con la función compartida.
@@ -433,13 +402,7 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio, solo_gat
             visita_cancelada_id=previa_cancelada,
             creado=False,
         ), None
-    # Otro resultado: definitivo (R2). El alias, con su código y su mensaje.
-    if solo_gate:
-        raise EstadoNoPermiteResultado(
-            "decision_ya_registrada",
-            f"Esta oportunidad ya tiene registrada otra decisión ({previa_resultado}, id {previa_id}). "
-            "La decisión es definitiva: si fue un error, hay que corregirla a mano en la base de datos.",
-        )
+    # Otro resultado: definitivo (R2).
     raise EstadoNoPermiteResultado(
         "resultado_ya_registrado",
         f"Esta oportunidad ya tiene registrado otro resultado ({previa_resultado}, id {previa_id}). "
@@ -589,49 +552,3 @@ def _cambiar_solicitada(cursor, visita_id, estado_nuevo):
     if cursor.rowcount != 1:
         raise RuntimeError(f"Segunda barrera: el UPDATE de la visita {visita_id} cambió "
                            f"{cursor.rowcount} filas (se esperaba 1).")
-
-
-# ======================================================================
-# Entrada con el contrato ANTIGUO (alias POST /gate-decisions, D26.6)
-# ======================================================================
-
-
-def registrar_decision(data: GateDecisionCreate) -> GateDecisionResponse:
-    """
-    La misma operación con los nombres de POST /gate-decisions (Adenda 5.5),
-    para el alias: el formulario de n8n publicado sigue enviando y leyendo
-    esos nombres hasta que se actualice (D26.6, P2 del plan).
-
-    No tiene lógica propia: traduce la entrada antigua a la nueva, llama a
-    registrar_resultado (la MISMA función que la ruta nueva) con
-    solo_gate=True y traduce la respuesta. Las excepciones salen tal cual,
-    con los motivos y mensajes de siempre.
-    """
-    # La entrada nueva, campo a campo. decision -> resultado. La fecha y la
-    # hora ya validadas se vuelven a escribir como TEXTO ("2026-10-23" y
-    # "08:30"), porque los validadores compartidos solo aceptan texto. Los
-    # Enum antiguos se pasan por su valor (los nuevos son un superconjunto).
-    nuevo = ResultadoLlamadaCreate(
-        oportunidad_id=data.oportunidad_id,
-        resultado=data.decision.value,
-        fecha=data.fecha.isoformat() if data.fecha is not None else None,
-        hora=data.hora.strftime("%H:%M") if data.hora is not None else None,
-        motivo=data.motivo.value if data.motivo is not None else None,
-        informe=data.informe,
-    )
-    # La operación real, la misma de la ruta nueva, solo para el Gate.
-    resultado = registrar_resultado(nuevo, solo_gate=True)
-    # La respuesta antigua, con sus nombres (llamada_id -> decision_id,
-    # resultado -> decision, fecha_visita -> fecha_propuesta) y por valor.
-    return GateDecisionResponse(
-        decision_id=resultado.llamada_id,
-        oportunidad_id=resultado.oportunidad_id,
-        decision=resultado.resultado.value,
-        motivo=resultado.motivo.value if resultado.motivo is not None else None,
-        estado_oportunidad=resultado.estado_oportunidad,
-        visita_id=resultado.visita_id,
-        fecha_propuesta=resultado.fecha_visita,
-        # D33: la clave nueva, tal cual (P2 del plan D33).
-        fecha_fin_visita=resultado.fecha_fin_visita,
-        creado=resultado.creado,
-    )

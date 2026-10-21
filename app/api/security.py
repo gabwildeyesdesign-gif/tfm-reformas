@@ -14,8 +14,10 @@ eligió por ser la opción de menor coste que cierra el riesgo real
 soporta de forma nativa la autenticación por cabecera ("Header Auth")
 en sus nodos HTTP.
 
-Desde el 2026-09-30 hay una SEGUNDA puerta con el mismo mecanismo:
-POST /gate-decisions, con su propio secreto (GATE_SECRET) y su propia
+Desde el 2026-09-30 hay una SEGUNDA puerta con el mismo mecanismo: la de
+administración (nació con POST /gate-decisions, quitado el 2026-10-22; hoy
+POST /resultados-llamada y las demás rutas de administración), con su
+propio secreto (GATE_SECRET) y su propia
 cabecera (X-Gate-Secret). Este archivo comprueba además, al arrancar, que
 los tres secretos del sistema (WEBHOOK_SECRET, MCP_SECRET y GATE_SECRET)
 son distintos entre sí (plan de /gate-decisions, P4 y P10).
@@ -51,7 +53,8 @@ from app.config import GATE_SECRET, MCP_SECRET, WEBHOOK_SECRET
 # "X-Webhook-Secret".
 NOMBRE_CABECERA = "X-Webhook-Secret"
 
-# Cabecera de la puerta del Gate (POST /gate-decisions). Mismo motivo para
+# Cabecera de la puerta de administración (POST /resultados-llamada y las
+# demás rutas de administración). Mismo motivo para
 # tenerla en una constante.
 NOMBRE_CABECERA_GATE = "X-Gate-Secret"
 
@@ -103,8 +106,8 @@ if GATE_SECRET is None or not GATE_SECRET.strip():
     raise RuntimeError(
         "GATE_SECRET no está definido (o está vacío) en el .env. "
         "Es obligatorio: autentica el formulario de n8n con el que "
-        "administración registra las decisiones del Gate (POST "
-        "/gate-decisions). Debe ser DISTINTO de WEBHOOK_SECRET y de "
+        "administración registra el resultado de sus llamadas (POST "
+        "/resultados-llamada). Debe ser DISTINTO de WEBHOOK_SECRET y de "
         "MCP_SECRET. " + _COMO_GENERAR
     )
 
@@ -224,7 +227,9 @@ async def verificar_gate_secret(
     secreto_recibido: str | None = Security(_lector_cabecera_gate),
 ) -> None:
     """
-    Dependencia de FastAPI para POST /gate-decisions: deja pasar la
+    Dependencia de FastAPI de las rutas de administración (POST
+    /resultados-llamada y las demás; nació con POST /gate-decisions,
+    quitado el 2026-10-22): deja pasar la
     petición solo si trae la cabecera X-Gate-Secret con el valor de
     GATE_SECRET. En cualquier otro caso, 401 idéntico al de /leads (misma
     función _no_autorizado), y el endpoint no se ejecuta.

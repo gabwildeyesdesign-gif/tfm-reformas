@@ -3,8 +3,9 @@ Esquemas de datos de POST /resultados-llamada: el resultado de la llamada de
 administración a un cliente (plan: docs/Plan_Resultado_Llamadas.txt,
 secciones 2.3 y 2.5, con sus notas fechadas).
 
-Nombres nuevos respecto a POST /gate-decisions (que conserva los suyos en
-app/schemas/gate_decisions.py, como alias):
+Nombres nuevos respecto a POST /gate-decisions (el alias con el contrato
+antiguo; cambio 2026-10-22: quitado en el bloque 5, versión anterior en
+aba39c4):
   decision        -> resultado
   decision_id     -> llamada_id
   fecha_propuesta -> fecha_visita
@@ -12,8 +13,8 @@ app/schemas/gate_decisions.py, como alias):
 Bloque B2 (2026-10-11): tres tipos de llamada y cinco resultados.
   gate, seguimiento:    visita_acordada, descartar
   confirmacion_visita:  confirmar_hora, otra_hora, cliente_cancela
-Y un motivo más en el catálogo, 'sin_decision' (D29.3), que el alias NO
-acepta (su Enum MotivoDescarte no cambia).
+Y un motivo más en el catálogo, 'sin_decision' (D29.3), que el alias no
+aceptaba.
 
 Aquí solo se comprueba la FORMA de los datos. Que el resultado sea del tipo
 de llamada de esa oportunidad (que se sabe con la base de datos) lo decide
@@ -33,7 +34,7 @@ from typing import Self
 # de un campo) y los dos tipos de validador.
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Los MISMOS validadores de formato que POST /visits y POST /gate-decisions
+# Los MISMOS validadores de formato que POST /visits
 # (compartidos en common.py) y el límite del informe.
 from app.schemas.common import (
     MAX_INFORME_GATE,
@@ -194,7 +195,7 @@ class ResultadoLlamadaCreate(BaseModel):
 class ResultadoLlamadaResponse(BaseModel):
     """
     Respuesta de POST /resultados-llamada (plan, 2.5). NINGÚN campo de
-    importe, a propósito (segunda barrera, como en /gate-decisions y /visits).
+    importe, a propósito (segunda barrera, como en /visits).
     """
 
     # Id de la fila de decisiones_gate (la tabla conserva su nombre, P3 = b).

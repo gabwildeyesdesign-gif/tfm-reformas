@@ -2,8 +2,7 @@
 Fechas propias de los scripts de verificación que crean visitas (Bloque
 B5-0 del plan del Agente 2, docs/Plan_Agente2_Calendar.txt, P21 y C7).
 
-Por qué existe: con D31, POST /visits, POST /resultados-llamada y su alias
-POST /gate-decisions rechazan (409 hueco_ocupado) una visita que se solape
+Por qué existe: con D31, POST /visits y POST /resultados-llamada rechazan (409 hueco_ocupado) una visita que se solape
 con OTRA visita activa ('solicitada' o 'confirmada'), sea de quien sea.
 Antes, los scripts pedían sus visitas "el próximo lunes" a horas fijas: dos
 scripts (o un script frente a una visita real de Gabi) podían pedir el mismo
@@ -53,6 +52,9 @@ SEMANAS_POR_SCRIPT = 4
 # script nuevo se añade AL FINAL, para no mover los bloques de los demás.
 SCRIPTS = (
     "check_visits_http",
+    # Cambio 2026-10-22 (bloque 5): este script ya no crea visitas (el alias
+    # se quitó), pero su nombre SE QUEDA: la posición da el bloque, y
+    # quitarlo movería las semanas de los siete scripts que van detrás.
     "check_gate_decisions_http",
     "check_resultados_llamada_http",
     "check_resultados_llamada_service",

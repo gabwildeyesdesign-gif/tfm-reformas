@@ -2,8 +2,8 @@
 Endpoint HTTP del aviso del Gate: GET /gate-avisos/{oportunidad_id} (solo
 REST, sin tool MCP; plan: docs/Plan_Endpoint_Aviso_Gate.txt).
 
-Lo llaman WF2 (el aviso a administración, por email) y el formulario de
-POST /gate-decisions, nunca un agente de IA: devuelve importes y datos
+Lo llama WF2 (el aviso a administración, por email), nunca un agente de
+IA: devuelve importes y datos
 personales de un caso con Gate (D18.5.1). Por eso usa la llave del Gate
 (X-Gate-Secret), que la herramienta del Agente 2 no tiene.
 
@@ -23,7 +23,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path
 
 # La dependencia que comprueba la cabecera X-Gate-Secret (la misma de POST
-# /gate-decisions). NO verificar_webhook_secret: esa llave la tiene el
+# /resultados-llamada). NO verificar_webhook_secret: esa llave la tiene el
 # Agente 2 (pre-decisión 2).
 from app.api.security import verificar_gate_secret
 
@@ -42,7 +42,7 @@ from app.services.reglas_visita import RechazoNegocio
 
 # APIRouter: un "mini-FastAPI" con las rutas de este archivo. main.py lo
 # engancha a la aplicación con include_router. tags agrupa la ruta en /docs
-# bajo "gate", junto a POST /gate-decisions.
+# bajo "gate".
 router = APIRouter(tags=["gate"])
 
 # Qué código HTTP corresponde a cada familia de rechazo (plan, 1.6). No hay
@@ -88,7 +88,7 @@ def get_gate_aviso(
         return obtener_aviso(oportunidad_id)
     # RechazoNegocio es la base de los dos rechazos de este servicio.
     except RechazoNegocio as error:
-        # Mismo formato que /visits y /gate-decisions:
+        # Mismo formato que /visits y /resultados-llamada:
         # {"detail": {"motivo": ..., "mensaje": ...}}. type(error) es la
         # clase concreta; con ella se busca el código en CODIGO_HTTP.
         raise HTTPException(

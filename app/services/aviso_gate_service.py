@@ -1,7 +1,8 @@
 """
 Lógica de negocio de GET /gate-avisos/{oportunidad_id}: los datos de un
-caso con Gate para el aviso a administración (WF2) y para el formulario de
-POST /gate-decisions (plan: docs/Plan_Endpoint_Aviso_Gate.txt).
+caso con Gate para el aviso a administración (WF2; hasta el 2026-10-22,
+también para el formulario del alias POST /gate-decisions) (plan:
+docs/Plan_Endpoint_Aviso_Gate.txt).
 
 SOLO LECTURA (pre-decisión 8): usa get_db_connection(), que termina con
 rollback, y no escribe nada en ninguna tabla, tampoco en logs.

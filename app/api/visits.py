@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from app.api.security import verificar_webhook_secret
 # Los esquemas Pydantic de la entrada y de la salida de este endpoint.
 from app.schemas.visits import VisitaCreate, VisitaResponse
-# Los rechazos COMPARTIDOS con /gate-decisions (FechaNoValida,
+# Los rechazos COMPARTIDOS con /resultados-llamada (FechaNoValida,
 # ConfiguracionIncompleta) y su base común RechazoNegocio viven en
 # reglas_visita.py desde el 2026-09-30; los PROPIOS de /visits, en
 # visits_service.py.

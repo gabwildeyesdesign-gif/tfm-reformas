@@ -76,7 +76,7 @@ class EstadoVisitaListado(str, Enum):
 
     # Pedida por el cliente desde el chat (POST /visits): apartados d) y e).
     SOLICITADA = "solicitada"
-    # Acordada por teléfono tras el Gate (POST /gate-decisions): solo e).
+    # Acordada por teléfono tras el Gate (POST /resultados-llamada): solo e).
     CONFIRMADA = "confirmada"
 
 

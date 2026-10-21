@@ -131,8 +131,11 @@ try:
     # falló 16/17 por las oportunidades de prueba que dejó un corte de
     # check_gate_decisions_http. Ahora el recuento solo se ENSEÑA, como
     # información, y no cuenta ni como acierto ni como fallo.)
+    # (Cambio 2026-10-22: alias POST /gate-decisions quitado, bloque 5; hoy
+    # la escribe POST /resultados-llamada. Este script nunca llamó al alias:
+    # solo lo nombraba en este texto.)
     print(f"  [INFO]  fecha_ultimo_contacto con valor: {con_valor} de {total} filas "
-          f"(solo información, no se exige nada: la escribe POST /gate-decisions, P5)")
+          f"(solo información, no se exige nada: la escribe POST /resultados-llamada, P5)")
 
     print("\n" + "=" * 78)
     print("S3 y S4 - D13: el octavo estado")

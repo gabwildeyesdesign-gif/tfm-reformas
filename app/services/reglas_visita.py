@@ -3,13 +3,11 @@ Reglas de fecha y configuración de las visitas técnicas, COMPARTIDAS por
 dos endpoints (plan de /gate-decisions, sección 2.3):
   - POST /visits          (app/services/visits_service.py): la visita que
                           pide el cliente desde el chat.
-  - POST /gate-decisions  (app/services/gate_decisions_service.py, Bloque
-                          C2): la visita que acuerda administración por
-                          teléfono en un caso de Gate. (Nota 2026-10-11: el
-                          servicio se llama ahora
-                          resultados_llamada_service.py y la ruta nueva es
-                          POST /resultados-llamada; /gate-decisions es su
-                          alias.)
+  - POST /resultados-llamada (app/services/resultados_llamada_service.py):
+                          la visita que acuerda administración por
+                          teléfono. (Nació como POST /gate-decisions, Bloque
+                          C2; cambio 2026-10-22: ese alias se quitó en el
+                          bloque 5, versión anterior en aba39c4.)
 
 Las dos tienen que cumplir EXACTAMENTE las mismas reglas (en el futuro, de
 lunes a viernes, visita completa dentro de una franja, con los valores de
@@ -408,7 +406,9 @@ def registrar_configuracion_incompleta(cursor, oportunidad_id: int, problemas: l
     Deja en logs el rastro de una configuración incompleta, para
     administración (decisión P2 de /visits).
 
-    origen: qué endpoint lo provocó ("visits" o "gate_decisions"). Va solo
+    origen: qué endpoint lo provocó ("visits" o "resultados_llamada"; los
+    logs anteriores al 2026-10-22 pueden decir "gate_decisions", el alias
+    quitado). Va solo
     en el detalle del log, no en la respuesta al cliente. Es la única
     diferencia con el INSERT que antes estaba en visits_service.py.
 
@@ -445,7 +445,7 @@ def registrar_configuracion_incompleta(cursor, oportunidad_id: int, problemas: l
 # puede chocar con varias (plan D32, C3 y R3).
 #
 # Orden de las comprobaciones (precisión 2 del tutor), igual en POST
-# /visits, POST /resultados-llamada y su alias: forma (422 de Pydantic) ->
+# /visits, POST /resultados-llamada: forma (422 de Pydantic) ->
 # 404 -> estado y Gate (409) -> reglas de fecha (503 y 422 de negocio,
 # fuera_de_rejilla la última) -> las comprobaciones propias de cada endpoint
 # que miran la visita PROPIA (repetición 200, visita_confirmada,
@@ -482,7 +482,7 @@ def fin_de_visita(inicio: datetime, reglas: dict[str, int]) -> datetime:
     """
     D33 (2026-10-14): la hora de FIN de una visita que empieza en inicio,
     en hora de Madrid con su desfase: inicio + duracion_visita_min. La
-    devuelven POST /visits y POST /resultados-llamada (y su alias) como
+    devuelven POST /visits y POST /resultados-llamada como
     fecha_fin_visita, para que n8n (WF5, Google Calendar) no copie la regla.
 
     reglas: las de leer_reglas_visita, ya comprobadas (duración > 0). Es el

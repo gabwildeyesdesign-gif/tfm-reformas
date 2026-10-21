@@ -8,7 +8,7 @@ Qué hace, en pocas palabras:
      uvicorn de n8n de Gabi). Si el 8024 está ocupado, se para sin tocar
      nada.
   2. Crea sus propios casos como lo hará n8n (POST /leads, POST
-     /calculate-estimate, POST /visits y POST /gate-decisions), y por SQL,
+     /calculate-estimate, POST /visits y POST /resultados-llamada), y por SQL,
      SOLO sobre filas propias, lo que la API no puede producir: mover
      presupuestos.created_at hacia atrás, el estado seguimiento_pendiente,
      fecha_ultimo_contacto, visitas en horas límite y el lead "antiguo" sin
@@ -622,11 +622,11 @@ try:
     # El retraso de G_FUERA se aplica al FINAL de la preparación (ver allí).
     G_FUERA = caso("G-fuera", gate=True)
     # G_DECIDIDO: con Gate, de hace 30 h, y ya decidido (descartar) por POST
-    # /gate-decisions: su estado pasa a 'perdida' y no debe salir.
+    # /resultados-llamada: su estado pasa a 'perdida' y no debe salir.
     G_DECIDIDO = caso("G-decidido", gate=True)
     retrasar_presupuesto(G_DECIDIDO[0], 30)
-    r = requests.post(f"{BASE}/gate-decisions", headers=AUTH_GATE, timeout=30, json={
-        "oportunidad_id": G_DECIDIDO[0], "decision": "descartar", "motivo": "precio",
+    r = requests.post(f"{BASE}/resultados-llamada", headers=AUTH_GATE, timeout=30, json={
+        "oportunidad_id": G_DECIDIDO[0], "resultado": "descartar", "motivo": "precio",
         "informe": "prueba del listado"})
     assert r.status_code == 201, r.text
     # b) Seguimientos por abrir.
@@ -742,8 +742,10 @@ try:
     # D_GATE_CONF: Gate decidido con visita_acordada: crea una visita
     # 'confirmada' (no debe salir en d).
     D_GATE_CONF = caso("D-gate", gate=True)
-    r = requests.post(f"{BASE}/gate-decisions", headers=AUTH_GATE, timeout=30, json={
-        "oportunidad_id": D_GATE_CONF[0], "decision": "visita_acordada", "fecha": LUNES_1.isoformat(),
+    # La visita acordada del Gate, por POST /resultados-llamada.
+    # (Cambio 2026-10-22: alias POST /gate-decisions quitado, bloque 5.)
+    r = requests.post(f"{BASE}/resultados-llamada", headers=AUTH_GATE, timeout=30, json={
+        "oportunidad_id": D_GATE_CONF[0], "resultado": "visita_acordada", "fecha": LUNES_1.isoformat(),
         # D32: 09:45, de la rejilla (antes 09:30).
         "hora": "09:45", "informe": "prueba del listado"})
     assert r.status_code == 201, r.text
@@ -982,7 +984,7 @@ try:
     comprobar("visita pedida por POST /visits (lunes 2) -> dentro", D_2[0] in D)
     comprobar("visita 'solicitada' con fecha pasada -> dentro (P9)", D_PASADA[0] in D)
     # La confirmada (de un Gate) y la cancelada: fuera.
-    comprobar("visita 'confirmada' de un Gate (POST /gate-decisions) -> fuera", D_GATE_CONF[0] not in D)
+    comprobar("visita 'confirmada' de un Gate (POST /resultados-llamada) -> fuera", D_GATE_CONF[0] not in D)
     comprobar("visita 'cancelada' -> fuera", VISITAS_E["E-cancelada"] not in D)
     # SQL: fecha_propuesta y created_at de la visita de D_1, para compararlas.
     fila = consultar("SELECT fecha_propuesta, created_at FROM visitas WHERE oportunidad_id = %s;", (D_1[0],))

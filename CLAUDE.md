@@ -146,6 +146,13 @@ actual: Nivel N0 (núcleo mínimo aprobable).
   registrado desde el formulario) los hace fallar sin que nada esté roto.
   Se cuenta en los elementos de las oportunidades propias, o en las filas
   que existían al migrar, y lo demás sale como [INFO].
+- Regla H-D39-4 (2026-10-21, commits de D39.9 6ed9ec0 y aba39c4):
+  scripts/check_webhook_auth_http.py cuenta TODAS las filas de logs antes y
+  después (contar_todo) y compara: un log AJENO escrito mientras se ejecuta
+  lo hace fallar sin que nada esté roto. No se toca en ninguna rama que no
+  sea la suya (pendiente, ver "Pendiente"), y mientras tanto nada que
+  escriba en logs (otro script, la suite, una migración de datos, una
+  prueba a mano contra el 8000) se ejecuta a la vez que él.
 
 ## REGLA CRÍTICA: nunca arrancar uvicorn con --reload
 
@@ -286,6 +293,19 @@ descartado_email | descartado_telefono; nunca 422 por el resumen, D36.8);
 GET /gate-avisos y la ficha lo devuelven en la raíz; NUNCA la lista diaria
 ni /leads/session. Columna leads.resumen_solicitud (paso15, APLICADA el
 2026-10-20). Detalle: Adenda 5.12 y docs/Plan_Resumen_Solicitud_D28.txt.)
+(Nota 2026-10-22: corrige la nota anterior: feat/n0-resumen-solicitud ya NO
+está pendiente de merge: está en main (su último commit, 315a20c, es
+antecesor de main = aba39c4; comprobado con git merge-base --is-ancestor).
+Desde el 2026-10-22, en la rama fix/n0-quitar-alias-gate-decisions
+(pendiente de merge), el ALIAS POST /gate-decisions está QUITADO (bloque 5,
+D26.6: el formulario publicado WF_formulario_llamadas llama a POST
+/resultados-llamada desde el 2026-10-21 y WF_formulario_gate está
+despublicado). La ruta responde 404; el cuarto include_router ya no existe
+(los demás conservan su número). Se fueron también registrar_decision, el
+parámetro solo_gate del servicio, GateDecisionCreate, GateDecisionResponse
+y MotivoDescarte (DecisionGate se queda: lo usan GET /gate-avisos y la
+ficha). X-Gate-Secret sigue siendo la llave de todas las rutas de
+administración. Detalle: Adenda 5.5, reescrita.)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -358,6 +378,11 @@ SOLO REST.
   en una credencial "Header Auth" PROPIA, solo para el formulario del
   Gate. Al integrar la rama, el uvicorn del 8000 no arranca sin
   GATE_SECRET en el .env (R4 del plan de /gate-decisions).
+  (Nota 2026-10-22: POST /gate-decisions ya no existe, bloque 5; la
+  cabecera X-Gate-Secret la exigen hoy POST /resultados-llamada y las demás
+  rutas de administración, con las mismas reglas. Las comprobaciones de
+  arranque no cambian y las sigue probando check_gate_decisions_http,
+  CASO 0.)
 - El precio que se devuelve al cliente lleva IVA INCLUIDO (D14):
   EstimateResponse trae importe_min_con_iva / importe_max_con_iva, y esas
   son también las columnas de presupuestos (renombradas en paso7), junto
@@ -715,6 +740,29 @@ SOLO REST.
 > con `--ff-only`. Después del merge: reiniciar el uvicorn del 8000 SIN
 > --reload (app/ cambia); en n8n, la tool del Agente 1 (requisito C5), su
 > prompt (D37.1: rangos como "entre X y Y") y la plantilla de WF2.
+>
+> **(Nota 2026-10-22.)** El párrafo anterior está superado:
+> `feat/n0-resumen-solicitud` (D28.1) está en `main` (315a20c, antecesor de
+> `main`). Después se integró **D39.9** (6ed9ec0 y aba39c4, 2026-10-21):
+> tarifas_base.incluye_tipico con 12 textos nuevos, APLICADO en la base
+> real (12 UPDATE, 12 logs, ids 16568-16579), con
+> scripts/datos_d39_9_incluye_tipico.py (vuelta atrás escrita, sin
+> ejecutar: `--deshacer-d39-9`), el JSON docs/datos/D39_9_incluye_tipico.json
+> y scripts/check_datos_d39_9_incluye_tipico.py (`--esperado anterior|nuevo`;
+> 44/44 con `nuevo` tras aplicar). De ahí sale la regla H-D39-4 ("Cómo
+> trabajamos"). **Bloque actual: bloque 5, quitar el alias POST
+> /gate-decisions** (D26.6), en la rama `fix/n0-quitar-alias-gate-decisions`,
+> **pendiente de merge** (PASO 1, fase 1, SIN ejecutar; la fase 2 la decide
+> Gabi). Decisiones del tutor y de Gabi: P1 = C (check_gate_decisions_service
+> se retira; check_gate_decisions_http se queda con el arranque, H-0-6, el
+> 404 del alias y el 401 de /resultados-llamada; las comprobaciones que solo
+> tenía el alias pasan a check_resultados_llamada_http, CASO 13c, y
+> check_resultados_llamada_service, S8), P2 = B (solo_gate quitado ahora),
+> P3 (esquemas del alias borrados) y P4 = B (documentos vivos reescritos con
+> su línea "Cambio 2026-10-22"; los registros históricos no se tocan).
+> Misma regla de siempre: no hacer merge sin la confirmación explícita de
+> Gabi, después de la revisión del tutor, y siempre con `--ff-only`.
+> Después del merge: reiniciar el uvicorn del 8000 SIN --reload (app/ cambia).
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1106,6 +1154,14 @@ y check_resumen_solicitud_http, puerto 8034). 57/57 en UNA pasada válida
 (15:32:52-15:51:42), sin Kernel-Power 506/507; la de 15:08-15:28 NO valió
 (Modern Standby 15:21-15:27). Regla nueva: ningún SHA-256, recuento o salida
 se escribe en un commit en la misma orden que lo calcula.)
+(Nota 2026-10-22, rama fix/n0-quitar-alias-gate-decisions: se retira
+check_gate_decisions_service, así que la suite pasa de 57 a 56 scripts. OJO,
+contradicción dicha al tutor: en main hay 58 check_*.py, no 57, porque D39.9
+añadió check_datos_d39_9_incluye_tipico, que exige --esperado anterior|nuevo
+y sin argumentos sale con código 2. Tras el retiro quedan 57 archivos. La
+cifra 56 vale si ese check se ejecuta APARTE (con --esperado nuevo), no
+dentro de la suite; si entra en ella, son 57. Pendiente de decidir antes de
+la fase 2.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1306,6 +1362,15 @@ uno en su propia rama:
     check_ficha_oportunidad_http, check_followup_tasks_http,
     check_listado_llamadas_http, check_migracion_iva_y_seguimiento) y
     check_gate_decisions_* pasa a probar solo la ruta nueva o se retira.
+    (Nota 2026-10-22: HECHO en la rama fix/n0-quitar-alias-gate-decisions,
+    pendiente de merge. Dos correcciones a esta lista, del PASO 0: H-0-2,
+    check_migracion_iva_y_seguimiento NO llamaba al alias: solo lo nombraba
+    en comentarios y en un texto que imprime (solo cambia ese texto); H-0-3,
+    cambian también check_resultados_llamada_http (CASO 10 fuera, CASO 13c
+    nuevo) y check_resultados_llamada_service (S3 y S7 sin el caso del
+    alias, S6 nuevo, S8 nuevo), que la lista no nombraba. Pendiente nuevo,
+    en su propia rama: H-D39-4, que check_webhook_auth_http cuente solo sus
+    logs, no toda la tabla.)
   - En n8n (fuera del repositorio): el formulario ampliado
     (docs/Contrato_Formulario_Llamadas.md), conectado a WF4 (D27.4); la
     etiqueta del evento llamada_registrada en WF_ficha_oportunidad.
@@ -1487,6 +1552,12 @@ tiene hoy el nodo del agente en n8n.
 JSON exportado de chat_tipo_reforma es idéntico a este archivo, 5.791
 caracteres, comparado con un script. Si se cambia en un sitio, hay que
 cambiarlo en el otro.)
+(Nota 2026-10-22: la cifra de 5.791 ya no vale. prompts/agente1_captura.md
+en main (último cambio 74e0e7c, 2026-10-20, D28.1 y D37.1) mide 10.558
+caracteres CON el salto de línea final y 10.557 sin él (10.629 bytes en
+UTF-8, sin BOM, LF), medido con Python el 2026-10-22. 10.557 es la cifra
+que esperaba el tutor: la diferencia es solo ese salto final, que el nodo
+de n8n no lleva (n8n/README.md: "idéntico, más el salto de línea final").)
 
 ## Esquema de la base de datos: cuál de los dos .sql manda
 

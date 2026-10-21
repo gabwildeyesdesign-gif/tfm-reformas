@@ -22,7 +22,7 @@ import sys
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 # La dependencia que comprueba la cabecera X-Gate-Secret (la de
-# /gate-decisions y /llamadas-del-dia). NO verificar_webhook_secret.
+# /resultados-llamada y /llamadas-del-dia). NO verificar_webhook_secret.
 from app.api.security import verificar_gate_secret
 
 # Los esquemas de la entrada y de la salida.

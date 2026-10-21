@@ -7,13 +7,14 @@ Lo llama el formulario de n8n con el que administración registra el
 resultado de una llamada, nunca un agente de IA: por eso lleva la llave de
 administración (X-Gate-Secret, que conserva su nombre, D25.9).
 
-Bloque B1 (2026-10-11): misma operación que POST /gate-decisions (que queda
-como alias en app/api/gate_decisions.py) con los nombres nuevos. Bloque B2
+Bloque B1 (2026-10-11): misma operación que POST /gate-decisions, con los
+nombres nuevos. Cambio 2026-10-22: alias POST /gate-decisions quitado
+(bloque 5); versión anterior en aba39c4. Bloque B2
 (el mismo día): los tres tipos de llamada (gate, seguimiento y confirmación
 de visita) y sus cinco resultados; el tipo lo deduce el backend.
 
 Como todo app/api/, es un ADAPTADOR: sin lógica de negocio ni SQL. Aquí
-vive también la traducción de un rechazo a HTTP, que comparte el alias.
+vive también la traducción de un rechazo a HTTP.
 """
 
 # De FastAPI: APIRouter (agrupa las rutas de este archivo), Depends (una
@@ -39,12 +40,12 @@ from app.services.reglas_visita import ConfiguracionIncompleta, FechaNoValida, H
 router = APIRouter(tags=["resultados-llamada"])
 
 # Qué código HTTP corresponde a cada familia de rechazo (la tabla de la
-# Adenda 5.5, la misma que tenía app/api/gate_decisions.py):
+# Adenda 5.5, la misma que tenía el alias POST /gate-decisions, quitado):
 #   404 no existe la oportunidad; 409 la oportunidad no admite ese
 #   resultado; 422 la fecha incumple una regla de negocio (distinto del 422
 #   de Pydantic); 503 falta configuración de visitas.
 #   409 también, desde D31: el hueco lo ocupa otra visita (hueco_ocupado),
-#   en la ruta nueva y en el alias (P16 y P17).
+#   (P16).
 CODIGO_HTTP = {
     OportunidadNoEncontrada: 404,
     EstadoNoPermiteResultado: 409,
@@ -58,8 +59,8 @@ def http_de_rechazo(error: RechazoNegocio) -> HTTPException:
     """
     Convierte un rechazo de services/ en la HTTPException que hay que
     lanzar, con el formato de siempre: {"detail": {"motivo": ...,
-    "mensaje": ...}} y, en el 503, también "faltan". La usan la ruta nueva
-    y el alias, para que respondan exactamente igual.
+    "mensaje": ...}} y, en el 503, también "faltan". Desde el
+    2026-10-22 solo la usa esta ruta (el alias se quitó).
     """
     # El motivo (código estable) y el mensaje (texto para administración).
     detalle = {"motivo": error.motivo, "mensaje": error.mensaje}

@@ -57,7 +57,7 @@ class EventoEstado(str, Enum):
     PRESUPUESTO_CALCULADO = "presupuesto_calculado"
     # POST /visits: 'visita_agendada'.
     VISITA_SOLICITADA = "visita_solicitada"
-    # POST /gate-decisions: 'visita_agendada' o 'perdida'.
+    # Resultado de un Gate (POST /resultados-llamada): 'visita_agendada' o 'perdida'.
     GATE_DECISION_REGISTRADA = "gate_decision_registrada"
     # POST /create-followup-task: 'seguimiento_pendiente'.
     SEGUIMIENTO_ABIERTO = "seguimiento_abierto"

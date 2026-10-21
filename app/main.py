@@ -34,7 +34,6 @@ from app.api import ficha_oportunidad as ficha_oportunidad_api
 # Router de POST /create-followup-task: abre el seguimiento de 48 h (desde
 # el 2026-10-08, el séptimo; plan docs/Plan_Endpoint_Create_Followup_Task.txt).
 from app.api import followup_tasks as followup_tasks_api
-from app.api import gate_decisions as gate_decisions_api
 # Router de GET /huecos-libres: las horas libres de visita para el formulario
 # de n8n, solo lectura (desde el 2026-10-13, el décimo; D32, plan
 # docs/Plan_Horario_Visitas_D32.txt).
@@ -46,7 +45,7 @@ from app.api import leads as leads_api
 from app.api import listado_llamadas as listado_llamadas_api
 # Router de POST /resultados-llamada: el resultado de las llamadas de
 # administración (desde el 2026-10-11, el noveno; plan
-# docs/Plan_Resultado_Llamadas.txt). /gate-decisions queda como su alias.
+# docs/Plan_Resultado_Llamadas.txt).
 from app.api import resultados_llamada as resultados_llamada_api
 from app.api import visits as visits_api
 # Las funciones del pool de conexiones (app/db/connection.py): abrirlo,
@@ -130,20 +129,16 @@ app.include_router(estimates_api.router)
 # SOLICITUD de visita técnica de un cliente (no es una reserva).
 app.include_router(visits_api.router)
 
-# Cuarto router: POST /gate-decisions (app/api/gate_decisions.py). Solo
-# REST, sin tool MCP: lo llama el formulario de n8n con el que
-# administración registra el resultado de su llamada en un caso de Gate.
-# Tiene su propio secreto (X-Gate-Secret), que el Agente 2 no tiene.
-# (Nota 2026-10-11: desde el Bloque B1 de docs/Plan_Resultado_Llamadas.txt
-# es el ALIAS, con el contrato antiguo, de POST /resultados-llamada, el
-# noveno router; los dos llaman a la misma función del servicio.)
-app.include_router(gate_decisions_api.router)
+# (El cuarto router era POST /gate-decisions, el alias con el contrato
+# antiguo de POST /resultados-llamada. Cambio 2026-10-22: alias POST
+# /gate-decisions quitado (bloque 5); versión anterior en aba39c4. Los demás
+# conservan su número de orden, el de los planes y la Adenda.)
 
 # Quinto router: GET /gate-avisos/{oportunidad_id} (app/api/aviso_gate.py).
-# Solo REST, sin tool MCP, y de SOLO LECTURA: lo llaman WF2 (el aviso a
-# administración por email) y el formulario de POST /gate-decisions. Usa la
-# misma llave que /gate-decisions (X-Gate-Secret), porque devuelve importes
-# y datos personales de casos con Gate que el Agente 2 no debe ver.
+# Solo REST, sin tool MCP, y de SOLO LECTURA: lo llama WF2 (el aviso a
+# administración por email). Usa la llave de administración (X-Gate-Secret),
+# porque devuelve importes y datos personales de casos con Gate que el
+# Agente 2 no debe ver.
 app.include_router(aviso_gate_api.router)
 
 # Sexto router: GET /llamadas-del-dia (app/api/listado_llamadas.py). Solo
@@ -170,8 +165,7 @@ app.include_router(ficha_oportunidad_api.router)
 # Noveno router: POST /resultados-llamada (app/api/resultados_llamada.py).
 # Solo REST, sin tool MCP: lo llama el formulario de n8n con el que
 # administración registra el resultado de una llamada. Llave de
-# administración (X-Gate-Secret). POST /gate-decisions (cuarto router) es su
-# alias con el contrato antiguo, hasta que el formulario se actualice.
+# administración (X-Gate-Secret).
 app.include_router(resultados_llamada_api.router)
 
 # Décimo router: GET /huecos-libres (app/api/huecos_libres.py). Solo REST y

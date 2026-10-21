@@ -66,7 +66,7 @@ from app.services.datos_oportunidad import COLUMNAS_CASO
 
 # ZONA_MADRID: la zona Europe/Madrid, con el cambio de hora.
 # ConfiguracionIncompleta: el rechazo de "falta una regla" (-> 503), el
-# mismo que usan /visits y /gate-decisions, con su lista "faltan".
+# mismo que usan /visits y /resultados-llamada, con su lista "faltan".
 from app.services.reglas_visita import ZONA_MADRID, ConfiguracionIncompleta
 
 # La condición del apartado b) y la regla de 48 h viven en un módulo

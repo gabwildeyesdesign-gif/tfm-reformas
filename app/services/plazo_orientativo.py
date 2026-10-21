@@ -25,7 +25,7 @@ from decimal import Decimal
 from app.schemas.leads import PlazoOrientativo, TramoSemanas
 
 # ConfiguracionIncompleta: el rechazo "falta o no es válida una regla"
-# (-> 503), el mismo que usan /visits, /gate-decisions y el listado.
+# (-> 503), el mismo que usan /visits, /resultados-llamada y el listado.
 from app.services.reglas_visita import ConfiguracionIncompleta
 
 # ======================================================================

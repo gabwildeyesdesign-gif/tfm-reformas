@@ -761,8 +761,8 @@ def calculate_estimate(oportunidad_id: int) -> EstimateResponse:
         #
         # duracion_estimada_dias y aprobado_por se escriben NULL a mano:
         # la duración no tiene fórmula en N0 (limitación documentada en
-        # la Adenda 1.1b) y aprobado_por lo escribirá POST
-        # /gate-decisions. Escritos explícitos, la intención queda
+        # la Adenda 1.1b) y aprobado_por no lo escribe nadie
+        # todavía (tampoco POST /resultados-llamada). Escritos explícitos, la intención queda
         # visible en el código, con el mismo criterio que datos_completos
         # en create_lead.
         cursor.execute(

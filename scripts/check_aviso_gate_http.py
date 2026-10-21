@@ -8,7 +8,7 @@ Qué hace, en pocas palabras:
      uvicorn de n8n de Gabi). Si el 8023 está ocupado, se para sin tocar
      nada.
   2. Crea sus propios casos como lo hará n8n (POST /leads, POST
-     /calculate-estimate y POST /gate-decisions), salvo el lead "antiguo"
+     /calculate-estimate y POST /resultados-llamada), salvo el lead "antiguo"
      sin la clave 'contacto', que se crea por SQL porque POST /leads ya no
      puede crearlo así.
   3. Prueba el contrato entero: llave, forma, 404 y 409, que nunca sale
@@ -90,7 +90,7 @@ PUERTO = 8023
 BASE = f"http://127.0.0.1:{PUERTO}"
 # Cabecera de n8n para /leads y /calculate-estimate.
 AUTH_WEBHOOK = {"X-Webhook-Secret": WEBHOOK_SECRET}
-# Cabecera del Gate, la que exige GET /gate-avisos (y POST /gate-decisions).
+# Cabecera del Gate, la que exige GET /gate-avisos (y POST /resultados-llamada).
 AUTH_GATE = {"X-Gate-Secret": GATE_SECRET}
 # Patrón SQL (LIKE) que identifica a los clientes de ESTE script.
 PATRON_EMAIL = "http-aviso-%@example.com"
@@ -326,8 +326,10 @@ def caso_con_gate(etiqueta, m2=6, fotos=None):
 
 
 def decidir(op, cuerpo_peticion):
-    """POST /gate-decisions con la llave del Gate; debe dar 201."""
-    r = requests.post(f"{BASE}/gate-decisions", headers=AUTH_GATE,
+    """POST /resultados-llamada con la llave del Gate; debe dar 201.
+    (Cambio 2026-10-22: alias POST /gate-decisions quitado, bloque 5.)"""
+    # El cuerpo: oportunidad_id más lo recibido (resultado, informe...).
+    r = requests.post(f"{BASE}/resultados-llamada", headers=AUTH_GATE,
                       json={"oportunidad_id": op, **cuerpo_peticion}, timeout=20)
     assert r.status_code == 201, r.text
     return r.json()
@@ -500,29 +502,36 @@ try:
     # Informes únicos de esta ejecución: no deben aparecer nunca en el aviso.
     INFORME_X = f"INFORME-PRIVADO-X-{uuid.uuid4().hex}"
     INFORME_Z = f"INFORME-PRIVADO-Z-{uuid.uuid4().hex}"
-    decidir(OP_X, {"decision": "visita_acordada", "fecha": LUNES_1.isoformat(), "hora": "08:30",
+    # Las tres decisiones, por POST /resultados-llamada (X e Y con visita).
+    decidir(OP_X, {"resultado": "visita_acordada", "fecha": LUNES_1.isoformat(), "hora": "08:30",
                    "informe": INFORME_X})
-    decidir(OP_Y, {"decision": "visita_acordada", "fecha": LUNES_2.isoformat(), "hora": "08:30",
+    decidir(OP_Y, {"resultado": "visita_acordada", "fecha": LUNES_2.isoformat(), "hora": "08:30",
                    "informe": f"INFORME-PRIVADO-Y-{uuid.uuid4().hex}"})
-    decidir(OP_Z, {"decision": "descartar", "motivo": "precio", "informe": INFORME_Z})
+    decidir(OP_Z, {"resultado": "descartar", "motivo": "precio", "informe": INFORME_Z})
+    # Los ids de todos los casos, para leer la salida.
     print(f"  A={OP_A} B1={OP_B1} B2={OP_B2} SP={OP_SP} L={OP_L} X={OP_X} Y={OP_Y} Z={OP_Z}")
 
     # ==================================================================
     print("\nCASO 1 - Llave (pre-decisión 2)")
     # ==================================================================
+    # Sin cabecera: 401, con su cuerpo y su cabecera.
     r = aviso(OP_A, {})
     comprobar("sin cabecera -> 401", r.status_code == 401, f"({r.status_code})")
     comprobar("cuerpo del 401 = {\"detail\": \"No autorizado\"}", cuerpo(r) == {"detail": "No autorizado"})
     comprobar("cabecera WWW-Authenticate: APIKey", r.headers.get("WWW-Authenticate") == "APIKey")
-    # El 401 de POST /gate-decisions, para comparar: tiene que ser idéntico.
-    r_gd = requests.post(f"{BASE}/gate-decisions", json={}, timeout=20)
-    comprobar("401 idéntico al de POST /gate-decisions (cuerpo y WWW-Authenticate)",
+    # El 401 de POST /resultados-llamada (la misma llave), para comparar:
+    # tiene que ser idéntico.
+    # (Cambio 2026-10-22: alias POST /gate-decisions quitado, bloque 5.)
+    r_gd = requests.post(f"{BASE}/resultados-llamada", json={}, timeout=20)
+    comprobar("401 idéntico al de POST /resultados-llamada (cuerpo y WWW-Authenticate)",
               r.status_code == r_gd.status_code and r.content == r_gd.content
               and r.headers.get("WWW-Authenticate") == r_gd.headers.get("WWW-Authenticate"))
+    # Llaves equivocadas: otro valor, y el de WEBHOOK_SECRET en las dos cabeceras.
     r = aviso(OP_A, {"X-Gate-Secret": "no-es-el-secreto"})
     comprobar("X-Gate-Secret incorrecto -> 401", r.status_code == 401, f"({r.status_code})")
     r = aviso(OP_A, {"X-Gate-Secret": WEBHOOK_SECRET})
     comprobar("valor de WEBHOOK_SECRET en X-Gate-Secret -> 401", r.status_code == 401, f"({r.status_code})")
+    # La llave del Agente 2, en su propia cabecera.
     r = aviso(OP_A, {"X-Webhook-Secret": WEBHOOK_SECRET})
     comprobar("valor de WEBHOOK_SECRET en X-Webhook-Secret -> 401", r.status_code == 401, f"({r.status_code})")
     r = aviso("abc", {})

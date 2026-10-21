@@ -8,7 +8,7 @@ Qué hace, en pocas palabras:
      uvicorn de n8n de Gabi). Si el 8025 está ocupado, se para sin tocar
      nada. Comprueba que quien escucha en el puerto es este proceso (PID).
   2. Crea sus propios datos por HTTP, como lo hará n8n (POST /leads, POST
-     /calculate-estimate, POST /visits, POST /gate-decisions), y por SQL,
+     /calculate-estimate, POST /visits, POST /resultados-llamada), y por SQL,
      SOLO sobre filas propias, lo que la API no puede producir (atrasar el
      presupuesto, poner fecha_ultimo_contacto, insertar una visita sin
      cambiar el estado, forzar un estado).
@@ -491,12 +491,13 @@ try:
     op, _ = caso(gate=True)
     retrasar(op, 49)
     MATRIZ["Gate en pendiente_aprobacion (doble: + estado)"] = (op, 409, "con_gate")
-    # Con Gate ya decidido (descartar -> 'perdida') por POST /gate-decisions.
+    # Con Gate ya decidido (descartar -> 'perdida') por POST /resultados-llamada.
+    # (Cambio 2026-10-22: alias POST /gate-decisions quitado, bloque 5.)
     op, _ = caso(gate=True)
     retrasar(op, 49)
     # La decisión del Gate por la API real: descartar.
-    r = requests.post(f"{BASE}/gate-decisions", headers=AUTH_GATE, timeout=30, json={
-        "oportunidad_id": op, "decision": "descartar", "motivo": "precio", "informe": "Prueba del seguimiento."})
+    r = requests.post(f"{BASE}/resultados-llamada", headers=AUTH_GATE, timeout=30, json={
+        "oportunidad_id": op, "resultado": "descartar", "motivo": "precio", "informe": "Prueba del seguimiento."})
     assert r.status_code == 201, r.text
     MATRIZ["Gate decidido ('perdida')"] = (op, 409, "con_gate")
     # Con Gate puesto A MANO en 'presupuesto_enviado' (P1: el caso que el
@@ -589,9 +590,11 @@ try:
     # El valor de WEBHOOK_SECRET en su propia cabecera.
     r = pedir(A, cabeceras=AUTH_WEBHOOK)
     comprobar("valor de WEBHOOK_SECRET en X-Webhook-Secret -> 401", r.status_code == 401, f"({r.status_code})")
-    # El 401 de /gate-decisions, para compararlo (cuerpo vacío, sin llave).
-    r_gate = requests.post(f"{BASE}/gate-decisions", json={}, timeout=30)
-    comprobar("cuerpo y WWW-Authenticate idénticos a los de /gate-decisions",
+    # El 401 de /resultados-llamada (la misma llave), para compararlo
+    # (cuerpo vacío, sin llave).
+    # (Cambio 2026-10-22: alias POST /gate-decisions quitado, bloque 5.)
+    r_gate = requests.post(f"{BASE}/resultados-llamada", json={}, timeout=30)
+    comprobar("cuerpo y WWW-Authenticate idénticos a los de /resultados-llamada",
               r.text == r_gate.text and r.headers.get("WWW-Authenticate") == r_gate.headers.get("WWW-Authenticate")
               == "APIKey", f"({r.text})")
     comprobar("los 401 no han tocado nada", foto_op(A) == antes)

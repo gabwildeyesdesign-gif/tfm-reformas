@@ -22,7 +22,7 @@ from typing import Annotated
 # responde con un código de error) y Path (reglas para el {oportunidad_id}).
 from fastapi import APIRouter, Depends, HTTPException, Path
 
-# La dependencia que comprueba X-Gate-Secret (la de /gate-decisions,
+# La dependencia que comprueba X-Gate-Secret (la de /resultados-llamada,
 # /gate-avisos, /llamadas-del-dia y /create-followup-task). NO
 # verificar_webhook_secret: esa llave la tiene el Agente 2.
 from app.api.security import verificar_gate_secret

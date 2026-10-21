@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # Las listas cerradas que ya existen en el proyecto, reutilizadas en vez de
 # copiadas: tipo de reforma, nivel de acabados y motivo del Gate
-# (common.py), y decisión y motivo de descarte (gate_decisions.py). Así el
+# (common.py), y la decisión (gate_decisions.py). Así el
 # aviso solo puede decir valores que el sistema conoce. EstadoOportunidad
 # (los 8 estados del CHECK) se añadió el 2026-10-03, corrección del tutor.
 from app.schemas.common import (
@@ -129,7 +129,7 @@ class PresupuestoAviso(BaseModel):
 
 class DecisionAviso(BaseModel):
     """
-    La decisión ya registrada con POST /gate-decisions (decisión D3 del
+    La decisión ya registrada con POST /resultados-llamada (decisión D3 del
     plan). NO tiene campo para el informe de la llamada, a propósito.
     """
 
@@ -157,7 +157,7 @@ class AvisoGateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # El único identificador que sale: el formulario lo necesita para
-    # llamar después a POST /gate-decisions.
+    # llamar después a POST /resultados-llamada.
     oportunidad_id: int
     # oportunidades.estado: 'pendiente_aprobacion', o 'visita_agendada' /
     # 'perdida' si ya hay decisión (y 'ganada' si se cerró a mano tras la

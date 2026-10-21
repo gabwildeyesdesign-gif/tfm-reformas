@@ -38,7 +38,7 @@ Gmail o de Google Calendar) está en estos archivos.
 | `WF4_aviso_tecnico.json` | Subflujo único de avisos técnicos (Telegram + email, sin datos del cliente) | Publicado |
 | `WF4_errores_no_atrapados.json` | *Error Trigger* → WF4_aviso_tecnico | Flujo de errores (no necesita publicarse) |
 | `WF_ficha_oportunidad.json` | Página HTML de la ficha completa (`GET /webhook/ficha?oportunidad_id=`). Desde el 20/10, sección "Resumen del asistente" después de "Solicitud" ("Sin resumen del asistente." si es null: lead antiguo o resumen descartado por el filtro); prueba 114 | Publicado (20/10) |
-| `WF_formulario_gate.json` | Formulario antiguo del Gate (Fase 1), sustituido por `WF_formulario_llamadas` | **Retirado** el 15/10 (despublicado, no borrado). Se conserva como histórico |
+| `WF_formulario_gate.json` | Formulario antiguo del Gate (Fase 1), sustituido por `WF_formulario_llamadas` | **Retirado** el 15/10 (despublicado, no borrado). Se conserva como registro histórico. Es el ÚNICO flujo de esta carpeta que llama a una ruta que ya no existe: `POST /gate-decisions` (Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión anterior en aba39c4. Responde 404) |
 
 
 ## Cómo importar

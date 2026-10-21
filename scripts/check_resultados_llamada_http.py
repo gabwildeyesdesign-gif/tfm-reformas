@@ -18,14 +18,22 @@ nunca el 8000), crea sus propios clientes por POST /leads y
           visita_cambiada, misma_hora_pedida y la pedida ya pasada
   CASO 8  resultado_no_admitido en los dos sentidos
   CASO 9  repetición (200 sin escribir) y resultado_ya_registrado
-  CASO 10 el alias: misma fila, sus motivos de siempre, 'sin_decision' 422
+  CASO 10 (quitado el 2026-10-22 con el alias POST /gate-decisions, bloque
+          5; el número no se reutiliza)
   CASO 11 la ficha: llamadas, visita cancelada, historial y llamada_registrable
   CASO 12 la matriz lista <-> registro (pre-decisión 4 con C1)
-  CASO 13 concurrencia
+  CASO 13 concurrencia (13b: D31, hueco ocupado)
+  CASO 13c (desde el 2026-10-22) lo que vigilaba check_gate_decisions_http:
+          U1 informe recortado, U2 2000 'á', U4 el log del Gate, U5 informe
+          vacío, U6 visita_acordada sin hora, U7 /leads/session y U8 POST
+          /visits tras una decisión real; U11-U14, las que la tabla del commit
+          encontró cubiertas solo en parte: U11 5 iguales (mismo id, 1 log),
+          U12 5 distintas (motivo de los 409), U13 contacto reciente, U14 el
+          409 visita_activa_existente sin escribir
   CASO 14 ningún 500, 201 <-> creado, claves exactas, 0 importes
   (D33, 2026-10-14, plan docs/Plan_Fecha_Fin_Visita_D33.txt: fecha_fin_visita
-  en cada 201 de verificar_201, en las repeticiones del CASO 9 y en el alias
-  del CASO 10: fecha_visita + la duración leída aquí de reglas_negocio, con el
+  en cada 201 de verificar_201 y en las repeticiones del CASO 9 (hasta el
+  2026-10-22, también en el alias del CASO 10): fecha_visita + la duración leída aquí de reglas_negocio, con el
   mismo texto y desfase; null sin visita.)
 
 Las 4 preguntas: (1) escribe en tablas reales SOLO filas propias (emails
@@ -652,37 +660,9 @@ try:
         comprobar(f"otro resultado tras {cuerpo['resultado']} -> 409 resultado_ya_registrado",
                   r.status_code == 409 and motivo(r) == "resultado_ya_registrado" and foto_op(op) == antes, f"({r.status_code})")
 
-    # ------------------------------------------------------------------
-    print("\nCASO 10 - El alias POST /gate-decisions")
-    # El mismo descarte de Gate por el alias: su contrato y la fila con tipo gate.
-    _, g5 = lead(estructural=True)
-    r = pedir("POST", "/gate-decisions", {"oportunidad_id": g5, "decision": "descartar", "motivo": "precio", "informe": "x"})
-    # D33 (P2): las 8 de siempre más fecha_fin_visita, null en un descarte.
-    comprobar("alias: 201 con las 8 claves de siempre más fecha_fin_visita (null) y la fila con tipo_llamada 'gate'",
-              r.status_code == 201 and set(cuerpo_de(r)) == {"decision_id", "oportunidad_id", "decision", "motivo",
-                                                             "estado_oportunidad", "visita_id", "fecha_propuesta",
-                                                             "fecha_fin_visita", "creado"}
-              and cuerpo_de(r).get("fecha_fin_visita") is None
-              and (fila_resultado(g5) or ("",))[0] == "gate", f"({r.status_code} {r.text[:150]})")
-    # Y su log lo escribió el servicio NUEVO: la acción de siempre con las
-    # claves de B2 (tipo_llamada y estado). Una copia del servicio antiguo
-    # escribiría la misma fila (el DEFAULT pone 'gate') pero no estas claves (N6).
-    logs = logs_de(g5)
-    comprobar("alias: el log lleva tipo_llamada 'gate' y estado 'perdida' (lo escribe el servicio nuevo)",
-              len(logs) == 1 and logs[0][1].get("tipo_llamada") == "gate" and logs[0][1].get("estado") == "perdida", f"({logs})")
-    # Cada ruta ve la fila de la otra: la nueva da 409 resultado_ya_registrado,
-    # el alias su decision_ya_registrada de siempre.
-    r = registrar(g5, {"resultado": "descartar", "motivo": "otro"})
-    comprobar("ruta nueva sobre un registro del alias -> 409 resultado_ya_registrado", motivo(r) == "resultado_ya_registrado")
-    r = pedir("POST", "/gate-decisions", {"oportunidad_id": g1, "decision": "descartar", "motivo": "otro", "informe": "x"})
-    comprobar("alias sobre un registro de la ruta nueva -> 409 decision_ya_registrada", motivo(r) == "decision_ya_registrada")
-    # Un seguimiento por el alias: 409 sin_gate (el alias es solo Gate).
-    _, s6 = seguimiento_abierto()
-    r = pedir("POST", "/gate-decisions", {"oportunidad_id": s6, "decision": "descartar", "motivo": "precio", "informe": "x"})
-    comprobar("alias con un seguimiento -> 409 sin_gate", r.status_code == 409 and motivo(r) == "sin_gate")
-    # 'sin_decision' por el alias: 422 (su Enum no cambia).
-    r = pedir("POST", "/gate-decisions", {"oportunidad_id": g3, "decision": "descartar", "motivo": "sin_decision", "informe": "x"})
-    comprobar("alias con 'sin_decision' -> 422", r.status_code == 422)
+    # (CASO 10, el alias POST /gate-decisions: quitado el 2026-10-22 con el
+    # alias, bloque 5. Que el alias ya no existe lo prueba ahora
+    # check_gate_decisions_http: 404 exacto, con llave y sin ella.)
 
     # ------------------------------------------------------------------
     print("\nCASO 11 - La ficha")
@@ -931,7 +911,7 @@ try:
               f"(registro {r_reg.status_code}, seguimiento {r_seg.status_code}, final {final})")
 
     # ------------------------------------------------------------------
-    print("\nCASO 13b - D31: hueco ocupado en /resultados-llamada y en el alias")
+    print("\nCASO 13b - D31: hueco ocupado en /resultados-llamada")
     # Las reglas reales, leídas aquí aparte, para calcular las horas libres
     # esperadas sin usar el código probado. SQL: clave y valor de las seis
     # (D32: el desplazamiento en lugar del paso).
@@ -989,17 +969,7 @@ try:
     comprobar("ruta nueva: visita_acordada sobre una pedida del chat -> 409 hueco_ocupado con huecos_libres",
               d.get("motivo") == "hueco_ocupado" and set(d) == {"motivo", "mensaje", "huecos_libres"}
               and d.get("huecos_libres") == libres_esperados([585]), f"({r.status_code} {d})")
-    # El alias (formulario publicado, P17), a la misma hora que la pedida.
-    r = pedir("POST", "/gate-decisions", {"oportunidad_id": gh1, "decision": "visita_acordada",
-                                          "fecha": str(D_H1), "hora": "09:45", "informe": "x"})
-    # El detalle.
-    d = detalle_409(r)
-    # Se enseña.
-    print(f"      alias 09:45 <- {r.status_code} {d}")
-    # El alias, igual: 409 hueco_ocupado con la lista.
-    comprobar("alias /gate-decisions: el mismo 409 hueco_ocupado con huecos_libres",
-              d.get("motivo") == "hueco_ocupado" and d.get("huecos_libres") == libres_esperados([585]),
-              f"({r.status_code} {d})")
+    # (Aquí iba el mismo 409 por el alias, P17: quitado el 2026-10-22, bloque 5.)
     # Ni los 409 ni el 422 han escrito nada.
     comprobar("los 409 y el 422 no escriben nada en el Gate", foto_op(gh1) == antes)
     # A las 11:00 (09:45 + 60 + 15: justo el desplazamiento): 201.
@@ -1057,6 +1027,139 @@ try:
                   TEXTO_OTRA_HORA)
 
     # ------------------------------------------------------------------
+    # Bloque 5 (2026-10-22): lo que solo vigilaba check_gate_decisions_http y
+    # se movió aquí al quitar el alias (U1, U2, U4-U8 y U11-U14). U3 (el informe
+    # original intacto tras repetir) ya la cubre el CASO 9: compara la fila
+    # entera, con su informe, antes y después de repetir con "Otro informe.".
+    print("\nCASO 13c - Lo que vigilaba el alias, por la ruta nueva (U1, U2, U4-U8, U11-U14)")
+    # Un día propio más del bloque, pedido DESPUÉS de los de 13b: así no se
+    # mueve el día de ningún caso anterior.
+    D_U1 = DIAS.siguiente()
+    # U5 y U6: dos 422 de forma que el CASO 2 no tenía, sobre un Gate.
+    _, gu0 = lead(estructural=True)
+    antes = foto_op(gu0)
+    # U5: un informe vacío ("", no solo espacios).
+    r = registrar(gu0, {"resultado": "descartar", "motivo": "precio", "informe": ""})
+    comprobar("U5: informe vacío -> 422 (Pydantic)",
+              r.status_code == 422 and isinstance(cuerpo_de(r).get("detail"), list), f"({r.status_code})")
+    # U6: visita_acordada con fecha y sin hora.
+    r = registrar(gu0, {"resultado": "visita_acordada", "fecha": str(D_U1)})
+    comprobar("U6: visita_acordada sin hora -> 422 (Pydantic)",
+              r.status_code == 422 and isinstance(cuerpo_de(r).get("detail"), list), f"({r.status_code})")
+    # Ninguno de los dos ha escrito nada.
+    comprobar("U5 y U6: los dos 422 no escriben nada", foto_op(gu0) == antes)
+
+    # U1: el informe se guarda RECORTADO (sin los espacios de los extremos).
+    _, gu1 = lead(estructural=True)
+    informe_u1 = f"  Llamada {uuid.uuid4().hex[:10]}: le parece caro.  "
+    r = registrar(gu1, {"resultado": "descartar", "motivo": "precio", "informe": informe_u1})
+    # La fila guardada: su informe es el enviado sin los extremos.
+    f = fila_resultado(gu1)
+    comprobar("U1: informe con espacios en los extremos -> 201 y se guarda recortado",
+              r.status_code == 201 and f is not None and f[5] == informe_u1.strip(), f"({r.status_code} {f})")
+
+    # U2: 2000 'á' (4000 bytes): el límite cuenta CARACTERES, no bytes.
+    token_u2, gu2 = lead(estructural=True)
+    r = registrar(gu2, {"resultado": "descartar", "motivo": "plazo", "informe": "á" * 2000})
+    j_u2 = cuerpo_de(r)
+    # La fila guardada, entera.
+    f = fila_resultado(gu2)
+    comprobar("U2: informe de 2000 'á' -> 201 y se guarda entero",
+              r.status_code == 201 and f is not None and f[5] == "á" * 2000, f"({r.status_code} {r.text[:120]})")
+
+    # U4: el log de un Gate enlaza la visita, su fecha y el motivo.
+    token_u3, gu3 = lead(estructural=True)
+    r = registrar(gu3, {"resultado": "visita_acordada", "fecha": str(D_U1), "hora": "08:30"})
+    j_u3 = cuerpo_de(r)
+    # El único log de resultado de la oportunidad (o {} si no hay uno solo).
+    logs = logs_de(gu3)
+    d = logs[0][1] if len(logs) == 1 else {}
+    comprobar("U4: visita_acordada -> el log lleva su decision_id, la visita, su fecha y motivo null",
+              r.status_code == 201 and d.get("decision_id") == j_u3.get("llamada_id")
+              and d.get("visita_id") is not None and d.get("visita_id") == j_u3.get("visita_id")
+              and d.get("fecha_propuesta") is not None
+              and datetime.fromisoformat(d["fecha_propuesta"]) == datetime.fromisoformat(madrid(D_U1, 8, 30))
+              and d.get("motivo") is None, f"({r.status_code} {logs})")
+    # Y el del descarte de U2: el motivo, sin visita ni fecha.
+    logs = logs_de(gu2)
+    d = logs[0][1] if len(logs) == 1 else {}
+    comprobar("U4: descartar -> el log lleva su decision_id y el motivo, sin visita ni fecha",
+              d.get("decision_id") == j_u2.get("llamada_id") and d.get("motivo") == "plazo"
+              and d.get("visita_id") is None and d.get("fecha_propuesta") is None, f"({logs})")
+
+    # U7 y U8: lo que ven el router de n8n y POST /visits tras una decisión
+    # REAL (el Gate es permanente, P5 de /visits).
+    for nombre, token, op, estado in (("visita acordada", token_u3, gu3, "visita_agendada"),
+                                      ("descartada", token_u2, gu2, "perdida")):
+        # U7: GET /leads/session, con la llave de n8n.
+        j = cuerpo_de(pedir("GET", f"/leads/session/{token}", cabeceras=AUTH_WEBHOOK))
+        comprobar(f"U7: GET /leads/session ({nombre}) -> estado '{estado}' y requiere_aprobacion true",
+                  j.get("estado_oportunidad") == estado and (j.get("presupuesto") or {}).get("requiere_aprobacion") is True,
+                  f"({j.get('estado_oportunidad')}, {j.get('presupuesto')})")
+        # U8: el cliente pide otra visita desde el chat: 409, sin escribir.
+        antes = foto_op(op)
+        r = visita_pedida(token, D_U1, "17:00")
+        comprobar(f"U8: POST /visits ({nombre}) -> 409 presupuesto_con_gate, sin escribir",
+                  r.status_code == 409 and motivo(r) == "presupuesto_con_gate" and foto_op(op) == antes,
+                  f"({r.status_code} {motivo(r)})")
+
+    # U11-U14 (2026-10-22): al hacer la tabla del commit salieron cuatro
+    # comprobaciones del alias cubiertas SOLO EN PARTE por los casos de
+    # arriba; se añaden aquí, sin tocar esos casos.
+    # U13: fecha_ultimo_contacto RECIENTE (verificar_201 solo mira que exista).
+    # SQL: segundos entre el now() de la base de datos y el contacto de gu1.
+    segundos = consultar("SELECT extract(epoch FROM now() - fecha_ultimo_contacto) FROM oportunidades "
+                         "WHERE id = %s;", (gu1,))[0][0]
+    comprobar("U13: fecha_ultimo_contacto escrita hace menos de 5 min",
+              segundos is not None and 0 <= float(segundos) < 300, f"({segundos} s)")
+
+    # U11: 5 descartes IGUALES a la vez en un Gate: el mismo llamada_id en las
+    # cinco respuestas y UN solo log de decisión.
+    _, gu11 = lead(estructural=True)
+    with ThreadPoolExecutor(5) as ex:
+        rs = list(ex.map(lambda _: registrar(gu11, {"resultado": "descartar", "motivo": "precio"}), range(5)))
+    # Los ids de las cinco respuestas y los logs de resultado de la oportunidad.
+    ids = {cuerpo_de(r).get("llamada_id") for r in rs}
+    logs = logs_de(gu11)
+    comprobar("U11: 5 iguales a la vez -> un 201, cuatro 200, el MISMO llamada_id en las 5 y 1 log de decisión",
+              sorted(r.status_code for r in rs) == [200, 200, 200, 200, 201] and len(ids) == 1 and None not in ids
+              and len(logs) == 1 and logs[0][0] == "gate_decision_registrada", f"({[r.status_code for r in rs]} {ids} {len(logs)})")
+
+    # U12: 5 resultados DISTINTOS a la vez en un Gate: los cuatro 409 son
+    # resultado_ya_registrado, y las visitas cuadran con el que ganó.
+    _, gu12 = lead(estructural=True)
+    DISTINTOS = [{"resultado": "descartar", "motivo": "precio"}, {"resultado": "descartar", "motivo": "plazo"},
+                 {"resultado": "descartar", "motivo": "otro"},
+                 {"resultado": "visita_acordada", "fecha": str(D_U1), "hora": "11:00"},
+                 {"resultado": "visita_acordada", "fecha": str(D_U1), "hora": "12:15"}]
+    with ThreadPoolExecutor(5) as ex:
+        rs = list(ex.map(lambda c: registrar(gu12, c), DISTINTOS))
+    # El que ganó (el único 201) y las visitas que dejó.
+    ganador = [c for c, r in zip(DISTINTOS, rs) if r.status_code == 201]
+    visitas_u12 = foto_op(gu12)[1] or ""
+    esperadas = 1 if ganador and ganador[0]["resultado"] == "visita_acordada" else 0
+    comprobar("U12: 5 distintas a la vez -> un 201 y cuatro 409 resultado_ya_registrado, 1 fila y las visitas del ganador",
+              sorted(r.status_code for r in rs) == [201, 409, 409, 409, 409]
+              and [motivo(r) for r in rs if r.status_code == 409].count("resultado_ya_registrado") == 4
+              and foto_op(gu12)[0] == 1 and visitas_u12.count("confirmada") == esperadas,
+              f"({[r.status_code for r in rs]} ganó {ganador} visitas {visitas_u12!r})")
+
+    # U14: el 409 visita_activa_existente NO escribe nada (el CASO 5 solo
+    # mira el código). Un Gate con una visita 'confirmada' hecha a mano.
+    _, gu14 = lead(estructural=True)
+    # SQL: la visita, en una oportunidad PROPIA, el día propio a las 17:00.
+    cur.execute(f"INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
+                f"SELECT %(op)s, %(f)s, 'confirmada', 'hecha a mano' WHERE %(op)s IN ({SQL_OPS});",
+                {"op": gu14, "f": madrid(D_U1, 17, 0), "p": PATRON})
+    cn.commit()
+    # La foto, y visita_acordada a otra hora de la rejilla (18:15).
+    antes = foto_op(gu14)
+    r = registrar(gu14, {"resultado": "visita_acordada", "fecha": str(D_U1), "hora": "18:15"})
+    comprobar("U14: visita_acordada con una visita activa -> 409 visita_activa_existente, sin escribir",
+              r.status_code == 409 and motivo(r) == "visita_activa_existente" and foto_op(gu14) == antes,
+              f"({r.status_code} {motivo(r)})")
+
+    # ------------------------------------------------------------------
     print("\nCASO 14 - Ningún 500, 201 <-> creado, ningún importe")
     comprobar(f"ninguna respuesta 500 ({len(codigos)} peticiones)", 500 not in codigos)
     comprobar(f"201 <-> creado=true y 200 <-> creado=false ({len(pares)} éxitos)",
@@ -1069,12 +1172,15 @@ finally:
     hilo.join(timeout=15)
     # Los logs del manejador global de los 500 de ESTA ejecución, de las
     # rutas que pide el script; se borran por id exacto si cuadran.
-    rutas = ["/resultados-llamada", "/gate-decisions", "/leads", "/calculate-estimate", "/visits",
+    # (Sin /gate-decisions desde el 2026-10-22: la ruta ya no existe.)
+    rutas = ["/resultados-llamada", "/leads", "/calculate-estimate", "/visits",
              "/create-followup-task", "/llamadas-del-dia"]
-    # SQL: los ids de esos logs.
+    # SQL: los ids de esos logs (con /leads/session/<token> desde el
+    # 2026-10-22: la pide el CASO 13c).
     ids_500 = [f[0] for f in consultar(
         "SELECT id FROM logs WHERE id > %s AND accion = 'error_no_controlado' AND (detalle->>'ruta' = ANY(%s) "
-        "OR detalle->>'ruta' LIKE '/oportunidades/%%') ORDER BY id;", (FOTO["logs"][0], rutas))]
+        "OR detalle->>'ruta' LIKE '/oportunidades/%%' OR detalle->>'ruta' LIKE '/leads/session/%%') "
+        "ORDER BY id;", (FOTO["logs"][0], rutas))]
     print(f"\n  respuestas 500: {codigos.count(500)}; logs error_no_controlado de estas rutas: {ids_500}")
     comprobar("los logs de 500 son exactamente los esperados", len(ids_500) == codigos.count(500))
     # Borrado por id exacto, solo si cuadran.

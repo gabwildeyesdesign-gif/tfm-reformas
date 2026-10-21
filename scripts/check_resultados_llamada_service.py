@@ -12,8 +12,9 @@ y contaría como FALLO, sin confirmar nada.
   S1  deducir_tipo_llamada en todos sus casos, con datos propios.
   S2  los criterios de b) llegan de condicion_seguimiento (ast): ningún
       texto copiado en tipo_llamada.py ni en el servicio.
-  S3  el 503 de las reglas de visita, con su log y su "origen" (P12): por la
-      ruta nueva, "resultados_llamada"; por el alias, "gate_decisions".
+  S3  el 503 de las reglas de visita, con su log y su "origen" (P12),
+      "resultados_llamada". (Cambio 2026-10-22: el caso del alias, con
+      "gate_decisions", se quitó con él, bloque 5.)
   S4  los estados se importan, no se escriben (ast).
   S5  los cinco resultados, con registrar_resultado_con_cursor: su
       respuesta y lo que escriben; un commit() dentro sería FALLO. Desde D33
@@ -21,14 +22,24 @@ y contaría como FALLO, sin confirmar nada.
       leída aquí de reglas_negocio; None sin visita).
   S7  D33, P1 (plan docs/Plan_Fecha_Fin_Visita_D33.txt): la repetición de un
       resultado CON visita lee las reglas para su fin; rotas, 503 diferido
-      con su log (ruta nueva y alias) y nada más escrito. Sin visita, la
-      repetición no las lee (200 aunque estén rotas).
+      con su log y nada más escrito. Sin visita, la repetición no las lee
+      (200 aunque estén rotas). (Cambio 2026-10-22: sin el caso del alias.)
+  S6  (desde el 2026-10-22) el alias ya no existe: ni su router, ni su
+      include_router, ni el parámetro solo_gate (ast).
+  S8  (desde el 2026-10-22, U9 y U10 de check_gate_decisions_service,
+      retirado) con commit REAL y fuera del ROLLBACK: el log del 503 se
+      conserva tras el commit, y un descarte nuevo con las reglas rotas
+      se registra sin log de configuración.
 
-Las 4 preguntas: (1) escribe en tablas reales SOLO dentro de esta
-transacción, que se deshace siempre; (2) pasa su cursor al código, por eso
-ConexionSinCommit; (3) si se corta, Postgres deshace la transacción abierta,
-y al final se comprueba que no queda el cliente de prueba; (4) no toca el
-8000 ni ninguna fila real; los cambios en memoria de nombres de reglas se
+Las 4 preguntas: (1) S0-S7 escriben en tablas reales SOLO dentro de una
+transacción que se deshace siempre; S8 (desde el 2026-10-22) SÍ confirma:
+dos Gates propios (emails check-resultado-svc-u-<8>@example.com), su log
+del 503 y un descarte, borrados por la marca al terminar; (2) S0-S7 pasan
+su cursor al código, por eso ConexionSinCommit; S8 no pasa ninguna conexión
+(los servicios usan el pool); (3) si se corta, Postgres deshace la
+transacción abierta y S8 borra sus restos al empezar; al final se
+comprueba que no queda ningún cliente de prueba; (4) no toca el 8000 ni
+ninguna fila real; los cambios en memoria de nombres de reglas se
 restauran en finally.
 """
 
@@ -38,6 +49,10 @@ import ast
 import re
 # sys: consola y salida. Path: rutas.
 import sys
+# uuid: tokens únicos para los leads de S8.
+import uuid
+# Decimal: m2 exacto para LeadCreate (S8).
+from decimal import Decimal
 # Fechas en Madrid (timezone: el fin esperado se suma en UTC, D33).
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -59,10 +74,16 @@ import app.services.reglas_visita as reglas_visita
 import app.services.tipo_llamada as tipo_llamada
 # La cadena de conexión del .env (nunca se imprime).
 from app.config import DATABASE_URL
+# El pool de los servicios (S8 los llama con su commit real).
+from app.db import connection as db
 # Lo que se prueba.
+from app.schemas.leads import LeadCreate
 from app.schemas.resultados_llamada import ResultadoLlamadaCreate
 from app.services.condicion_seguimiento import CRITERIOS_SEGUIMIENTO
-from app.services.resultados_llamada_service import registrar_resultado_con_cursor
+# S8: los servicios de alta y cálculo (para sus Gates) y el registro con commit.
+from app.services.estimate_service import calculate_estimate
+from app.services.leads_service import create_lead
+from app.services.resultados_llamada_service import registrar_resultado, registrar_resultado_con_cursor
 from app.services.reglas_visita import ConfiguracionIncompleta
 
 # B5-0 (P21): las fechas propias de este script, en scripts/fechas_prueba.py.
@@ -115,8 +136,10 @@ DIAS = fechas_prueba.Dias("check_resultados_llamada_service", HOY)
 LUNES = DIAS.siguiente()
 # Los días propios de op_c, op_conf2 y op_conf3.
 D_C, D_CONF2, D_CONF3 = DIAS.siguiente(), DIAS.siguiente(), DIAS.siguiente()
-# D33: los días de S7, uno por ruta (dos Gates el mismo día y hora chocarían).
-D_P1_NUEVA, D_P1_ALIAS = DIAS.siguiente(), DIAS.siguiente()
+# D33: el día de S7 (el del alias, D_P1_ALIAS, se quitó con él el
+# 2026-10-22). Y el de U9 (S8), el siguiente del bloque: no mueve ninguno
+# de los anteriores.
+D_P1_NUEVA, D_U9 = DIAS.siguiente(), DIAS.siguiente()
 # B5-0: ninguna visita activa AJENA en el bloque (las de este script nunca
 # se confirman: todo acaba en ROLLBACK).
 fechas_prueba.exigir_libres("check_resultados_llamada_service", EMAIL,
@@ -282,13 +305,13 @@ try:
     reglas_visita.CLAVE_DURACION = "regla_de_visita_que_no_existe"
     reglas_visita.CLAVES_REGLAS = tuple(reglas_visita.CLAVE_DURACION if c == CLAVE_DURACION_REAL else c
                                         for c in CLAVES_REGLAS_REAL)
-    # Un Gate por ruta: la nueva y el alias (solo_gate).
-    for nombre, solo_gate, origen in (("ruta nueva", False, "resultados_llamada"), ("alias", True, "gate_decisions")):
+    # Un Gate por la ruta (el del alias, con solo_gate, se quitó el 2026-10-22).
+    for nombre, origen in (("ruta nueva", "resultados_llamada"),):
         op = oportunidad("pendiente_aprobacion", gate=True)
         data = ResultadoLlamadaCreate(oportunidad_id=op, resultado="visita_acordada", fecha=str(LUNES),
                                       hora="10:00", informe="prueba 503")
         # El servicio DEVUELVE el 503 (diferido): el log ya está escrito.
-        respuesta, rechazo = registrar_resultado_con_cursor(cur, data, solo_gate)
+        respuesta, rechazo = registrar_resultado_con_cursor(cur, data)
         comprobar(f"{nombre}: devuelve un ConfiguracionIncompleta diferido y ninguna respuesta",
                   respuesta is None and isinstance(rechazo, ConfiguracionIncompleta), f"({respuesta}, {rechazo})")
         # SQL: los logs de configuración incompleta de esa oportunidad.
@@ -375,14 +398,21 @@ try:
                   fin_bien, f"({respuesta.fecha_visita}, {respuesta.fecha_fin_visita})")
 
     # ==================================================================
-    print("\nS6. El alias llega al servicio NUEVO (ast)")
+    print("\nS6. El alias ya no existe (ast; bloque 5, 2026-10-22)")
     # ==================================================================
-    # Lo que importa app/api/gate_decisions.py y de dónde (N6: un alias que
-    # llamara a una copia del servicio antiguo escribiría la misma fila).
-    arbol_alias = ast.parse((RAIZ_REPO / "app/api/gate_decisions.py").read_text(encoding="utf-8"))
-    origenes = {a.name: n.module for n in arbol_alias.body if isinstance(n, ast.ImportFrom) for a in n.names}
-    comprobar("el alias importa registrar_decision de app.services.resultados_llamada_service",
-              origenes.get("registrar_decision") == "app.services.resultados_llamada_service", f"({origenes.get('registrar_decision')})")
+    # Antes S6 comprobaba que el alias llegaba al servicio NUEVO (N6). Desde
+    # el 2026-10-22 comprueba que el alias se ha ido de verdad.
+    comprobar("app/api/gate_decisions.py no existe", not (RAIZ_REPO / "app/api/gate_decisions.py").exists())
+    # Lo que importa main.py: ningún app.api.gate_decisions.
+    arbol_main = ast.parse((RAIZ_REPO / "app/main.py").read_text(encoding="utf-8"))
+    rutas_api = {a.name for n in ast.walk(arbol_main) if isinstance(n, ast.ImportFrom)
+                 and n.module == "app.api" for a in n.names}
+    comprobar("app/main.py no importa app.api.gate_decisions", "gate_decisions" not in rutas_api, f"({sorted(rutas_api)})")
+    # Los parámetros de las funciones del servicio: ninguno se llama solo_gate.
+    arbol_srv = ast.parse(texto_servicio)
+    con_solo_gate = [f.name for f in ast.walk(arbol_srv) if isinstance(f, ast.FunctionDef)
+                     and any(a.arg == "solo_gate" for a in f.args.args)]
+    comprobar("ninguna función del servicio tiene el parámetro solo_gate", con_solo_gate == [], f"({con_solo_gate})")
     # Y no existe ningún servicio viejo al que pudiera llamar.
     comprobar("app/services/gate_decisions_service.py no existe",
               not (RAIZ_REPO / "app/services/gate_decisions_service.py").exists())
@@ -414,15 +444,14 @@ try:
         # Los dos, a la vez.
         reglas_visita.CLAVE_DURACION, reglas_visita.CLAVES_REGLAS = CLAVE_DURACION_REAL, CLAVES_REGLAS_REAL
 
-    # Una por ruta: (nombre, solo_gate, origen del log, día).
-    for nombre, solo_gate, origen, dia in (("ruta nueva", False, "resultados_llamada", D_P1_NUEVA),
-                                           ("alias", True, "gate_decisions", D_P1_ALIAS)):
+    # (nombre, origen del log, día). El caso del alias se quitó el 2026-10-22.
+    for nombre, origen, dia in (("ruta nueva", "resultados_llamada", D_P1_NUEVA),):
         # Un Gate con su visita acordada (con las reglas bien).
         op = oportunidad("pendiente_aprobacion", gate=True)
         data = ResultadoLlamadaCreate(oportunidad_id=op, resultado="visita_acordada", fecha=str(dia),
                                       hora="09:45", informe="prueba D33")
         # El registro de partida (con las reglas bien): el 201.
-        primera, _ = registrar_resultado_con_cursor(cur, data, solo_gate)
+        primera, _ = registrar_resultado_con_cursor(cur, data)
         # Sin el 201 no hay repetición que probar: se cuenta como FALLO.
         comprobar(f"{nombre}: el registro de partida es nuevo (creado)", primera is not None and primera.creado,
                   f"({primera})")
@@ -430,7 +459,7 @@ try:
         antes = contar(op)
         # La MISMA petición con las reglas rotas: una repetición que las necesita.
         romper_reglas()
-        respuesta, rechazo = registrar_resultado_con_cursor(cur, data, solo_gate)
+        respuesta, rechazo = registrar_resultado_con_cursor(cur, data)
         restaurar_reglas()
         # Tiene que salir el 503 diferido, sin respuesta.
         comprobar(f"{nombre}: repetición con las reglas rotas -> ConfiguracionIncompleta diferido, sin respuesta",
@@ -444,7 +473,7 @@ try:
                   len(logs) == 1 and logs[0].get("origen") == origen and contar(op) == (antes[0], antes[1], antes[2] + 1),
                   f"({logs}, {antes} -> {contar(op)})")
         # Con las reglas bien: repetición con el mismo fin que el registro.
-        respuesta, rechazo = registrar_resultado_con_cursor(cur, data, solo_gate)
+        respuesta, rechazo = registrar_resultado_con_cursor(cur, data)
         comprobar(f"{nombre}: con las reglas bien, repetición (creado False) con el mismo fecha_fin_visita",
                   rechazo is None and respuesta is not None and respuesta.creado is False and primera is not None
                   and respuesta.fecha_fin_visita == primera.fecha_fin_visita == fin_esperado(primera.fecha_visita),
@@ -477,6 +506,138 @@ comprobar("nombres de reglas restaurados en memoria",
 # Se cierra la transacción de lectura y la conexión.
 cn.rollback()
 cn.close()
+
+# ======================================================================
+print("\nS8. Con commit REAL: U9 y U10 (bloque 5, 2026-10-22)")
+# ======================================================================
+# Lo que solo vigilaba check_gate_decisions_service, retirado con el alias:
+#   U9  el 503 de las reglas de visita por registrar_resultado, con SU
+#       commit: el log SE CONSERVA y la oportunidad no cambia.
+#   U10 un descarte NUEVO con las reglas igual de rotas SÍ se registra y
+#       no deja ningún log de configuración (descartar no las lee).
+# Aquí no vale el ROLLBACK de arriba: lo que se prueba es justo el commit.
+# Por eso, datos propios con su marca, creados por los servicios y borrados
+# al empezar (restos de una ejecución cortada) y al terminar.
+PATRON_U = "check-resultado-svc-u-%@example.com"
+# Una conexión normal, solo para mirar y limpiar (no se pasa al código).
+cn_u = psycopg2.connect(DATABASE_URL)
+cur_u = cn_u.cursor()
+
+
+def limpiar_u():
+    """Borra SOLO lo de la marca PATRON_U, de lo que apunta a lo apuntado."""
+    # Las oportunidades propias, como subconsulta.
+    ops = ("SELECT o.id FROM oportunidades o JOIN leads l ON l.id = o.lead_id "
+           "JOIN clientes c ON c.id = l.cliente_id WHERE c.email LIKE %(p)s")
+    # Un DELETE por tabla, en el orden de las claves foráneas.
+    for sql in (f"DELETE FROM logs WHERE entity_type = 'oportunidad' AND entity_id IN ({ops});",
+                f"DELETE FROM decisiones_gate WHERE oportunidad_id IN ({ops});",
+                f"DELETE FROM visitas WHERE oportunidad_id IN ({ops});",
+                f"DELETE FROM presupuestos WHERE oportunidad_id IN ({ops});",
+                f"DELETE FROM oportunidades WHERE id IN ({ops});",
+                "DELETE FROM leads WHERE cliente_id IN (SELECT id FROM clientes WHERE email LIKE %(p)s);",
+                "DELETE FROM clientes WHERE email LIKE %(p)s;"):
+        # SQL: el DELETE de esa tabla, solo con la marca.
+        cur_u.execute(sql, {"p": PATRON_U})
+    # Un solo commit para los siete.
+    cn_u.commit()
+
+
+def leer_u(sql, params):
+    """Una fila de un SELECT por cn_u, y commit para ver lo último confirmado."""
+    # SQL: el que llega (textos fijos de este archivo).
+    cur_u.execute(sql, params)
+    fila = cur_u.fetchone()
+    # commit: cierra la transacción de lectura.
+    cn_u.commit()
+    return fila
+
+
+def gate_u():
+    """Un Gate propio por los servicios (como POST /leads y /calculate-estimate)."""
+    # Token único; sus 8 primeros caracteres van en el email (la marca).
+    token = str(uuid.uuid4())
+    alta = create_lead(LeadCreate(
+        nombre="Prueba svc U", email=f"check-resultado-svc-u-{token[:8]}@example.com", telefono="600000000",
+        tipo_reforma="bano", m2=Decimal("6"), nivel_acabados="medio", incluye_cambios_estructurales=True,
+        fotos=[], lead_token=token))
+    # Con cambios estructurales queda con Gate, en 'pendiente_aprobacion'.
+    calculate_estimate(alta.oportunidad_id)
+    return alta.oportunidad_id
+
+
+# La foto de U9/U10: resultados, visitas, logs de configuración, logs de
+# decisión, estado y contacto de una oportunidad.
+SQL_FOTO_U = ("SELECT (SELECT count(*) FROM decisiones_gate WHERE oportunidad_id = %(op)s), "
+              "(SELECT count(*) FROM visitas WHERE oportunidad_id = %(op)s), "
+              "(SELECT count(*) FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %(op)s "
+              "AND accion = 'visita_configuracion_incompleta'), "
+              "(SELECT count(*) FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %(op)s "
+              "AND accion = 'gate_decision_registrada'), "
+              "o.estado, o.fecha_ultimo_contacto FROM oportunidades o WHERE o.id = %(op)s;")
+
+# Restos de una ejecución cortada; después, el pool de los servicios.
+limpiar_u()
+db.init_pool()
+# try/finally: pase lo que pase, reglas restauradas, pool cerrado y limpieza.
+try:
+    # Dos Gates propios, ya confirmados por los servicios.
+    op_u9, op_u10 = gate_u(), gate_u()
+    # Las reglas rotas EN MEMORIA, como en S3 y S7 (la fila real no se toca).
+    romper_reglas()
+    # U9: visita_acordada por registrar_resultado (con su commit): 503.
+    try:
+        registrar_resultado(ResultadoLlamadaCreate(oportunidad_id=op_u9, resultado="visita_acordada",
+                                                   fecha=str(D_U9), hora="09:45", informe="prueba U9"))
+    # La esperada.
+    except ConfiguracionIncompleta as error:
+        comprobar("U9: registrar_resultado -> ConfiguracionIncompleta (503) y 'faltan' nombra la regla rota",
+                  error.motivo == "configuracion_incompleta"
+                  and any("regla_de_visita_que_no_existe" in f for f in error.faltan), f"({error.motivo} {error.faltan})")
+    # Otra excepción: FALLO, diciendo cuál.
+    except Exception as error:
+        comprobar("U9: registrar_resultado -> ConfiguracionIncompleta (503)", False,
+                  f"(salió {type(error).__name__}: {error})")
+    # Ninguna: FALLO explícito (regla de CLAUDE.md, caso D16).
+    else:
+        comprobar("U9: registrar_resultado -> ConfiguracionIncompleta (503)", False,
+                  "(la excepción se ha tragado: no salió nada)")
+    # Lo CONFIRMADO, leído por otra conexión: el log sí, y nada más.
+    foto = leer_u(SQL_FOTO_U, {"op": op_u9})
+    comprobar("U9: el log del 503 SE CONSERVA tras el commit (exactamente 1)", foto[2] == 1, f"({foto})")
+    # SQL: el detalle de ese log (origen y lista de problemas).
+    detalle = leer_u("SELECT detalle FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %s "
+                     "AND accion = 'visita_configuracion_incompleta' ORDER BY id LIMIT 1;", (op_u9,))
+    detalle = detalle[0] if detalle else {}
+    comprobar("U9: el log lleva origen 'resultados_llamada' y la regla rota en 'problemas'",
+              detalle.get("origen") == "resultados_llamada"
+              and any("regla_de_visita_que_no_existe" in p for p in detalle.get("problemas", [])), f"({detalle})")
+    comprobar("U9: ni resultado, ni visita, ni log de decisión; sigue en 'pendiente_aprobacion' y sin contacto",
+              foto[:2] == (0, 0) and foto[3] == 0 and foto[4] == "pendiente_aprobacion" and foto[5] is None, f"({foto})")
+    # U10: un descarte NUEVO con las reglas todavía rotas.
+    try:
+        r10 = registrar_resultado(ResultadoLlamadaCreate(oportunidad_id=op_u10, resultado="descartar",
+                                                         motivo="no_contesta", informe="prueba U10"))
+    # Cualquier excepción: no se registró (se enseña cuál).
+    except Exception as error:
+        r10 = None
+        print(f"  U10: salió {type(error).__name__}: {error}")
+    # Creado, y la oportunidad en 'perdida'.
+    comprobar("U10: descartar nuevo con las reglas rotas -> creado, 'perdida'",
+              r10 is not None and r10.creado is True and r10.estado_oportunidad == "perdida", f"({r10})")
+    # Lo confirmado: su fila y su log de decisión, ningún log de configuración.
+    foto = leer_u(SQL_FOTO_U, {"op": op_u10})
+    comprobar("U10: 1 resultado, 0 visitas, 0 logs de configuración y 1 log de decisión",
+              foto[:4] == (1, 0, 0, 1), f"({foto})")
+finally:
+    # Siempre: los nombres reales, el pool cerrado y lo propio borrado.
+    restaurar_reglas()
+    db.close_pool()
+    limpiar_u()
+    # SQL: los clientes con la marca que queden (tienen que ser 0).
+    restos = leer_u("SELECT count(*) FROM clientes WHERE email LIKE %s;", (PATRON_U,))[0]
+    comprobar("S8: no queda ningún dato propio (marca check-resultado-svc-u-)", restos == 0, f"({restos})")
+    cn_u.close()
 
 # Resumen y código de salida (1 si hubo fallos; lo mira la suite).
 total = ok + len(fallos)

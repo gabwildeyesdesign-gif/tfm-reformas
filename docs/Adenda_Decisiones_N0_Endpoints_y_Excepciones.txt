@@ -12,11 +12,11 @@ endpoints y revisión técnica final.
 |---|---|---|---|---|
 | 1 | POST /leads | nombre, email (se guarda entero en minúsculas), telefono (se normaliza; ver 5.1), tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales (m2: más de 0 y hasta 500, ver 5.1), fotos[] (opcional, máx. 5), lead_token (máx. 100 caracteres; clave de idempotencia, ver 5.1) | 201 (alta nueva) o 200 (repetición con el mismo lead_token): lead_id, cliente_id, oportunidad_id, status, creado (ver 5.1) | Webhook n8n, al confirmar el cliente los datos en el chat web (Agente 1) **[Nota 2026-10-20, rama feat/n0-resumen-solicitud]** Entrada: resumen_solicitud OPCIONAL (texto o null; solo el tipo da 422). Respuesta: también resumen_solicitud_estado (guardado | sin_resumen | descartado_longitud | descartado_email | descartado_telefono). El resumen NUNCA da 422 ni hace perder el lead (D36.8, opción b). Ver 5.12 |
 | 2 | POST /calculate-estimate | oportunidad_id | 200: presupuesto_id, oportunidad_id, importe_min_con_iva, importe_max_con_iva, motivo_gate, requiere_aprobacion, status, creado (ver 5.2 y 1.2) | Producción: MCP tool desde AI Agent. Testing/admin: invocación directa del endpoint, fuera del flujo n8n |
-| 3 | POST /gate-decisions | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) **[Nota 2026-10-11, rama feat/n0-resultado-llamadas]** Desde el Bloque B1 es el ALIAS, con este mismo contrato y solo para casos con Gate, de POST /resultados-llamada (fila 10, 5.10): la misma función del servicio. Se quitará cuando el formulario de n8n use la ruta nueva (D26.6). Ver la nota de 5.5  **[Nota 2026-10-12, rama feat/n0-agente2]** El alias gana el 409 hueco_ocupado con huecos_libres (D31, P17): ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
+| 3 | POST /gate-decisions — **QUITADO el 2026-10-22 (bloque 5)**: responde 404. Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión anterior en aba39c4. Hoy, POST /resultados-llamada (fila 10). Ver 5.5. Lo que sigue es el contrato que tenía | oportunidad_id (entero > 0), decision ('visita_acordada' o 'descartar'), fecha (YYYY-MM-DD) y hora (HH:MM, inicio, hora de Madrid) solo con visita_acordada, motivo ('precio', 'plazo', 'no_contesta', 'proyecto_no_viable' u 'otro') solo con descartar, informe (1 a 2000 caracteres tras recortar, siempre). Cabecera X-Gate-Secret (ver 5.5) | 201 (decisión nueva) o 200 (repetición exacta): decision_id, oportunidad_id, decision, motivo, estado_oportunidad, visita_id, fecha_propuesta (con su desfase de Madrid), creado. NUNCA importes (ver 5.5) | **[Reescrito 2026-10-01, D19]** Formulario de n8n que rellena administración DESPUÉS de llamar al cliente (no un LLM). Solo REST. Antes decía: input presupuesto_id, decision, operador_id; output presupuesto_id, nuevo_status; trigger, botones inline de Telegram que reanudaban un nodo Wait (ver 3) **[Nota 2026-10-11, rama feat/n0-resultado-llamadas]** Desde el Bloque B1 es el ALIAS, con este mismo contrato y solo para casos con Gate, de POST /resultados-llamada (fila 10, 5.10): la misma función del servicio. Se quitará cuando el formulario de n8n use la ruta nueva (D26.6). Ver la nota de 5.5  **[Nota 2026-10-12, rama feat/n0-agente2]** El alias gana el 409 hueco_ocupado con huecos_libres (D31, P17): ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
 | 4 | POST /visits | lead_token (1 a 100 caracteres; lo añade n8n, es el sessionId del chat), fecha (YYYY-MM-DD), hora (HH:MM, inicio, hora de Madrid), texto_cliente (1 a 1000 caracteres). NUNCA oportunidad_id (extra=forbid, ver 1.1a) | 201 (solicitud nueva o sustitución) o 200 (repetición con la misma fecha): visita_id, estado, fecha_propuesta (con su desfase de Madrid), sustituye_a, creado. NUNCA importes (ver 5.4) | **[Actualizado 2026-09-26]** Herramienta HTTP del Agente 2 en n8n, con confirmación explícita del cliente (D18). Registra una SOLICITUD, no una reserva: administración llama para confirmar. Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** texto_cliente baja a 1..300 caracteres y da 422 si tiene forma de email o de teléfono (D26.7); 409 hueco_ocupado con huecos_libres si la visita se solapa con otra activa (D31). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
 | 5 | POST /create-followup-task | oportunidad_id, motivo | log_id, status | **[Actualizado por D13, 2026-09-20]** Producción N0: Schedule Trigger periódico de n8n (no un temporizador por lead) que consulta `oportunidades` con `estado='presupuesto_enviado' AND fecha_ultimo_contacto IS NULL` y más de 48h desde la creación, y llama a este endpoint por cada fila que cumple la condición. No pasa por MCP. MCP tool disponible para N1+, no ejercida en N0. Backend (columna `fecha_ultimo_contacto`, estado `seguimiento_pendiente`) implementado y verificado (17/17); el workflow de n8n en sí, no construido todavía. Ver `claude/Decisiones_D13_Seguimiento_48h_Barrido_Periodico.md`. **[Nota 2026-10-07]** La base del plazo es presupuestos.created_at (la pre-estimación), no la creación de la oportunidad; las 48 h viven en reglas_negocio.horas_seguimiento_presupuesto (migración paso11), no en el código. Las oportunidades que cumplen la condición las da GET /llamadas-del-dia (fila 8, apartado seguimientos_por_abrir); este endpoint sigue sin implementar (rama siguiente). **[Nota 2026-10-08, rama feat/n0-create-followup-task]** Implementado. Contrato real: entrada oportunidad_id (entero > 0) y motivo (solo 'sin_respuesta_visita' en N0, D25.13), cabecera X-Gate-Secret; salida log_id, oportunidad_id, motivo, estado_oportunidad (el "status" de esta fila, con el nombre de los endpoints recientes; P6 de su plan), fecha_apertura y creado; 201 (abre el seguimiento) o 200 (ya abierto, no escribe); 404, 409 con seis motivos, 422, 503 sin log. Trigger: WF3, por cada elemento de seguimientos_por_abrir de GET /llamadas-del-dia. Solo REST. Ver 5.8 |
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** Añade reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales} y plazo_orientativo (D18.7; null salvo baño o cocina con presupuesto, sin Gate y sin cambios); 503 configuracion_incompleta solo si hace falta un plazo y su regla falta. Sigue sin importes. Ver 5.11 |
-| 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) y el formulario de n8n de POST /gate-decisions. Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 |
+| 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) (hasta el 2026-10-22, también el formulario del alias POST /gate-decisions, quitado; ver 5.5). Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 |
 | 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura. **[Nota 2026-10-11, rama feat/n0-resumen-lista-diaria, D26.1]** Cada elemento lleva además el objeto "solicitud" {m2 (texto exacto o null), nivel_acabados, incluye_cambios_estructurales}, siempre presente, después de tipo_reforma; los de visita (d y e), además, texto_cliente de ESA visita. Siguen sin salir email e importes. Ver la nota del 2026-10-11 en 5.7 |
 | 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 |
 | 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
@@ -579,173 +579,82 @@ reglas_visita.fin_de_visita(), en UTC. Limitación: es la duración VIGENTE
 200 posterior trae el fin nuevo (columna de fin guardado: N1). Plan:
 docs/Plan_Fecha_Fin_Visita_D33.txt.)
 
-5.5 POST /gate-decisions (añadido el 2026-10-01, rama feat/n0-gate-decisions)
+5.5 POST /gate-decisions — QUITADO (añadido el 2026-10-01, rama
+feat/n0-gate-decisions; alias de POST /resultados-llamada desde el
+2026-10-11; quitado el 2026-10-22)
 
-(Nota 2026-10-11, rama feat/n0-resultado-llamadas, plan
-docs/Plan_Resultado_Llamadas.txt.) Desde el Bloque B1 esta ruta es el ALIAS
-de POST /resultados-llamada (5.10), D26.6 y P2 de aquel plan: conserva
-EXACTAMENTE este contrato (campos, motivos, mensajes y orden, lo que lee el
-formulario publicado) y solo admite casos con Gate, pero la operación es la
-MISMA función del servicio (registrar_resultado con solo_gate=True, a través
-de registrar_decision; app/services/resultados_llamada_service.py, antes
-gate_decisions_service.py). Cambios que SÍ se notan, todos aditivos: la fila
-lleva tipo_llamada 'gate' (columna de paso12) y el log
-gate_decision_registrada gana las claves tipo_llamada y estado. 'sin_decision'
-(D29.3) no existe por esta ruta (MotivoDescarte no cambia): 422.
-check_gate_decisions_http sigue dando 121/121 SIN tocar el script (git diff
-contra 9153532 vacío) en B1, B2 y C. La tabla decisiones_gate conserva su
-nombre (P3 = b), con un COMMENT ON TABLE. Se quitará en otra rama cuando el
-formulario ampliado use la ruta nueva (con ella cambian los cinco scripts que
-la usan para preparar datos).
+Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión
+anterior en aba39c4. El contrato completo de esta ruta (entrada, efectos, tabla de códigos, orden
+de las comprobaciones, idempotencia, concurrencia y su verificación 121/121
+y 14/14) está en esa versión de este archivo.
 
-Para qué: registra el resultado de la llamada de administración a un
-cliente cuyo presupuesto activó el Gate (flujo completo en la sección 3).
-Lo llama un formulario de n8n que rellena una persona, nunca un LLM; por
-eso, a diferencia de POST /visits, aquí SÍ se acepta un identificador
-(oportunidad_id). Solo REST, sin tool MCP. Plan completo y decisiones
-P1-P11: docs/Plan_Endpoint_Gate_Decisions.txt.
+Estado actual: la ruta NO existe. POST /gate-decisions responde 404
+{"detail": "Not Found"}, con X-Gate-Secret y sin ella (no 401: no hay
+ninguna puerta que comprobar), y GET también 404. Lo comprueba
+scripts/check_gate_decisions_http.py, que conserva su nombre por
+scripts/fechas_prueba.py. Motivo (D26.6): el formulario publicado
+(WF_formulario_llamadas) llama a POST /resultados-llamada desde el
+2026-10-21, y el formulario antiguo (WF_formulario_gate) está despublicado;
+su exportación saneada se conserva en n8n/ como registro histórico.
 
-Autenticación: un secreto PROPIO (P4). Cabecera X-Gate-Secret con el valor
-de GATE_SECRET. NO se acepta X-Webhook-Secret: esa credencial la tiene la
-herramienta HTTP del Agente 2, y D18 prohíbe que el agente decida su
-propio Gate. El valor de WEBHOOK_SECRET da 401 tanto en X-Webhook-Secret
-como en X-Gate-Secret (verificado). El 401 es idéntico al de /leads
-({"detail": "No autorizado"}, WWW-Authenticate: APIKey), va antes que la
-validación del cuerpo y compara en tiempo constante.
-Comprobaciones al ARRANCAR (app/api/security.py; el servidor no abre el
-puerto si falla alguna): GATE_SECRET no definido o solo espacios; GATE_SECRET
-igual a WEBHOOK_SECRET; GATE_SECRET igual a MCP_SECRET; y MCP_SECRET igual a
-WEBHOOK_SECRET (P10, la que faltaba). Los mensajes nombran las variables,
-nunca su valor (verificado: la salida del proceso no contiene ningún secreto).
+Cómo se registra hoy el resultado de una llamada de Gate: POST
+/resultados-llamada (5.10, fila 10), con "resultado" en lugar de "decision".
+El backend deduce el tipo 'gate' de una oportunidad en
+'pendiente_aprobacion'. Los efectos de un Gate son los de siempre (visita
+'confirmada' con el texto fijo de P2 o 'perdida', fecha_ultimo_contacto,
+log gate_decision_registrada con {decision_id, decision, motivo, visita_id,
+fecha_propuesta, tipo_llamada, estado}, sin el informe) y la tabla sigue
+siendo decisiones_gate. Lo que solo tenía el alias desaparece con él: el
+409 sin_gate (por la ruta nueva, un caso sin Gate es un seguimiento o no
+tiene llamada), el 409 decision_ya_registrada (hoy resultado_ya_registrado),
+el catálogo sin 'sin_decision' y el origen "gate_decisions" en los logs de
+configuración incompleta (hoy "resultados_llamada"; los logs anteriores
+conservan el suyo).
 
-Entrada (JSON, extra="forbid"):
-  oportunidad_id  entero > 0.
-  decision        'visita_acordada' | 'descartar'.
-  fecha, hora     obligatorias con visita_acordada, PROHIBIDAS con
-                  descartar. Mismos validadores de formato que POST /visits
-                  (compartidos en app/schemas/common.py).
-  motivo          'precio' | 'plazo' | 'no_contesta' | 'proyecto_no_viable'
-                  | 'otro'. Obligatorio con descartar, PROHIBIDO con
-                  visita_acordada.
-  informe         1 a 2000 caracteres contados DESPUÉS de quitar los
-                  espacios de los extremos; se guarda recortado. Siempre
-                  obligatorio (auditoría anual).
-Las combinaciones prohibidas dan 422 de formato (validador de modelo de
-Pydantic), antes de tocar la base de datos.
+Lo que SIGUE VIGENTE de esta sección, porque no era del alias sino de la
+llave de administración y del Gate:
+  - Autenticación: un secreto PROPIO (P4). Cabecera X-Gate-Secret con el
+    valor de GATE_SECRET; X-Webhook-Secret no abre esta puerta (la tiene la
+    herramienta HTTP del Agente 2, y D18 prohíbe que el agente decida su
+    propio Gate). El valor de WEBHOOK_SECRET da 401 en las dos cabeceras. El
+    401 es idéntico al de /leads ({"detail": "No autorizado"},
+    WWW-Authenticate: APIKey), va antes que la validación del cuerpo y
+    compara en tiempo constante. La usan hoy POST /resultados-llamada, GET
+    /gate-avisos, GET /llamadas-del-dia, POST /create-followup-task, la
+    ficha y GET /huecos-libres.
+  - Comprobaciones al ARRANCAR (app/api/security.py; el servidor no abre el
+    puerto si falla alguna): GATE_SECRET no definido o solo espacios;
+    GATE_SECRET igual a WEBHOOK_SECRET; GATE_SECRET igual a MCP_SECRET; y
+    MCP_SECRET igual a WEBHOOK_SECRET (P10). Los mensajes nombran las
+    variables, nunca su valor. Las tres primeras las verifica
+    check_gate_decisions_http (CASO 0).
+  - LIMITACIONES del Gate (asumidas en N0; 5.10 las cita):
+      Gate permanente: requiere_aprobacion no vuelve a false tras la
+        decisión; un cliente con Gate, decidido o no, no puede pedir ni
+        cambiar la visita desde el chat (POST /visits da 409
+        presupuesto_con_gate, y GET /leads/session devuelve
+        'visita_agendada' o 'perdida' con requiere_aprobacion true).
+      Decisión definitiva (R2): un error de administración se corrige a
+        mano en la base de datos.
+      Operador no identificado: presupuestos.aprobado_por se queda NULL;
+        N1.
+      P11, recorte del informe en la base de datos: el CHECK
+        chk_decisiones_gate_informe usa btrim(informe), que solo quita el
+        ESPACIO; Python .strip() quita también tabuladores, saltos de línea
+        y el espacio duro. Por la API el informe llega siempre recortado;
+        escrito a mano, "texto\n" pasaría el CHECK. Aceptada como
+        limitación documentada (opción a, Gabi, 2026-09-28).
+      Festivos no detectados (heredado de /visits).
 
-Efectos, en UNA transacción:
-  visita_acordada: INSERT en visitas ('confirmada', fecha + hora de Madrid,
-    texto_cliente fijo "Visita acordada por teléfono por administración
-    tras la revisión del Gate.", P2); INSERT en decisiones_gate con esa
-    visita_id (la clave foránea doble (visita_id, oportunidad_id) garantiza
-    que es de la MISMA oportunidad); la oportunidad pasa a
-    'visita_agendada'.
-  descartar: INSERT en decisiones_gate con el motivo y visita_id NULL; la
-    oportunidad pasa a 'perdida'.
-  En los dos: fecha_ultimo_contacto = now() y updated_at = now() (P5), y un
-  log gate_decision_registrada con {decision_id, decision, motivo,
-  visita_id, fecha_propuesta}. El informe NO se copia al log (P9): vive
-  solo en decisiones_gate, y el log guarda decision_id para enlazarlo.
-  presupuestos NO se toca: requiere_aprobacion sigue true y aprobado_por
-  sigue NULL.
-
-Formato de los errores de negocio: igual que POST /visits,
-{"detail": {"motivo": "<código>", "mensaje": "<texto>"}}, y en el 503
-también "faltan". Las mismas dos formas de 422 (Pydantic: lista; negocio:
-objeto).
-
-| Código | motivo | Cuándo | Reintento en n8n |
-|---|---|---|---|
-| 201 | — | Decisión nueva registrada (creado=true) | — |
-| 200 | — | Repetición exacta de la decisión ya registrada (creado=false); no escribe nada | — |
-| 401 | — | Falta X-Gate-Secret o es incorrecto, INCLUIDO el valor de WEBHOOK_SECRET; antes de validar el cuerpo | NO |
-| 422 | (Pydantic) | Campo de más; decision o motivo fuera de lista; visita_acordada sin fecha, sin hora o con motivo; descartar sin motivo o con fecha/hora; informe vacío, solo espacios o de más de 2000; formato de fecha u hora (tampoco "10:00Z") | NO |
-| 404 | oportunidad_no_encontrada | No existe la oportunidad | NO |
-| 409 | sin_presupuesto | La oportunidad no tiene presupuesto | NO |
-| 409 | sin_gate | El presupuesto tiene requiere_aprobacion = false | NO |
-| 409 | decision_ya_registrada | Ya hay una decisión DISTINTA registrada (otra decisión, otra fecha u hora, u otro motivo) | NO |
-| 409 | estado_no_permitido | Sin decisión previa y estado distinto de 'pendiente_aprobacion' | NO |
-| 503 | configuracion_incompleta | Solo visita_acordada: falta o es incoherente una regla de visita; el log visita_configuracion_incompleta se conserva, con "origen": "gate_decisions" | Inútil, pero inofensivo |
-| 422 | fecha_pasada / fin_de_semana / fuera_de_franja | Solo visita_acordada: la fecha incumple una regla de POST /visits (las mismas franjas y duración) | NO |
-| 409 | visita_activa_existente | Solo visita_acordada: la oportunidad ya tiene una visita activa (P1) | NO |
-| 500 | — | Error no controlado (p. ej. Postgres caído) | SÍ, con backoff |
-
-Orden de las comprobaciones: 401 -> 422 de formato -> 404 (tras el FOR
-UPDATE) -> 409 sin_presupuesto -> 409 sin_gate -> ¿hay decisión
-registrada? (igual: 200; distinta: 409 decision_ya_registrada) -> 409
-estado_no_permitido -> solo visita_acordada: 503, 422 de fecha, 409
-visita_activa_existente -> escritura.
-  - La repetición va ANTES que el estado: tras la primera decisión el
-    estado ya no es 'pendiente_aprobacion', y un reintento legítimo de n8n
-    daría 409 en vez de 200. Verificado en negativo: con el estado
-    primero, check_gate_decisions_http da 112/121.
-  - sin_gate va antes que la decisión: una oportunidad sin Gate nunca
-    puede tener decisión, y el motivo útil es sin_gate.
-
-Idempotencia: la MISMA decisión repetida (visita_acordada con la misma
-fecha y hora; descartar con el mismo motivo, P3) devuelve 200 con el
-decision_id original y no escribe nada, tampoco fecha_ultimo_contacto. El
-informe de la repetición se ignora y se conserva el original. Cualquier
-otra decisión, con una ya registrada, da 409 decision_ya_registrada: la
-decisión se registra una vez por oportunidad (UNIQUE en
-decisiones_gate.oportunidad_id).
-
-NUNCA devuelve importes. Defensa doble, como en /visits y GET
-/leads/session: la consulta no los lee y GateDecisionResponse no tiene
-dónde ponerlos (verificado: la respuesta tiene exactamente sus 8 claves).
-
-Concurrencia: la consulta inicial bloquea la fila de la oportunidad (FOR
-UPDATE OF o), así que dos peticiones simultáneas se serializan y la segunda
-ve lo que escribió la primera. Segundas barreras: el UNIQUE de
-decisiones_gate.oportunidad_id y el índice parcial de visitas. Verificado:
-5 peticiones simultáneas con la misma decisión -> un 201 y cuatro 200, una
-sola decisión y una sola visita; 5 con decisiones distintas -> un 201 y
-cuatro 409 decision_ya_registrada. Sin el FOR UPDATE, las segundas
-barreras frenan el duplicado, pero con un 500 (UniqueViolation).
-
-Efecto sobre los demás endpoints: POST /visits sigue respondiendo 409
-presupuesto_con_gate a un lead con el Gate ya decidido (Gate permanente), y
-GET /leads/session devuelve 'visita_agendada' o 'perdida' con
-requiere_aprobacion true. El router de n8n usará ese estado (P6).
-
-LIMITACIONES (asumidas en N0):
-  - Gate permanente: requiere_aprobacion no vuelve a false tras la
-    decisión. Un cliente con Gate, decidido o no, no puede pedir ni
-    cambiar la visita desde el chat; la gestiona administración.
-  - Decisión definitiva (R2): un error de administración (por ejemplo,
-    descartar por equivocación) no se corrige por la API en N0; se
-    corrige a mano en la base de datos.
-  - Operador no identificado: N0 no sabe QUIÉN registra la decisión;
-    presupuestos.aprobado_por se queda NULL. Se resolverá en N1.
-  - P11, recorte del informe en la base de datos: el CHECK
-    chk_decisiones_gate_informe usa btrim(informe), que solo quita el
-    carácter ESPACIO; Python .strip() (Pydantic) quita también
-    tabuladores, saltos de línea y el espacio duro. Por el camino normal
-    (la API) el informe llega siempre bien recortado; escrito a mano en la
-    tabla, un informe como "texto\n" pasaría el CHECK. En el plan, P11
-    sigue marcada como PENDIENTE; lo aplicado en paso10 equivale a su
-    opción a) (dejarlo como está).
-    (Nota 2026-10-03: P11 está ya DECIDIDA en el plan: se acepta como
-    limitación documentada, opción a); Gabi, 2026-09-28, al aprobar
-    439ff02.)
-  - Festivos no detectados (heredado de /visits): solo se excluyen sábados
-    y domingos.
-
-Implementación: app/services/gate_decisions_service.py
-(registrar_decision), app/api/gate_decisions.py, app/schemas/gate_decisions.py,
-app/api/security.py (verificar_gate_secret y las comprobaciones de
-arranque), reglas compartidas en app/services/reglas_visita.py; migraciones
+Implementación que queda: app/schemas/gate_decisions.py solo con
+DecisionGate (lo usan GET /gate-avisos y la ficha); app/api/security.py
+(verificar_gate_secret y las comprobaciones de arranque); migraciones
 scripts/migraciones_ejecutadas/paso10_decisiones_gate.py y
-paso10b_coherencia_decisiones_gate.py. Verificación:
-scripts/check_migracion_decisiones_gate.py (38/38),
-scripts/check_gate_decisions_service.py (14/14) y
-scripts/check_gate_decisions_http.py (121/121), con ocho pruebas en
-negativo (detalle en el commit 36c6ec2).
-
-(Nota 2026-10-12, rama feat/n0-agente2: este alias gana el 409
-hueco_ocupado con huecos_libres, con la misma comprobación que /visits y
-/resultados-llamada (P17); el formulario publicado tiene que enseñarlo:
-docs/Contrato_Formulario_Llamadas.md. Ver 5.11.)
+paso10b_coherencia_decisiones_gate.py. Se quitaron app/api/gate_decisions.py,
+registrar_decision y el parámetro solo_gate del servicio, GateDecisionCreate,
+GateDecisionResponse, MotivoDescarte y scripts/check_gate_decisions_service.py
+(lo que vigilaba de la ruta nueva pasó a check_resultados_llamada_service,
+S8).
 
 5.6 GET /gate-avisos/{oportunidad_id} (añadido el 2026-10-03, rama
 feat/n0-aviso-gate)
@@ -1442,8 +1351,10 @@ Para qué: registra el resultado de CUALQUIER llamada de administración de la
 lista diaria (D25.9-D25.11, bloque 4b de D26.6): Gate, seguimiento de 48 h y
 confirmación de una visita pedida desde el chat. Lo llama el formulario de
 n8n que rellena administración después de la llamada, nunca un agente: solo
-REST, sin tool MCP. POST /gate-decisions es su alias con el contrato antiguo
-(5.5). Plan completo y decisiones P1-P16: docs/Plan_Resultado_Llamadas.txt.
+REST, sin tool MCP. Es la única ruta para registrar un resultado. Plan
+completo y decisiones P1-P16: docs/Plan_Resultado_Llamadas.txt.
+Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión
+anterior en aba39c4 (ver 5.5).
 Contrato para construir el formulario: docs/Contrato_Formulario_Llamadas.md.
 
 Autenticación: X-Gate-Secret (GATE_SECRET, la "llave de administración",
@@ -1573,8 +1484,7 @@ LIMITACIONES (asumidas en N0):
     de /gate-decisions). Tampoco se cambia una visita ya confirmada.
   - Operador no identificado (llave compartida), como 5.5.
   - Un caso con Gate con una visita 'solicitada' (solo posible a mano) se
-    trata por esta ruta como confirmación de visita; el alias conserva su
-    regla de siempre (C18 del plan).
+    trata como confirmación de visita (C18 del plan).
   - El DEFAULT 'gate' de tipo_llamada puede esconder un olvido del código
     hasta la contracción paso12b (P13, otra rama, después del merge).
   - 'no_contesta' en un descarte supone los 3 intentos de D24.3, que el
@@ -1582,10 +1492,10 @@ LIMITACIONES (asumidas en N0):
   - Festivos no detectados (como 5.4).
 
 Implementación: app/services/resultados_llamada_service.py
-(registrar_resultado, registrar_resultado_con_cursor y registrar_decision,
-la entrada del alias), app/services/tipo_llamada.py (deducir_tipo_llamada),
-app/schemas/resultados_llamada.py, app/api/resultados_llamada.py (con
-http_de_rechazo, compartida con el alias); noveno include_router en
+(registrar_resultado y registrar_resultado_con_cursor; registrar_decision,
+la entrada del alias, se quitó el 2026-10-22), app/services/tipo_llamada.py
+(deducir_tipo_llamada), app/schemas/resultados_llamada.py,
+app/api/resultados_llamada.py (con http_de_rechazo); noveno include_router en
 app/main.py; migración scripts/migraciones_ejecutadas/
 paso12_resultado_llamadas.py. Verificación: check_resultados_llamada_service
 (37/37), check_resultados_llamada_http (160/160, puerto 8028) y
@@ -1600,7 +1510,7 @@ revisada por D30: no se hace en el backend, sino en n8n; el documento de D30
 lo tiene el tutor en el Proyecto de claude.ai.)
 (Nota 2026-10-14, rama feat/n0-horario-visitas, D32: visita_acordada,
 confirmar_hora y otra_hora solo aceptan horas de la rejilla (422
-fuera_de_rejilla con horas_validas; también por el alias). El formulario
+fuera_de_rejilla con horas_validas; también por el alias, mientras existió). El formulario
 ofrece las horas con GET /huecos-libres (fila 11): página "Día" y página
 "Hora", recalculada al abrirla; el 409 hueco_ocupado queda como red de
 seguridad ante dos reservas a la vez. Ver 5.11 (e) y
@@ -1617,9 +1527,8 @@ de leer las reglas, así que una repetición CON visita las lee (una consulta,
 solo ahí) y, si faltan o no son válidas, da el mismo 503
 configuracion_incompleta con su log que el registro (como la repetición de
 /visits); sin visita, sigue dando 200 sin leerlas. P2: el ALIAS POST
-/gate-decisions añade la misma clave (9 en vez de 8; con fecha_propuesta
-como inicio): ya no conserva su contrato "de siempre" al pie de la letra,
-pero solo gana una clave, que el formulario publicado ignora. P3: la
+/gate-decisions añadía la misma clave (9 en vez de 8; con fecha_propuesta
+como inicio); el alias se quitó el 2026-10-22 (5.5). P3: la
 duración es la VIGENTE (ver la nota de 5.4). Plan:
 docs/Plan_Fecha_Fin_Visita_D33.txt.)
 

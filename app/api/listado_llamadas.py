@@ -20,7 +20,7 @@ import sys
 from fastapi import APIRouter, Depends, HTTPException
 
 # La dependencia que comprueba la cabecera X-Gate-Secret (la misma de POST
-# /gate-decisions y GET /gate-avisos). NO verificar_webhook_secret: esa
+# /resultados-llamada y GET /gate-avisos). NO verificar_webhook_secret: esa
 # llave la tiene el Agente 2 (pre-decisión 2).
 from app.api.security import verificar_gate_secret
 
@@ -73,7 +73,7 @@ def get_llamadas_del_dia() -> ListadoLlamadasResponse:
             f"[AVISO] GET /llamadas-del-dia: configuración incompleta en reglas_negocio: {error.faltan}",
             file=sys.stderr,
         )
-        # 503 con el mismo formato que /visits y /gate-decisions:
+        # 503 con el mismo formato que /visits y /resultados-llamada:
         # {"detail": {"motivo": ..., "mensaje": ..., "faltan": [...]}}.
         raise HTTPException(
             status_code=503,

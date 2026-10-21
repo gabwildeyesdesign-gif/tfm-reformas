@@ -3,11 +3,8 @@
 **Para quién:** Gabi, para ampliar el formulario de n8n (D25.10) sin leer el código.
 **Backend:** `POST /resultados-llamada` (Adenda 5.10) y la ficha `GET /oportunidades/{id}/ficha` (Adenda 5.9).
 **Origen:** P15 de `docs/Plan_Resultado_Llamadas.txt`; rama `feat/n0-resultado-llamadas` (2026-10-11/12).
-**Mientras tanto:** el formulario publicado sigue llamando a `POST /gate-decisions`, que es ahora un ALIAS con su
-contrato de siempre (solo casos con Gate). Cuando este formulario ampliado esté publicado, el alias se quita en otra
-rama (D26.6).
-(Nota 2026-10-14, D33, rama `feat/n0-fecha-fin-visita`: el alias responde además `fecha_fin_visita`, una clave más
-para WF5; el formulario publicado no la usa y no se rompe. Ver la sección 4.)
+**Estado:** el formulario publicado (`WF_formulario_llamadas`) llama a `POST /resultados-llamada`; es la única ruta.
+**Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión anterior en aba39c4.** `POST /gate-decisions` responde ahora 404 (D26.6).
 
 ---
 
@@ -80,7 +77,7 @@ Ningún otro campo: uno de más da 422.
 | `no_contesta` | No contesta (tras varios intentos, D24.3) | sí | **no** (quien cancela, contestó) |
 | `sin_decision` | Sigue sin decidirse en la última llamada (D29.3) | sí | **no** (quien cancela, ha decidido) |
 
-`sin_decision` solo existe en la ruta nueva: el formulario publicado (alias) no lo admite.
+`sin_decision` es un motivo más del catálogo (el alias, ya quitado, no lo admitía).
 
 ### Ejemplos
 
@@ -113,8 +110,7 @@ que tienen que empezar y terminar dentro de la franja, de lunes a viernes y en e
 
 Nunca lleva importes.
 
-(Nota 2026-10-14, D33.) El alias `POST /gate-decisions` lleva la misma clave `fecha_fin_visita` (con
-`fecha_propuesta` como inicio), y `POST /visits` también (la visita pedida desde el chat, que WF5 pone como
+(Nota 2026-10-14, D33.) `POST /visits` lleva también `fecha_fin_visita` (la visita pedida desde el chat, que WF5 pone como
 PENDIENTE). Limitación: el fin se calcula con la duración VIGENTE; si administración cambia
 `duracion_visita_min`, un 200 posterior trae el fin nuevo (la tabla `visitas` no guarda el fin).
 
@@ -167,8 +163,6 @@ hora más la duración (60 min). La visita pedida por el propio cliente no cuent
   (las de `huecos_libres`, o "ninguna: elige otro día" si está vacía), y volver a la página de la fecha con el
   mismo resultado. No se escribe nada: se puede volver a enviar con otra hora. No es un aviso técnico (WF4 no).
 - El mensaje nunca dice de quién es la otra visita ni a qué hora termina.
-- El ALIAS POST /gate-decisions (el formulario de hoy) responde exactamente igual, con el mismo cuerpo, en
-  `visita_acordada` (P17): el formulario publicado tiene que enseñarlo también.
 
 *(Nota 2026-10-14, D32: el ejemplo de arriba es de D31. Desde D32, `huecos_libres` ya no va cada 30 min: son las
 horas libres de la rejilla (con las reglas de hoy, 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15) que no chocan con

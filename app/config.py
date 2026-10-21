@@ -43,7 +43,9 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 # archivo que lo usa.
 MCP_SECRET = os.getenv("MCP_SECRET")
 
-# Secreto de la puerta del Gate (POST /gate-decisions), la que usa el
+# Secreto de la puerta de administración (POST /resultados-llamada y las
+# demás rutas de administración; nació con POST /gate-decisions, quitado
+# el 2026-10-22), la que usa el
 # formulario de n8n con el que administración registra el resultado de su
 # llamada al cliente. Lo envía en la cabecera X-Gate-Secret.
 #

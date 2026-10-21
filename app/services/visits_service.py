@@ -17,7 +17,7 @@ from psycopg2.extras import Json
 from app.db.connection import get_transactional_connection
 from app.schemas.visits import VisitaCreate, VisitaResponse
 
-# Reglas de fecha y de configuración COMPARTIDAS con POST /gate-decisions.
+# Reglas de fecha y de configuración COMPARTIDAS con POST /resultados-llamada.
 # Hasta el 2026-09-30 vivían en este archivo; se mudaron a reglas_visita.py
 # sin cambiar su lógica (plan de /gate-decisions, sección 2.3).
 from app.services.reglas_visita import (
@@ -62,7 +62,7 @@ ACCION_SUSTITUIDA = "visita_sustituida"
 # Excepciones: una clase por FAMILIA de rechazo
 # ======================================================================
 # VisitaRechazada es la base de los rechazos PROPIOS de /visits, y hereda
-# de RechazoNegocio (reglas_visita.py), la base común con /gate-decisions.
+# de RechazoNegocio (reglas_visita.py), la base común con /resultados-llamada.
 # Los rechazos COMPARTIDOS, FechaNoValida (422) y ConfiguracionIncompleta
 # (503), viven en reglas_visita.py. El adaptador (app/api/visits.py)
 # captura RechazoNegocio, que incluye a todos, y decide el código HTTP de
@@ -174,7 +174,7 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
         # visita desde el chat, aunque el agente se equivoque. OJO,
         # limitación asumida (P5): requiere_aprobacion no vuelve a false al
         # aprobarse el Gate, así que este bloqueo es permanente. Se revisa
-        # con POST /gate-decisions.
+        # con el registro del resultado (POST /resultados-llamada).
         if requiere_aprobacion:
             raise EstadoNoPermiteVisita(
                 "presupuesto_con_gate",

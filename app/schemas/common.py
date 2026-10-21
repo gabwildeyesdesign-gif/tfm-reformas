@@ -142,14 +142,14 @@ class EstadoOportunidad(str, Enum):
     CUALIFICADA = "cualificada"
     # Presupuesto con Gate, esperando la llamada de administración.
     PENDIENTE_APROBACION = "pendiente_aprobacion"
-    # Visita confirmada (por POST /gate-decisions con visita_acordada).
+    # Visita confirmada (por POST /resultados-llamada con visita_acordada).
     VISITA_AGENDADA = "visita_agendada"
     # Presupuesto sin Gate, ya comunicado al cliente.
     PRESUPUESTO_ENVIADO = "presupuesto_enviado"
     # Seguimiento de 48 h pendiente (D13; lo escribirá el barrido de WF3).
     SEGUIMIENTO_PENDIENTE = "seguimiento_pendiente"
     # Estados finales. 'ganada' se escribe a mano en N0; 'perdida', también
-    # por POST /gate-decisions con descartar.
+    # por POST /resultados-llamada con descartar o cliente_cancela.
     GANADA = "ganada"
     PERDIDA = "perdida"
 
@@ -172,7 +172,7 @@ class EstadoVisita(str, Enum):
 
     # Pedida por el cliente desde el chat (POST /visits).
     SOLICITADA = "solicitada"
-    # Acordada por teléfono con administración (POST /gate-decisions).
+    # Acordada por teléfono con administración (POST /resultados-llamada).
     CONFIRMADA = "confirmada"
     # Hecha. En N0 se escribe a mano.
     COMPLETADA = "completada"
@@ -270,7 +270,7 @@ MAX_TEXTO_VISITA = 300
 MAX_RESUMEN_SOLICITUD = 300
 
 # Longitud máxima de decisiones_gate.informe: lo que anota administración
-# tras la llamada al cliente en un caso de Gate (POST /gate-decisions). Es
+# tras la llamada al cliente en un caso de Gate (POST /resultados-llamada). Es
 # más largo que el texto de una visita porque es un resumen de una
 # conversación telefónica, y queda para la auditoría anual.
 #
@@ -283,10 +283,11 @@ MAX_INFORME_GATE = 2000
 # ======================================================================
 # Validadores de formato COMPARTIDOS (fecha, hora y texto)
 # ======================================================================
-# Los usan VisitaCreate (POST /visits) y GateDecisionCreate (POST
-# /gate-decisions), que deben aceptar EXACTAMENTE los mismos formatos. Se
-# mudaron aquí desde app/schemas/visits.py el 2026-09-30, sin cambiar ni
-# los patrones ni los mensajes de error.
+# Los usan VisitaCreate (POST /visits) y ResultadoLlamadaCreate (POST
+# /resultados-llamada; hasta el 2026-10-22, también GateDecisionCreate),
+# que deben aceptar EXACTAMENTE los mismos formatos. Se mudaron aquí desde
+# app/schemas/visits.py el 2026-09-30, sin cambiar ni los patrones ni los
+# mensajes de error.
 #
 # Por qué hacen falta (comprobado con ejecución real el 2026-09-26): sin
 # ellos, Pydantic acepta en una fecha "2026-10-01T00:00:00" y números

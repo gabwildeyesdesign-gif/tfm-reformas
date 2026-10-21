@@ -56,7 +56,7 @@ from app.services.condicion_seguimiento import (
 
 # ZONA_MADRID: para escribir las fechas en hora de Madrid.
 # ConfiguracionIncompleta: el rechazo de "falta una regla" (-> 503), el
-# mismo de /visits, /gate-decisions y el listado.
+# mismo de /visits, /resultados-llamada y el listado.
 # RechazoNegocio: la base común de los rechazos con motivo y mensaje.
 from app.services.reglas_visita import ZONA_MADRID, ConfiguracionIncompleta, RechazoNegocio
 
@@ -157,7 +157,7 @@ def abrir_seguimiento_con_cursor(cursor, data: FollowupTaskCreate) -> FollowupTa
     # ------------------------------------------------------------------
     # SQL: el id y el estado de la oportunidad, con FOR UPDATE: bloquea su
     # fila hasta el final de la transacción. POST /visits y POST
-    # /gate-decisions bloquean la MISMA fila, así que las tres operaciones
+    # /resultados-llamada bloquean la MISMA fila, así que las tres operaciones
     # sobre una oportunidad se ponen en fila (plan, 2.11). Sin JOIN: solo
     # se bloquea la oportunidad.
     cursor.execute(

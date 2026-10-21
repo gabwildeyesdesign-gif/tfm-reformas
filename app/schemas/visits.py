@@ -65,7 +65,8 @@ class VisitaCreate(BaseModel):
     # mode="before": se ejecutan ANTES de que Pydantic convierta el valor
     # al tipo del campo (date, time), sobre lo que llegó en el JSON.
     # La lógica vive en app/schemas/common.py (compartida con
-    # GateDecisionCreate desde el 2026-09-30); aquí solo se engancha cada
+    # ResultadoLlamadaCreate; desde el 2026-09-30 y hasta el 2026-10-22,
+    # también con GateDecisionCreate); aquí solo se engancha cada
     # comprobación a su campo. El motivo de cada una está explicado allí.
     # @classmethod es obligatorio para @field_validator en Pydantic 2: el
     # validador se ejecuta antes de que exista el objeto, así que recibe la

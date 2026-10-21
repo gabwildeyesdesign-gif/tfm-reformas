@@ -7,7 +7,7 @@ Verificación por HTTP REAL de GET /oportunidades/{oportunidad_id}/ficha
      uvicorn de n8n de Gabi). Si el 8026 está ocupado, se para sin tocar
      nada.
   2. Crea sus casos como lo hará n8n (POST /leads, /calculate-estimate,
-     /visits, /gate-decisions y /create-followup-task) y por SQL cuando no
+     /visits, /resultados-llamada y /create-followup-task) y por SQL cuando no
      hay otro camino (lead sin 'contacto', IVA 10/4/0, fechas fijas,
      cambio a mano, logs que no son cambio de estado, desempate por id).
   3. CASOS 1-14 del plan: llave, forma, 404, cada tipo de oportunidad (T1
@@ -100,7 +100,7 @@ from app.services.estimate_service import CIEN, redondear
 PUERTO = 8026
 BASE = f"http://127.0.0.1:{PUERTO}"
 # Las cabeceras: la de n8n (/leads, /calculate-estimate, /visits) y la del
-# Gate (la ficha, /gate-avisos, /gate-decisions, /create-followup-task).
+# Gate (la ficha, /gate-avisos, /resultados-llamada, /create-followup-task).
 AUTH_WEBHOOK = {"X-Webhook-Secret": WEBHOOK_SECRET}
 AUTH_GATE = {"X-Gate-Secret": GATE_SECRET}
 # Patrón LIKE de los clientes de ESTE script.
@@ -359,9 +359,10 @@ def caso(etiqueta, estructural=False, m2=6, fotos=None):
 
 
 def decidir(op, cuerpo):
-    """POST /gate-decisions con la llave del Gate; tiene que dar 201."""
-    # "**cuerpo" añade al JSON los campos recibidos (decision, informe...).
-    r = requests.post(f"{BASE}/gate-decisions", headers=AUTH_GATE, json={"oportunidad_id": op, **cuerpo}, timeout=30)
+    """POST /resultados-llamada con la llave del Gate; tiene que dar 201.
+    (Cambio 2026-10-22: alias POST /gate-decisions quitado, bloque 5.)"""
+    # "**cuerpo" añade al JSON los campos recibidos (resultado, informe...).
+    r = requests.post(f"{BASE}/resultados-llamada", headers=AUTH_GATE, json={"oportunidad_id": op, **cuerpo}, timeout=30)
     # 201: la decisión se registró.
     assert r.status_code == 201, r.text
     return r.json()
@@ -506,11 +507,11 @@ try:
         # Informe único de esta ejecución: tiene que salir EXACTO en la ficha.
         INFORME_T4 = f"INFORME-T4-{uuid.uuid4().hex}"
         # Visita acordada el jueves a las 08:30 (crea una visita 'confirmada').
-        decidir(OP_T4, {"decision": "visita_acordada", "fecha": JUEVES.isoformat(), "hora": "08:30", "informe": INFORME_T4})
+        decidir(OP_T4, {"resultado": "visita_acordada", "fecha": JUEVES.isoformat(), "hora": "08:30", "informe": INFORME_T4})
         # T4b: otro caso con Gate, descartado por precio, con su informe.
         OP_T4B = caso("T4b", estructural=True)[0]
         INFORME_T4B = f"INFORME-T4B-{uuid.uuid4().hex}"
-        decidir(OP_T4B, {"decision": "descartar", "motivo": "precio", "informe": INFORME_T4B})
+        decidir(OP_T4B, {"resultado": "descartar", "motivo": "precio", "informe": INFORME_T4B})
         # T5: seguimiento abierto. El presupuesto PROPIO se mueve a hace 49 h
         # para cumplir el plazo de 48 h, y se llama a POST /create-followup-task.
         OP_T5 = caso("T5")[0]

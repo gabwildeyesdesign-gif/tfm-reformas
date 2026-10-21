@@ -1,51 +1,40 @@
 """
-Verificación por HTTP REAL de POST /gate-decisions (plan:
-docs/Plan_Endpoint_Gate_Decisions.txt, sección 4.1, y encargo del Bloque D).
+Verificación por HTTP REAL de la llave de administración (GATE_SECRET) y de
+que el alias POST /gate-decisions ya NO existe.
 
-Qué hace, en pocas palabras:
-  1. Comprueba que el servidor se NIEGA a arrancar con un GATE_SECRET vacío
-     o repetido (en procesos hijos, en el puerto 8020, que nunca llega a
-     abrirse).
-  2. Levanta el servidor de verdad (uvicorn.Server en un hilo de este
-     proceso, SIN --reload, en el puerto 8019: nunca el 8000, que es el
-     uvicorn de n8n de Gabi).
-  3. Crea sus propios leads con POST /leads y sus presupuestos con POST
-     /calculate-estimate, como lo hará n8n. Los que llevan cambios
-     estructurales quedan con Gate ('pendiente_aprobacion').
-  4. Prueba el contrato entero de POST /gate-decisions: autenticación,
-     forma, estado, fecha, efectos, repeticiones, decisión ya registrada,
-     concurrencia y regresión cruzada con /visits y /leads/session.
-  5. Borra SOLO lo suyo y comprueba que no ha tocado nada ajeno.
-  (D33, 2026-10-14, plan docs/Plan_Fecha_Fin_Visita_D33.txt, P2: la respuesta
-  tiene una clave más, fecha_fin_visita = fecha_propuesta + la duración leída
-  aquí de reglas_negocio, con el mismo texto y desfase; null al descartar. Se
-  comprueba en cada 201 y en las dos repeticiones.)
+Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión
+anterior de este script en aba39c4. Antes probaba el contrato entero del
+alias (plan: docs/Plan_Endpoint_Gate_Decisions.txt, sección 4.1). Desde hoy
+solo prueba:
+  CASO 0  el servidor se NIEGA a arrancar con un GATE_SECRET vacío o
+          repetido (en procesos hijos, en el puerto 8020, que nunca llega a
+          abrirse). Es la llave de TODAS las rutas de administración, no del
+          alias, y no la prueba ningún otro script (H-0-6): se conserva
+          intacto.
+  CASO 1  el alias ya no existe: POST /gate-decisions responde 404 EXACTO,
+          con la llave y sin ella (no 401: la ruta no existe, así que no
+          hay ninguna puerta que comprobar), y GET también 404 (un 405
+          diría que queda otra ruta con ese camino).
+  CASO 2  la ruta que lo sustituye, POST /resultados-llamada, sigue cerrada
+          sin llave: 401 con el cuerpo y la cabecera de siempre.
+Lo que el alias vigilaba de la ruta nueva está ahora en
+check_resultados_llamada_http (CASO 13c) y check_resultados_llamada_service
+(S8).
 
-Marca propia de los datos: emails http-gate-<8 caracteres>@example.com
-(dominio reservado), con tokens uuid4 nuevos en cada ejecución.
+Por qué conserva el nombre: scripts/fechas_prueba.py da a cada script su
+bloque de semanas por su POSICIÓN en una lista; quitarlo movería las fechas
+de los siete scripts que van detrás. Este script ya no crea visitas.
 
-"NO TOCA NADA AJENO": al empezar se cuentan, en cada tabla, las filas que
-NO son de los clientes de prueba y que ya existían (id <= id_base). Al
-terminar se vuelven a contar con el mismo id_base: si el script hubiera
-borrado algo ajeno, el recuento bajaría -> FALLO. Lo que escriba otro
-proceso durante la prueba tiene id > id_base y se enseña solo como
-información.
-
-Limpieza (solo lo propio, en el orden de las claves foráneas): logs ->
-decisiones_gate -> visitas -> presupuestos -> oportunidades -> leads ->
-clientes. Si alguna petición a /gate-decisions respondió 500 (solo debe
-pasar en la prueba en negativo sin FOR UPDATE), sus logs del manejador
-global no llevan marca propia: se borran por id exacto, y solo si son
-exactamente los esperados (regla de CLAUDE.md).
-
-El valor de los secretos NUNCA se imprime: solo se usan en las cabeceras.
+Las 4 preguntas: (1) no escribe en ninguna tabla (un 404 de una ruta que no
+existe y un 401 no dejan log); (2) no pasa ninguna conexión al código;
+(3) si se corta, no deja nada; (4) puertos 8019 y 8020, nunca el 8000; ningún
+dato real. El valor de los secretos NUNCA se imprime: solo se usan en las
+cabeceras y en el entorno de los procesos hijos.
 """
 
 # ----------------------------------------------------------------------
 # Imports: piezas de otras bibliotecas que este script necesita
 # ----------------------------------------------------------------------
-# json: para convertir el detalle de un log a texto y buscar dentro.
-import json
 # os: para copiar las variables de entorno al lanzar procesos hijos.
 import os
 # socket: para comprobar, antes de nada, que nadie escucha en nuestros puertos.
@@ -58,17 +47,8 @@ import sys
 import threading
 # time: para medir tiempos y esperar a que el servidor arranque.
 import time
-# uuid: para generar tokens únicos en cada ejecución.
-import uuid
-# ThreadPoolExecutor: lanza varias peticiones a la vez (concurrencia).
-from concurrent.futures import ThreadPoolExecutor
-# date/datetime/time/timedelta: fechas y horas. "time" se renombra a
-# hora_del_dia para no chocar con el módulo time de arriba.
-from datetime import datetime, time as hora_del_dia, timedelta, timezone
 # Path: rutas de archivos independientes del sistema operativo.
 from pathlib import Path
-# ZoneInfo: la zona horaria oficial Europe/Madrid (con cambio de hora).
-from zoneinfo import ZoneInfo
 
 # La raíz del repositorio es la carpeta padre de scripts/. Se añade al
 # principio de sys.path para que "import app..." encuentre el paquete app.
@@ -78,8 +58,6 @@ sys.path.insert(0, str(RAIZ_REPO))
 # La consola de Windows no usa UTF-8 por defecto; así las tildes salen bien.
 sys.stdout.reconfigure(encoding="utf-8")
 
-# psycopg2: para leer y limpiar la base de datos directamente.
-import psycopg2
 # requests: para hacer peticiones HTTP reales al servidor.
 import requests
 # uvicorn: el servidor que ejecuta la aplicación FastAPI.
@@ -87,54 +65,31 @@ import uvicorn
 
 # Los valores del .env (app.config los carga). Se usan solo en cabeceras y
 # en el entorno de los procesos hijos; nunca se imprimen.
-from app.config import DATABASE_URL, GATE_SECRET, MCP_SECRET, WEBHOOK_SECRET
-
-# B5-0 (P21): las fechas propias de este script, en scripts/fechas_prueba.py.
-import fechas_prueba
+from app.config import GATE_SECRET, MCP_SECRET, WEBHOOK_SECRET
 
 # ----------------------------------------------------------------------
 # Constantes de la prueba
 # ----------------------------------------------------------------------
-# Puerto del servidor de prueba (plan, 4.1). Nunca el 8000.
+# Puerto del servidor de prueba (el de siempre de este script). Nunca el 8000.
 PUERTO = 8019
 # Puerto para las pruebas de arranque: el servidor NO debe llegar a abrirlo.
 PUERTO_ARRANQUE = 8020
 # Dirección base de todas las peticiones.
 BASE = f"http://127.0.0.1:{PUERTO}"
-# Cabecera de n8n para /leads, /calculate-estimate, /visits y /leads/session.
-AUTH_WEBHOOK = {"X-Webhook-Secret": WEBHOOK_SECRET}
-# Cabecera del formulario de administración para /gate-decisions.
+# La llave de administración (la del formulario de n8n).
 AUTH_GATE = {"X-Gate-Secret": GATE_SECRET}
-# Patrón SQL (LIKE) que identifica a los clientes de ESTE script.
-PATRON_EMAIL = "http-gate-%@example.com"
-# Zona horaria de las visitas.
-MADRID = ZoneInfo("Europe/Madrid")
-# Texto fijo de la visita acordada (decisión P2), copiado del PLAN y no del
-# código, para que la prueba no dependa de lo que se está probando.
-TEXTO_P2 = "Visita acordada por teléfono por administración tras la revisión del Gate."
-# Las claves EXACTAS de la respuesta (plan, 1.5). Si apareciera una de más
-# (por ejemplo un importe), la comparación fallaría.
-CLAVES_RESPUESTA = {
-    # Las 8 claves, separadas por comas; un set ({...}) no tiene orden ni repetidos.
-    "decision_id", "oportunidad_id", "decision", "motivo",
-    "estado_oportunidad", "visita_id", "fecha_propuesta", "creado",
-    # D33 (P2): la novena, el fin de la visita.
-    "fecha_fin_visita",
-}
+# El 404 de FastAPI para una ruta que no existe, copiado de su documentación
+# de errores (no del código probado).
+CUERPO_404 = {"detail": "Not Found"}
+# Un cuerpo con la forma del contrato ANTIGUO del alias: si la ruta siguiera
+# viva, con la llave buena registraría un descarte (o daría 404 de negocio).
+CUERPO_ALIAS = {"oportunidad_id": 2147483647, "decision": "descartar", "motivo": "precio", "informe": "x"}
 
-# ----------------------------------------------------------------------
-# Contadores y registros globales
-# ----------------------------------------------------------------------
-# Número de comprobaciones correctas.
+# Número de comprobaciones correctas y lista de las que fallan.
 ok = 0
-# Lista de textos de las comprobaciones que han fallado.
 fallos = []
-# Todos los cuerpos JSON recibidos de /gate-decisions (para buscar importes).
-cuerpos_gate = []
-# (código, creado, descripción) de cada 200/201 de /gate-decisions.
-pares_exito = []
-# Código HTTP de CADA respuesta de /gate-decisions (para contar los 500).
-codigos_gate = []
+# Código HTTP de cada respuesta (para "ningún 500").
+codigos = []
 
 
 # comprobar: se define una vez y se usa en todas las comprobaciones.
@@ -144,497 +99,34 @@ def comprobar(titulo, condicion, detalle=""):
     global ok
     # Si la condición es verdadera, la comprobación pasa:
     if condicion:
-        # se suma 1 al contador de correctas...
+        # se suma 1 al contador de correctas y se imprime [OK].
         ok += 1
-        # ...y se imprime [OK] con el título y el detalle.
         print(f"    [OK]    {titulo}  {detalle}")
     # Si no (else), la comprobación falla:
     else:
-        # se guarda el texto del fallo para el resumen final...
+        # se guarda el texto del fallo para el resumen final y se imprime [FALLO].
         fallos.append(f"{titulo} {detalle}")
-        # ...y se imprime [FALLO].
         print(f"    [FALLO] {titulo}  {detalle}")
 
 
-# ----------------------------------------------------------------------
-# Conexión propia a la base de datos (para mirar y para limpiar)
-# ----------------------------------------------------------------------
-# Una conexión directa, aparte del pool del servidor.
-cn = psycopg2.connect(DATABASE_URL)
-# El cursor es el objeto con el que se envían las consultas.
-cur = cn.cursor()
-
-
-# consultar: atajo para las lecturas de una sola fila.
-def consultar(sql, params=()):
-    """SELECT de una sola fila. El commit cierra la transacción de lectura,
-    para que la siguiente consulta vea lo último que haya escrito el servidor."""
-    # Se envía la consulta; params rellena los %s de forma segura (sin pegar texto en el SQL).
-    cur.execute(sql, params)
-    # fetchone(): la primera fila, como tupla (o None si no hay ninguna).
-    fila = cur.fetchone()
-    # commit: cierra la transacción de lectura.
-    cn.commit()
-    # Se devuelve la fila a quien llamó.
-    return fila
-
-
-# ejecutar: atajo para las escrituras sobre filas propias.
-def ejecutar(sql, params=()):
-    """Escritura directa (SOLO sobre filas propias) y commit."""
-    # Se envía la orden...
-    cur.execute(sql, params)
-    # ...y se confirma (commit), para que el servidor la vea.
-    cn.commit()
-
-
-# ----------------------------------------------------------------------
-# Qué es "propio": todo lo que cuelga de los clientes de prueba
-# ----------------------------------------------------------------------
-# Subconsultas encadenadas: clientes propios -> sus leads -> sus
-# oportunidades. %(patron)s se rellena con PATRON_EMAIL.
-SQL_CLIENTES = "SELECT id FROM clientes WHERE email LIKE %(patron)s"
-# Los leads de esos clientes.
-SQL_LEADS = f"SELECT id FROM leads WHERE cliente_id IN ({SQL_CLIENTES})"
-# Las oportunidades de esos leads.
-SQL_OPORTUNIDADES = f"SELECT id FROM oportunidades WHERE lead_id IN ({SQL_LEADS})"
-
-# Para cada tabla, la condición que identifica sus filas PROPIAS.
-PROPIO = {
-    # Clientes, leads y oportunidades: su id está en la subconsulta correspondiente.
-    "clientes": f"id IN ({SQL_CLIENTES})",
-    "leads": f"id IN ({SQL_LEADS})",
-    "oportunidades": f"id IN ({SQL_OPORTUNIDADES})",
-    # Presupuestos, visitas y decisiones: cuelgan de una oportunidad propia.
-    "presupuestos": f"oportunidad_id IN ({SQL_OPORTUNIDADES})",
-    "visitas": f"oportunidad_id IN ({SQL_OPORTUNIDADES})",
-    "decisiones_gate": f"oportunidad_id IN ({SQL_OPORTUNIDADES})",
-    # Logs: los de entidad 'oportunidad' cuyo entity_id es una oportunidad propia.
-    "logs": f"entity_type = 'oportunidad' AND entity_id IN ({SQL_OPORTUNIDADES})",
-}
-# Orden de borrado: primero lo que apunta a otras tablas. decisiones_gate
-# va antes que visitas porque su clave foránea doble apunta a visitas.
-ORDEN_BORRADO = ["logs", "decisiones_gate", "visitas", "presupuestos", "oportunidades", "leads", "clientes"]
-
-
-# limpiar: se llama al empezar (restos de una ejecución cortada) y al terminar.
-def limpiar():
-    """Borra SOLO las filas propias, en el orden de las claves foráneas, en
-    una sola transacción (el commit del final)."""
-    # Se recorren las tablas en el orden de borrado...
-    for tabla in ORDEN_BORRADO:
-        # ...y en cada una se borran sus filas propias (la condición de PROPIO).
-        cur.execute(f"DELETE FROM {tabla} WHERE {PROPIO[tabla]};", {"patron": PATRON_EMAIL})
-    # Un solo commit para todos los borrados.
-    cn.commit()
-
-
-# foto_ajena: se llama una vez, al empezar.
-def foto_ajena():
-    """
-    Para cada tabla: (id_base, filas ajenas con id <= id_base). id_base es
-    el id más alto en este momento; lo que se cree después tendrá id mayor.
-    """
-    # Diccionario vacío: tabla -> (id_base, ajenas).
-    foto = {}
-    # Para cada tabla:
-    for tabla in ORDEN_BORRADO:
-        # COALESCE(max(id), 0): si la tabla estuviera vacía, max da NULL y
-        # se usa 0.
-        cur.execute(f"SELECT COALESCE(max(id), 0) FROM {tabla};")
-        # El id más alto (fetchone()[0]: el único valor de la única fila).
-        id_base = cur.fetchone()[0]
-        # Cuántas filas NO propias hay con id <= id_base.
-        cur.execute(
-            f"SELECT count(*) FROM {tabla} WHERE id <= %(base)s AND NOT ({PROPIO[tabla]});",
-            {"patron": PATRON_EMAIL, "base": id_base},
-        )
-        # Se guarda el par en el diccionario.
-        foto[tabla] = (id_base, cur.fetchone()[0])
-    # commit: cierra la transacción de lectura.
-    cn.commit()
-    # Se devuelve la foto entera.
-    return foto
-
-
-# recontar_ajeno: se llama al final, después de la limpieza.
-def recontar_ajeno(foto):
-    """Vuelve a contar lo ajeno con los MISMOS id_base, y lo ajeno nuevo."""
-    # Diccionario: tabla -> (antiguas, nuevas).
-    resultado = {}
-    # Cada tabla con su id_base de la foto ('_' recoge el recuento antiguo, que aquí no hace falta).
-    for tabla, (id_base, _) in foto.items():
-        # Los valores para rellenar %(patron)s y %(base)s.
-        params = {"patron": PATRON_EMAIL, "base": id_base}
-        # Ajenas ANTIGUAS (id <= id_base): deben ser las mismas que al empezar.
-        cur.execute(f"SELECT count(*) FROM {tabla} WHERE id <= %(base)s AND NOT ({PROPIO[tabla]});", params)
-        antiguas = cur.fetchone()[0]
-        # Ajenas NUEVAS (id > id_base): las escribió otro proceso; solo se informa.
-        cur.execute(f"SELECT count(*) FROM {tabla} WHERE id > %(base)s AND NOT ({PROPIO[tabla]});", params)
-        nuevas = cur.fetchone()[0]
-        # Se guardan los dos recuentos.
-        resultado[tabla] = (antiguas, nuevas)
-    # commit: cierra la transacción de lectura.
-    cn.commit()
-    # Se devuelve el diccionario.
-    return resultado
-
-
-# ----------------------------------------------------------------------
-# Ayudas HTTP
-# ----------------------------------------------------------------------
-def cuerpo(r):
-    """JSON de la respuesta, o {} si no es JSON (así un fallo no revienta el script)."""
-    # try: si la respuesta no es JSON, r.json() lanza ValueError...
-    try:
-        return r.json()
-    # ...y entonces se devuelve un diccionario vacío.
-    except ValueError:
-        return {}
-
-
-# motivo: lo usan todas las comprobaciones de rechazos de negocio.
-def motivo(r):
-    """El motivo de un rechazo de negocio: {"detail": {"motivo": ...}}."""
-    # .get("detail"): el valor de esa clave, o None si no está.
-    detalle = cuerpo(r).get("detail")
-    # isinstance: el 422 de Pydantic trae una LISTA en detail, no un objeto.
-    return detalle.get("motivo") if isinstance(detalle, dict) else None
-
-
-# lead_http: el primer paso para preparar cualquier caso.
-def lead_http(estructural):
-    """Crea un lead por POST /leads. Devuelve (lead_token, oportunidad_id).
-    estructural=True es lo que activa el Gate al calcular."""
-    # Token único de esta ejecución; sus 8 primeros caracteres van en el email (la marca propia).
-    token = str(uuid.uuid4())
-    # Petición real a POST /leads, con la cabecera de n8n y los datos del lead.
-    r = requests.post(
-        f"{BASE}/leads",
-        headers=AUTH_WEBHOOK,
-        json={
-            "nombre": "Prueba Gate",
-            "email": f"http-gate-{token[:8]}@example.com",
-            "telefono": "600000000",
-            "tipo_reforma": "bano",
-            "m2": 6,
-            "nivel_acabados": "medio",
-            "incluye_cambios_estructurales": estructural,
-            "lead_token": token,
-        },
-        timeout=20,
-    )
-    # assert: si no es 201, el script se detiene aquí con el texto del
-    # error (sin datos de prueba no tiene sentido seguir).
-    assert r.status_code == 201, r.text
-    # Se devuelven el token y el id de la oportunidad creada.
-    return token, r.json()["oportunidad_id"]
-
-
-# calcular: segundo paso de la preparación.
-def calcular(oportunidad_id):
-    """POST /calculate-estimate. Devuelve el JSON (status, motivo_gate...)."""
-    # Petición real a POST /calculate-estimate.
-    r = requests.post(f"{BASE}/calculate-estimate", headers=AUTH_WEBHOOK,
-                      json={"oportunidad_id": oportunidad_id}, timeout=20)
-    # Si no es 200, se detiene el script con el texto del error.
-    assert r.status_code == 200, r.text
-    # Se devuelve el JSON de la respuesta (de él solo se usa status).
-    return r.json()
-
-
-# lead_con_gate: la preparación de casi todos los casos.
-def lead_con_gate():
-    """Lead con cambios estructurales + cálculo: queda en pendiente_aprobacion.
-    Devuelve (lead_token, oportunidad_id)."""
-    # Lead con cambios estructurales...
-    token, op = lead_http(estructural=True)
-    # ...y su cálculo.
-    calc = calcular(op)
-    # Si no quedó en pendiente_aprobacion, no hay Gate que probar: se detiene.
-    assert calc["status"] == "pendiente_aprobacion", calc
-    # Se devuelven el token y la oportunidad.
-    return token, op
-
-
-# decidir: TODAS las peticiones a /gate-decisions pasan por aquí.
-def decidir(cuerpo_peticion, cabeceras=AUTH_GATE):
-    """
-    POST /gate-decisions con el cuerpo tal cual (un dict). Guarda el código,
-    el JSON y, si es un éxito, el par (código, creado) para las
-    comprobaciones globales del final.
-    """
-    # La petición real, con las cabeceras indicadas (por defecto, X-Gate-Secret).
-    r = requests.post(f"{BASE}/gate-decisions", headers=cabeceras, json=cuerpo_peticion, timeout=60)
-    # list.append es seguro aunque lo llamen varios hilos a la vez.
-    codigos_gate.append(r.status_code)
-    # El JSON de la respuesta, o {} si no lo es.
-    j = cuerpo(r)
-    # Si había JSON, se guarda para buscar importes al final.
-    if j:
-        cuerpos_gate.append(j)
-    # Si es un éxito (200 o 201), se guarda el trío (código, creado, decisión).
-    if r.status_code in (200, 201):
-        pares_exito.append((r.status_code, j.get("creado"), str(cuerpo_peticion.get("decision"))))
-    # Se devuelve la respuesta entera.
+# pedir: una petición HTTP real que apunta su código.
+def pedir(metodo, ruta, cuerpo=None, cabeceras=None):
+    """La petición real; apunta el código para "ningún 500". Devuelve la respuesta."""
+    # requests.request: GET o POST, con el cuerpo JSON si lo hay.
+    r = requests.request(metodo, f"{BASE}{ruta}", headers=cabeceras or {}, json=cuerpo, timeout=30)
+    # Se apunta el código.
+    codigos.append(r.status_code)
     return r
 
 
-# visita_acordada: construye el cuerpo; no envía nada.
-def visita_acordada(op, fecha, hora, informe="Cliente de acuerdo con la visita."):
-    """Cuerpo de una decisión visita_acordada. fecha es un date; hora, "HH:MM"."""
-    # isoformat() convierte el date en el texto YYYY-MM-DD.
-    return {"oportunidad_id": op, "decision": "visita_acordada",
-            "fecha": fecha.isoformat(), "hora": hora, "informe": informe}
-
-
-# descartar: construye el cuerpo; no envía nada.
-def descartar(op, motivo_descarte, informe="El cliente no sigue adelante."):
-    """Cuerpo de una decisión descartar."""
-    # Un diccionario con los cuatro campos del descarte.
-    return {"oportunidad_id": op, "decision": "descartar", "motivo": motivo_descarte, "informe": informe}
-
-
-# esperado_madrid: lo que el endpoint debería devolver para esa fecha y hora.
-def esperado_madrid(fecha, hora):
-    """El instante que debe devolver el endpoint, calculado aquí por separado."""
-    # map(int, "08:30".split(":")) convierte ["08", "30"] en 8 y 30.
-    h, m = map(int, hora.split(":"))
-    # datetime.combine junta día y hora, en la zona de Madrid (con su cambio de hora).
-    return datetime.combine(fecha, hora_del_dia(h, m), tzinfo=MADRID)
-
-
-# fin_correcto (D33): se usa en verificar_201 y en verificar_200.
-def fin_correcto(j, con_visita):
-    """
-    True si fecha_fin_visita es la que toca. Con visita: el texto de
-    fecha_propuesta + DURACION minutos reales (en UTC), en Madrid, escrito
-    igual que la API. Sin visita: las dos claves null.
-    """
-    # Sin visita: las dos presentes y null.
-    if not con_visita:
-        return "fecha_fin_visita" in j and j["fecha_fin_visita"] is None and j.get("fecha_propuesta") is None
-    # Con visita y sin fecha_propuesta: mal.
-    if not j.get("fecha_propuesta"):
-        return False
-    # El inicio y el fin esperado, sumado en UTC y de vuelta a Madrid.
-    inicio_v = datetime.fromisoformat(j["fecha_propuesta"])
-    esperado = (inicio_v.astimezone(timezone.utc) + timedelta(minutes=DURACION)).astimezone(MADRID)
-    # El mismo texto: mismo instante, desfase y formato.
-    return j.get("fecha_fin_visita") == esperado.isoformat()
-
-
-# claves_con_importe: recorre el JSON entero buscando importes.
-def claves_con_importe(objeto, ruta=""):
-    """Rutas de todas las claves que contienen "importe", a cualquier nivel
-    (recorre diccionarios y listas llamándose a sí misma: recursión)."""
-    # Lista donde se van acumulando las rutas encontradas.
-    encontradas = []
-    # Si es un diccionario, se mira cada clave y su valor.
-    if isinstance(objeto, dict):
-        for clave, valor in objeto.items():
-            # La ruta de la clave: 'padre.clave', o solo 'clave' en el primer nivel.
-            ruta_clave = f"{ruta}.{clave}" if ruta else clave
-            # Si el nombre contiene 'importe' (sin distinguir mayúsculas), se anota.
-            if "importe" in clave.lower():
-                encontradas.append(ruta_clave)
-            # Y se busca también DENTRO de su valor (recursión).
-            encontradas.extend(claves_con_importe(valor, ruta_clave))
-    # Si es una lista, se mira cada elemento, con su posición [i].
-    elif isinstance(objeto, list):
-        for i, valor in enumerate(objeto):
-            encontradas.extend(claves_con_importe(valor, f"{ruta}[{i}]"))
-    # Se devuelven todas las rutas encontradas (vacía si no hay ninguna).
-    return encontradas
-
-
-# ----------------------------------------------------------------------
-# Lecturas de la base de datos sobre UNA oportunidad propia
-# ----------------------------------------------------------------------
-def foto_op(op):
-    """
-    Todo lo que una decisión puede cambiar en una oportunidad, en una tupla:
-    (nº de decisiones, nº de visitas, nº de logs, estado,
-     fecha_ultimo_contacto, updated_at, informe guardado).
-    Si dos fotos son iguales, entre una y otra no se ha escrito NADA.
-    """
-    # Una sola consulta; %(op)s se rellena con el id de la oportunidad.
-    return consultar(
-        """
-        SELECT (SELECT count(*) FROM decisiones_gate WHERE oportunidad_id = %(op)s),
-               (SELECT count(*) FROM visitas WHERE oportunidad_id = %(op)s),
-               (SELECT count(*) FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %(op)s),
-               o.estado, o.fecha_ultimo_contacto, o.updated_at,
-               (SELECT informe FROM decisiones_gate WHERE oportunidad_id = %(op)s)
-        FROM oportunidades o WHERE o.id = %(op)s;
-        """,
-        {"op": op},
-    )
-
-
-# logs_decision: se usa en verificar_201 y en la concurrencia.
-def logs_decision(op):
-    """Los detalles (JSON) de los logs gate_decision_registrada de una oportunidad."""
-    # Los logs de esa acción para esa oportunidad, en orden de creación.
-    cur.execute(
-        "SELECT detalle FROM logs WHERE entity_type = 'oportunidad' AND entity_id = %s "
-        "AND accion = 'gate_decision_registrada' ORDER BY id;",
-        (op,),
-    )
-    # f[0]: cada fila es una tupla de una columna; se saca el valor.
-    filas = [f[0] for f in cur.fetchall()]
-    # commit: cierra la transacción de lectura.
-    cn.commit()
-    # Lista de detalles (diccionarios).
-    return filas
-
-
-# verificar_201: se llama tras cada respuesta que debería ser 201.
-def verificar_201(r, op, foto_antes, informe_enviado, decision, motivo_esperado=None, fecha=None, hora=None):
-    """
-    Todas las comprobaciones de un 201 (plan, 4.1 "Efectos", y punto 1 del
-    encargo del Bloque D). Devuelve el decision_id (o None si no hubo 201).
-    """
-    # El JSON de la respuesta ({} si no lo es).
-    j = cuerpo(r)
-    # 1. Código, creado, y que la respuesta habla de ESTA oportunidad.
-    comprobar("201, creado=true, misma decisión y oportunidad",
-              r.status_code == 201 and j.get("creado") is True and j.get("decision") == decision
-              and j.get("oportunidad_id") == op, f"({r.status_code}, {r.text[:160]})")
-    # 2. Las claves EXACTAS del contrato, ni una más ni una menos.
-    comprobar("la respuesta tiene exactamente las 9 claves del contrato (D33: fecha_fin_visita)", set(j) == CLAVES_RESPUESTA,
-              f"(sobran {set(j) - CLAVES_RESPUESTA}, faltan {CLAVES_RESPUESTA - set(j)})")
-    # 3. Ninguna clave de importes, a ningún nivel.
-    comprobar("la respuesta no tiene ninguna clave de importes", not claves_con_importe(j), f"({claves_con_importe(j)})")
-    # El id de la decisión que dice la respuesta (None si no lo trae).
-    decision_id = j.get("decision_id")
-
-    # 4. La fila de decisiones_gate. informe_enviado.strip(): el informe se
-    #    guarda RECORTADO (sin espacios en los extremos).
-    fila = consultar("SELECT id, decision, motivo, visita_id, informe FROM decisiones_gate WHERE oportunidad_id = %s;", (op,))
-    # Coinciden id, decisión, motivo e informe recortado.
-    comprobar("fila en decisiones_gate con el mismo id, decisión, motivo e informe recortado",
-              fila is not None and fila[0] == decision_id and fila[1] == decision and fila[2] == motivo_esperado
-              and fila[4] == informe_enviado.strip(), f"({fila[:4] if fila else None})")
-
-    # 5. El log: exactamente uno, con decision_id, y SIN el informe (P9).
-    #    Se busca el texto del informe en el JSON entero, no solo la clave.
-    logs = logs_decision(op)
-    # Todo el contenido de los logs como un solo texto, para buscar dentro.
-    texto_logs = json.dumps(logs, ensure_ascii=False)
-    # Exactamente un log, y con el decision_id de la respuesta.
-    comprobar("1 log gate_decision_registrada con el decision_id",
-              len(logs) == 1 and logs[0].get("decision_id") == decision_id, f"({logs})")
-    # Ni la palabra 'informe' ni el texto del informe aparecen en ningún log.
-    comprobar("el log NO contiene el informe (P9): ni la clave ni el texto",
-              "informe" not in texto_logs and informe_enviado.strip() not in texto_logs)
-
-    # 6. presupuestos no se toca: el Gate es permanente y no hay operador.
-    pres = consultar("SELECT requiere_aprobacion, aprobado_por FROM presupuestos WHERE oportunidad_id = %s;", (op,))
-    # La tupla (requiere_aprobacion, aprobado_por) debe ser (True, None).
-    comprobar("presupuestos: requiere_aprobacion sigue true y aprobado_por NULL",
-              pres == (True, None), f"({pres})")
-
-    # 7. fecha_ultimo_contacto: era NULL antes y ahora está escrita y es
-    #    reciente (menos de 2 minutos según el reloj de la base de datos).
-    fuc = consultar("SELECT fecha_ultimo_contacto, now() - fecha_ultimo_contacto < interval '2 minutes' "
-                    "FROM oportunidades WHERE id = %s;", (op,))
-    # fuc[0]: la fecha guardada; fuc[1]: True si es de hace menos de 2 minutos.
-    comprobar("fecha_ultimo_contacto: antes NULL, ahora escrita y reciente (P5)",
-              foto_antes[4] is None and fuc[0] is not None and fuc[1] is True, f"(antes {foto_antes[4]}, ahora {fuc[0]})")
-
-    # 8. Estado de la oportunidad, en la base de datos y en la respuesta.
-    estado_esperado = "visita_agendada" if decision == "visita_acordada" else "perdida"
-    # El estado en la base de datos ([0]: el único valor de la fila).
-    estado = consultar("SELECT estado FROM oportunidades WHERE id = %s;", (op,))[0]
-    # Debe coincidir con el esperado, y también el de la respuesta.
-    comprobar(f"oportunidad en '{estado_esperado}' (BD y respuesta)",
-              estado == estado_esperado and j.get("estado_oportunidad") == estado_esperado, f"({estado})")
-
-    # Solo si la decisión era una visita acordada:
-    if decision == "visita_acordada":
-        # 9a. La visita: de ESTA oportunidad, 'confirmada', con la fecha
-        #     pedida y el texto fijo de P2; y la respuesta, con su desfase.
-        esperado = esperado_madrid(fecha, hora)
-        # La visita a la que apunta la decisión (fila[3] es su visita_id).
-        visita = consultar("SELECT id, oportunidad_id, estado, fecha_propuesta, texto_cliente FROM visitas "
-                           "WHERE id = %s;", (fila[3] if fila else None,))
-        # Existe, es la de la respuesta, de esta oportunidad, confirmada, con la fecha pedida y el texto P2.
-        comprobar("visita de ESTA oportunidad, 'confirmada', fecha pedida y texto fijo P2",
-                  visita is not None and visita[0] == j.get("visita_id") and visita[1] == op
-                  and visita[2] == "confirmada" and visita[3] == esperado and visita[4] == TEXTO_P2,
-                  f"({visita[:4] if visita else None})")
-        # datetime.fromisoformat convierte el texto "2026-10-05T08:30:00+02:00"
-        # en un datetime; utcoffset() es su desfase (+02:00 o +01:00).
-        recibido = datetime.fromisoformat(j["fecha_propuesta"]) if j.get("fecha_propuesta") else None
-        # Mismo instante y mismo desfase (+02:00 o +01:00).
-        comprobar("fecha_propuesta de la respuesta = la pedida, en Madrid con su desfase",
-                  recibido == esperado and recibido.utcoffset() == esperado.utcoffset(), f"({j.get('fecha_propuesta')})")
-        # D33: y su fin, la duración real después, con el mismo desfase.
-        comprobar(f"fecha_fin_visita = fecha_propuesta + {DURACION} min, mismo formato y desfase",
-                  fin_correcto(j, True), f"({j.get('fecha_propuesta')} -> {j.get('fecha_fin_visita')})")
-        # El log apunta a la misma visita y guarda la misma fecha.
-        comprobar("el log enlaza la visita y su fecha",
-                  len(logs) == 1 and logs[0].get("visita_id") == j.get("visita_id")
-                  and logs[0].get("fecha_propuesta") is not None
-                  and datetime.fromisoformat(logs[0]["fecha_propuesta"]) == esperado)
-    # Si no (descartar):
-    else:
-        # 9b. Descartar: sin visita en la respuesta, ni en la BD, ni en el log.
-        n_visitas = consultar("SELECT count(*) FROM visitas WHERE oportunidad_id = %s;", (op,))[0]
-        # Sin visita en la respuesta, con su motivo, y 0 visitas en la base de datos.
-        # D33: también fecha_fin_visita null (fin_correcto con False).
-        comprobar("descartar: visita_id, fecha_propuesta y fecha_fin_visita null, motivo en la respuesta, 0 visitas",
-                  j.get("visita_id") is None and j.get("fecha_propuesta") is None and fin_correcto(j, False)
-                  and j.get("motivo") == motivo_esperado and n_visitas == 0, f"({n_visitas} visitas)")
-        # El log lleva el motivo y no tiene visita.
-        comprobar("el log lleva el motivo y visita_id null",
-                  len(logs) == 1 and logs[0].get("motivo") == motivo_esperado and logs[0].get("visita_id") is None)
-    # Se devuelve el decision_id para las comprobaciones posteriores.
-    return decision_id
-
-
-# verificar_sin_escritura: la usan los 409, los 200 y los rechazos.
-def verificar_sin_escritura(titulo, op, foto_antes):
-    """Compara la foto de antes con la de ahora: si son iguales, no se ha
-    escrito NADA (ni decisiones, ni visitas, ni logs, ni estado, ni
-    fecha_ultimo_contacto, ni updated_at, ni el informe)."""
-    # La foto de ahora.
-    foto_despues = foto_op(op)
-    # Pasa si son idénticas; el detalle enseña los cuatro primeros campos de cada una.
-    comprobar(f"{titulo}: no escribe nada (decisiones, visitas, logs, estado, contacto, informe)",
-              foto_despues == foto_antes, f"(antes {foto_antes[:4]}, después {foto_despues[:4]})")
-
-
-# verificar_200: se llama tras cada repetición.
-def verificar_200(r, op, foto_antes, decision_id, con_visita=False):
-    """Repetición: 200, creado=false, mismo decision_id, y NADA escrito.
-    con_visita (D33): si la decisión repetida dejó una visita (para su fin)."""
-    # El JSON de la respuesta.
-    j = cuerpo(r)
-    # Código 200, creado=false y el mismo decision_id que el 201 original.
-    comprobar("200, creado=false, mismo decision_id",
-              r.status_code == 200 and j.get("creado") is False and j.get("decision_id") == decision_id,
-              f"({r.status_code}, {r.text[:160]})")
-    # D33: la repetición también trae su fin (o null sin visita).
-    comprobar("200: fecha_fin_visita " + (f"= fecha_propuesta + {DURACION} min" if con_visita else "null"),
-              fin_correcto(j, con_visita), f"({j.get('fecha_propuesta')} -> {j.get('fecha_fin_visita')})")
-    # Y nada escrito.
-    verificar_sin_escritura("repetición", op, foto_antes)
-    # El caso concreto que pide el plan (P5): fecha_ultimo_contacto, con su
-    # valor exacto, no cambia en una repetición.
-    comprobar("fecha_ultimo_contacto SIN CAMBIOS tras el 200",
-              foto_op(op)[4] == foto_antes[4], f"({foto_antes[4]})")
-
-
-# verificar_409: se llama tras cada rechazo 409.
-def verificar_409(titulo, r, op, foto_antes, motivo_esperado):
-    """Rechazo 409 con su motivo, y NADA escrito."""
-    # Código 409 y el motivo esperado.
-    comprobar(f"409 {motivo_esperado}: {titulo}", r.status_code == 409 and motivo(r) == motivo_esperado,
-              f"({r.status_code}, {motivo(r)})")
-    # Y nada escrito.
-    verificar_sin_escritura(f"   {titulo}", op, foto_antes)
+# cuerpo: el JSON de una respuesta, o {} si no es JSON.
+def cuerpo(r):
+    """El JSON de la respuesta, o {} si no es JSON."""
+    # r.json() lanza ValueError si el cuerpo no es JSON.
+    try:
+        return r.json()
+    except ValueError:
+        return {}
 
 
 # puerto_ocupado: se usa antes de arrancar nada.
@@ -648,27 +140,6 @@ def puerto_ocupado(puerto):
         return s.connect_ex(("127.0.0.1", puerto)) == 0
 
 
-# ----------------------------------------------------------------------
-# Fechas relativas a hoy (en Madrid), para que el script no caduque
-# ----------------------------------------------------------------------
-HOY = datetime.now(MADRID).date()
-# B5-0 (2026-10-12, P21): el primer lunes del bloque de semanas lejanas de
-# este script (fechas_prueba.py), y no "el próximo", para no chocar con
-# visitas reales ni con otros scripts cuando se compruebe el hueco (D31).
-LUNES = fechas_prueba.lunes_de_prueba("check_gate_decisions_http", HOY)
-# B5-0: martes y miércoles de esa semana, para las dos pruebas de
-# concurrencia del CASO 8 (antes usaban horas del lunes que se solapan con
-# las visitas de otras oportunidades del script).
-MARTES, MIERCOLES = LUNES + timedelta(days=1), LUNES + timedelta(days=2)
-# El sábado de esa misma semana (lunes + 5 días).
-SABADO = LUNES + timedelta(days=5)
-# Ayer: siempre en el pasado.
-AYER = HOY - timedelta(days=1)
-# B5-0: antes de crear nada, ninguna visita activa AJENA en el bloque del
-# script (si la hay, FALLO con explicación y se para sin borrar nada).
-fechas_prueba.exigir_libres("check_gate_decisions_http", PATRON_EMAIL,
-                            [fechas_prueba.tramo_del_bloque("check_gate_decisions_http", HOY)])
-
 # ======================================================================
 # Antes de nada: nuestros dos puertos tienen que estar LIBRES. Si otro
 # proceso los usa, se para y se avisa (CLAUDE.md): no se mata nada.
@@ -680,23 +151,6 @@ for p in (PUERTO, PUERTO_ARRANQUE):
         print(f"ABORTO: el puerto {p} está ocupado por otro proceso. No ejecuto nada ni mato nada.")
         # ...y se sale con código 2, sin ejecutar nada.
         sys.exit(2)
-
-# Restos de una ejecución anterior cortada (solo lo propio).
-limpiar()
-# Foto de lo ajeno: id_base y recuento por tabla.
-FOTO = foto_ajena()
-# D33: la duración REAL de la visita, leída aquí aparte (no con el código
-# probado), para el fin esperado (fin_correcto). [0]: el único valor.
-DURACION = int(consultar("SELECT valor FROM reglas_negocio WHERE clave = 'duracion_visita_min';")[0])
-# Se enseña la foto en la salida ("=" * 78 repite el signo 78 veces).
-print("=" * 78)
-print("FOTO DE LO AJENO AL EMPEZAR (tabla: id_base, filas ajenas con id <= id_base)")
-print("=" * 78)
-# Una línea por tabla (:16 y :<6 alinean las columnas).
-for tabla, (id_base, n) in FOTO.items():
-    print(f"  {tabla:16} id_base={id_base:<6} ajenas={n}")
-# Y las fechas que se van a usar.
-print(f"  Fechas de prueba: hoy {HOY} ({HOY:%A}), lunes {LUNES}, sábado {SABADO}, ayer {AYER}")
 
 # ======================================================================
 print("\nCASO 0 - Arranque: el servidor se NIEGA a arrancar (P4), en procesos hijos")
@@ -765,9 +219,8 @@ while time.time() - inicio < 30:
         # Si /health responde 200, el servidor está listo: break sale del bucle.
         if requests.get(f"{BASE}/health", timeout=1).status_code == 200:
             break
-    # Si todavía no escucha...
+    # Si todavía no escucha, se espera un cuarto de segundo y se vuelve a probar.
     except requests.exceptions.RequestException:
-        # ...se espera un cuarto de segundo y se vuelve a probar.
         time.sleep(0.25)
 # else del while: solo si pasaron los 30 s sin break.
 else:
@@ -776,440 +229,50 @@ else:
 # Se enseña cuánto tardó en arrancar.
 print(f"\n  Servidor arriba en el puerto {PUERTO} en {time.time() - inicio:.2f} s")
 
-# try/finally: pase lo que pase dentro (incluso un error), el bloque
-# finally apaga el servidor y limpia.
+# try/finally: pase lo que pase dentro (incluso un error), el servidor se apaga.
 try:
     # ------------------------------------------------------------------
-    print("\nCASO 1 - Autenticación (P4)")
-    # Un lead con Gate y una petición VÁLIDA: si la puerta dejara pasar la
-    # credencial equivocada, esta petición registraría la decisión.
-    _, op_auth = lead_con_gate()
-    # Foto de la oportunidad antes de las peticiones.
-    foto_auth = foto_op(op_auth)
-    # Un descarte válido para esa oportunidad.
-    valida = descartar(op_auth, "precio")
-    # 1) Sin ninguna cabecera.
-    r = decidir(valida, cabeceras={})
-    comprobar("401 sin cabecera", r.status_code == 401, f"({r.status_code})")
-    # Mismo cuerpo y misma cabecera WWW-Authenticate que el 401 de /leads.
-    comprobar("   mismo 401 que /leads: detail 'No autorizado' y WWW-Authenticate: APIKey",
-              cuerpo(r) == {"detail": "No autorizado"} and r.headers.get("WWW-Authenticate") == "APIKey")
-    # 2) Sin cabecera y con un cuerpo que no vale: debe ser 401, no 422.
-    r = decidir({"basura": 1}, cabeceras={})
-    comprobar("401 sin cabecera y con cuerpo inválido (la cabecera va antes)", r.status_code == 401, f"({r.status_code})")
-    # Las dos pruebas de que la credencial del Agente 2 NO abre esta puerta.
-    r = decidir(valida, cabeceras={"X-Webhook-Secret": WEBHOOK_SECRET})
-    # 3) Debe ser 401.
-    comprobar("401 con el valor de WEBHOOK_SECRET en X-Webhook-Secret", r.status_code == 401, f"({r.status_code})")
-    # 4) El valor de WEBHOOK_SECRET en la cabecera del Gate.
-    r = decidir(valida, cabeceras={"X-Gate-Secret": WEBHOOK_SECRET})
-    comprobar("401 con el valor de WEBHOOK_SECRET en X-Gate-Secret", r.status_code == 401, f"({r.status_code})")
-    # Ninguna de las cuatro ha escrito nada.
-    verificar_sin_escritura("los 401", op_auth, foto_auth)
+    print("\nCASO 1 - El alias POST /gate-decisions ya no existe (404 exacto)")
+    # Con la llave buena y el cuerpo del contrato antiguo, y sin ninguna llave.
+    for nombre, cabeceras in (("con X-Gate-Secret", AUTH_GATE), ("sin llave", {})):
+        r = pedir("POST", "/gate-decisions", CUERPO_ALIAS, cabeceras)
+        # 404 con el cuerpo exacto de "no existe esa ruta" (no un 404 de negocio).
+        comprobar(f"POST /gate-decisions {nombre} -> 404 {CUERPO_404}",
+                  r.status_code == 404 and cuerpo(r) == CUERPO_404, f"({r.status_code} {r.text[:120]})")
+    # GET: 404 también. Si quedara otra ruta con ese camino, FastAPI daría 405.
+    r = pedir("GET", "/gate-decisions", cabeceras=AUTH_GATE)
+    comprobar("GET /gate-decisions -> 404 (no 405: ninguna ruta con ese camino)",
+              r.status_code == 404 and cuerpo(r) == CUERPO_404, f"({r.status_code} {r.text[:120]})")
 
     # ------------------------------------------------------------------
-    print("\nCASO 2 - Forma (422 de Pydantic)")
-    # Un lead con Gate para los rechazos de forma (y después para los de fecha).
-    _, op_forma = lead_con_gate()
-    # Su foto antes de las peticiones.
-    foto_forma = foto_op(op_forma)
-    # Cada caso: (nombre, cuerpo). Todos son válidos salvo por UNA cosa.
-    # D32: 09:45, una hora de la rejilla (antes 10:00).
-    base_va = visita_acordada(op_forma, LUNES, "09:45")
-    # Un descarte válido de base.
-    base_de = descartar(op_forma, "precio")
-    # La lista de casos.
-    CASOS_FORMA = [
-        # Cada entrada cambia o quita UNA sola cosa respecto a un cuerpo válido.
-        ("campo de más (presupuesto_id)", {**base_va, "presupuesto_id": 1}),
-        ("decision 'continuar'", {**base_va, "decision": "continuar"}),
-        ("motivo 'caro'", {**base_de, "motivo": "caro"}),
-        # {k: v for ... if k != "fecha"}: una copia del cuerpo SIN esa clave.
-        ("visita_acordada sin fecha", {k: v for k, v in base_va.items() if k != "fecha"}),
-        ("visita_acordada sin hora", {k: v for k, v in base_va.items() if k != "hora"}),
-        ("visita_acordada con motivo", {**base_va, "motivo": "precio"}),
-        ("descartar sin motivo", {k: v for k, v in base_de.items() if k != "motivo"}),
-        ("descartar con fecha", {**base_de, "fecha": LUNES.isoformat()}),
-        ("informe vacío", {**base_de, "informe": ""}),
-        ("informe solo de espacios", {**base_de, "informe": "     "}),
-        ("informe de 2001 caracteres", {**base_de, "informe": "x" * 2001}),
-        ("hora '10:00Z'", {**base_va, "hora": "10:00Z"}),
-    ]
-    # Se envía cada caso...
-    for nombre, peticion in CASOS_FORMA:
-        # ...con la cabecera correcta.
-        r = decidir(peticion)
-        # El 422 de Pydantic trae en "detail" una LISTA de errores; el de
-        # negocio, un objeto con motivo. Se exige la forma de Pydantic.
-        comprobar(f"422 (Pydantic) con {nombre}", r.status_code == 422 and isinstance(cuerpo(r).get("detail"), list),
-                  f"({r.status_code})")
-    # Los 12 rechazos no han escrito nada.
-    verificar_sin_escritura("los 12 rechazos de forma", op_forma, foto_forma)
+    print("\nCASO 2 - POST /resultados-llamada sin llave: 401")
+    # Cuerpo vacío y sin cabecera: la llave se comprueba ANTES que el cuerpo.
+    r = pedir("POST", "/resultados-llamada", {})
+    comprobar("POST /resultados-llamada sin llave -> 401 {'detail': 'No autorizado'}",
+              r.status_code == 401 and cuerpo(r) == {"detail": "No autorizado"}, f"({r.status_code} {r.text[:120]})")
+    # La misma cabecera que el 401 de /leads (función _no_autorizado).
+    comprobar("   con la cabecera WWW-Authenticate: APIKey", r.headers.get("WWW-Authenticate") == "APIKey",
+              f"({r.headers.get('WWW-Authenticate')})")
 
     # ------------------------------------------------------------------
-    print("\nCASO 3 - Estado (404 y 409)")
-    # 2147483647: el mayor entero de una columna INTEGER; no existe.
-    r = decidir(descartar(2147483647, "precio"))
-    # 404 con su motivo.
-    comprobar("404 oportunidad_no_encontrada", r.status_code == 404 and motivo(r) == "oportunidad_no_encontrada",
-              f"({r.status_code}, {motivo(r)})")
-
-    # Lead sin calcular: no tiene presupuesto.
-    _, op_sin = lead_http(estructural=False)
-    # Foto antes de la petición.
-    foto = foto_op(op_sin)
-    # 409 sin_presupuesto, y nada escrito.
-    verificar_409("lead sin calcular", decidir(descartar(op_sin, "precio")), op_sin, foto, "sin_presupuesto")
-
-    # Presupuesto normal (sin Gate): queda en presupuesto_enviado.
-    _, op_normal = lead_http(estructural=False)
-    # Se calcula: sin Gate, queda en presupuesto_enviado.
-    calcular(op_normal)
-    # Foto antes de la petición.
-    foto = foto_op(op_normal)
-    # 409 sin_gate, y nada escrito.
-    verificar_409("presupuesto sin Gate", decidir(descartar(op_normal, "precio")), op_normal, foto, "sin_gate")
-
-    # Gate con el estado forzado desde el script (fila propia), sin decisión.
-    _, op_estado = lead_con_gate()
-    # Se cambia el estado de la oportunidad propia...
-    ejecutar("UPDATE oportunidades SET estado = 'presupuesto_enviado' WHERE id = %s;", (op_estado,))
-    # ...y se toma la foto después del cambio y antes de la petición.
-    foto = foto_op(op_estado)
-    # 409 estado_no_permitido, y nada escrito.
-    verificar_409("Gate en 'presupuesto_enviado' sin decisión previa", decidir(descartar(op_estado, "precio")),
-                  op_estado, foto, "estado_no_permitido")
-
-    # Gate con una visita activa creada a mano (fila propia), P1.
-    _, op_activa = lead_con_gate()
-    # Una visita 'solicitada' insertada directamente en la oportunidad propia.
-    ejecutar("INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
-             "VALUES (%s, %s, 'solicitada', 'visita de prueba creada a mano');",
-             (op_activa, esperado_madrid(LUNES, "17:00")))
-    # Foto antes de la petición.
-    foto = foto_op(op_activa)
-    # 409 visita_activa_existente, y nada escrito.
-    # D32: 09:45 (antes 10:00): tiene que pasar la rejilla para llegar a P1.
-    verificar_409("visita activa ya existente (P1)", decidir(visita_acordada(op_activa, LUNES, "09:45")),
-                  op_activa, foto, "visita_activa_existente")
-
-    # ------------------------------------------------------------------
-    print("\nCASO 4 - Reglas de la fecha (422 de negocio, solo visita_acordada)")
-    # Se usa op_forma: sigue intacta en pendiente_aprobacion.
-    for nombre, fecha, hora, esperado in [
-        # (nombre, fecha, hora, motivo esperado)
-        ("ayer a las 10:00", AYER, "10:00", "fecha_pasada"),
-        ("el próximo sábado a las 10:00", SABADO, "10:00", "fin_de_semana"),
-        ("08:29 (antes de la franja)", LUNES, "08:29", "fuera_de_franja"),
-        ("12:45 (terminaría a las 13:45)", LUNES, "12:45", "fuera_de_franja"),
-        ("19:30 (terminaría a las 20:30)", LUNES, "19:30", "fuera_de_franja"),
-        # D32: dentro de la franja pero fuera de la rejilla, también por el alias.
-        ("10:00 (fuera de la rejilla)", LUNES, "10:00", "fuera_de_rejilla"),
-    ]:
-        # La petición con esa fecha y hora.
-        r = decidir(visita_acordada(op_forma, fecha, hora))
-        # El 422 de NEGOCIO trae un objeto con motivo, no la lista de Pydantic.
-        comprobar(f"422 {esperado}: {nombre}", r.status_code == 422 and motivo(r) == esperado,
-                  f"({r.status_code}, {motivo(r)})")
-    # Los 6 rechazos (5 hasta D32) no han escrito nada.
-    verificar_sin_escritura("los 6 rechazos de fecha", op_forma, foto_forma)
-
-    # ------------------------------------------------------------------
-    print("\nCASO 5 - 201 visita_acordada (lunes 08:30, límite inferior; informe con espacios)")
-    # Lead con Gate para el caso principal.
-    token_va, op_va = lead_con_gate()
-    # Foto antes (fecha_ultimo_contacto debe ser NULL).
-    foto_antes = foto_op(op_va)
-    # Un informe reconocible (con un trozo de uuid) y con espacios en los
-    # extremos, para comprobar que se guarda recortado.
-    informe_va = f"  Llamada {uuid.uuid4().hex[:10]}: acepta la visita del lunes.  "
-    # La petición: lunes a las 08:30, el límite inferior de la franja.
-    r = decidir(visita_acordada(op_va, LUNES, "08:30", informe=informe_va))
-    # Se enseña la respuesta completa.
-    print(f"      <- {r.status_code} {r.text}")
-    # Todas las comprobaciones del 201; devuelve el decision_id.
-    decision_va = verificar_201(r, op_va, foto_antes, informe_va, "visita_acordada", fecha=LUNES, hora="08:30")
-    # El informe guardado (foto[6]) es el enviado sin espacios en los extremos.
-    comprobar("el informe se guarda recortado (sin los espacios de los extremos)",
-              foto_op(op_va)[6] == informe_va.strip())
-
-    # Título del apartado.
-    print("\n  5b - 200 repetición (misma fecha y hora, OTRO informe)")
-    # Foto justo después del 201: la referencia para la repetición.
-    foto_tras_201 = foto_op(op_va)
-    # La misma decisión, fecha y hora, con otro informe.
-    r = decidir(visita_acordada(op_va, LUNES, "08:30", informe="Otro informe distinto, que debe ignorarse."))
-    # 200, mismo id y nada escrito.
-    # D33: con visita (su fin).
-    verificar_200(r, op_va, foto_tras_201, decision_va, con_visita=True)
-    # El informe guardado sigue siendo el primero.
-    comprobar("el informe ORIGINAL sigue intacto", foto_op(op_va)[6] == informe_va.strip())
-
-    # Título del apartado.
-    print("\n  5c - 409 decision_ya_registrada sobre la misma oportunidad")
-    # La foto se toma JUSTO ANTES de cada 409 (no se reutiliza la de antes
-    # de la repetición): así, si algo escribe, falla la comprobación de
-    # quien lo escribió y no la de la petición que llega después.
-    foto = foto_op(op_va)
-    # Otra hora: 409 decision_ya_registrada, y nada escrito.
-    # D32: otra hora de la rejilla (09:45; antes 10:00).
-    verificar_409("visita_acordada a otra hora", decidir(visita_acordada(op_va, LUNES, "09:45")),
-                  op_va, foto, "decision_ya_registrada")
-    # Foto justo antes del segundo 409.
-    foto = foto_op(op_va)
-    # Descartar: también 409, y nada escrito.
-    verificar_409("descartar", decidir(descartar(op_va, "precio")), op_va, foto, "decision_ya_registrada")
-
-    # ------------------------------------------------------------------
-    # D32: 18:15 es la última hora de la tarde de la rejilla (antes 19:00).
-    print("\nCASO 6 - 201 visita_acordada a las 18:15 (la última), informe de 2000 'á'")
-    # Otro lead con Gate.
-    _, op_1900 = lead_con_gate()
-    # Foto antes.
-    foto_antes = foto_op(op_1900)
-    # 2000 'á': el límite cuenta CARACTERES, no bytes (cada 'á' son 2 bytes).
-    r = decidir(visita_acordada(op_1900, LUNES, "18:15", informe="á" * 2000))
-    # Todas las comprobaciones del 201.
-    verificar_201(r, op_1900, foto_antes, "á" * 2000, "visita_acordada", fecha=LUNES, hora="18:15")
-
-    # ------------------------------------------------------------------
-    print("\nCASO 7 - 201 descartar")
-    # Lead con Gate para el descarte.
-    token_de, op_de = lead_con_gate()
-    # Foto antes.
-    foto_antes = foto_op(op_de)
-    # Un informe reconocible, con un trozo de uuid.
-    informe_de = f"Llamada {uuid.uuid4().hex[:10]}: le parece caro y no sigue."
-    # La petición de descarte por precio.
-    r = decidir(descartar(op_de, "precio", informe=informe_de))
-    # Se enseña la respuesta completa.
-    print(f"      <- {r.status_code} {r.text}")
-    # Todas las comprobaciones del 201.
-    decision_de = verificar_201(r, op_de, foto_antes, informe_de, "descartar", motivo_esperado="precio")
-
-    # Título del apartado.
-    print("\n  7b - 200 repetición (mismo motivo, otro informe)")
-    # Foto justo después del 201.
-    foto_tras_201 = foto_op(op_de)
-    # Mismo motivo y otro informe: 200, mismo id y nada escrito.
-    verificar_200(decidir(descartar(op_de, "precio", informe="Otro informe.")), op_de, foto_tras_201, decision_de)
-    # El informe guardado sigue siendo el primero.
-    comprobar("el informe ORIGINAL sigue intacto", foto_op(op_de)[6] == informe_de)
-
-    # Título del apartado.
-    print("\n  7c - 409 decision_ya_registrada")
-    # Foto justo antes de cada 409, por el mismo motivo que en 5c.
-    foto = foto_op(op_de)
-    # Otro motivo: 409, y nada escrito.
-    verificar_409("descartar con otro motivo", decidir(descartar(op_de, "plazo")), op_de, foto,
-                  "decision_ya_registrada")
-    # Foto justo antes del segundo 409.
-    foto = foto_op(op_de)
-    # visita_acordada: 409, y nada escrito.
-    # D32: una hora de la rejilla (09:45; antes 10:00).
-    verificar_409("visita_acordada", decidir(visita_acordada(op_de, LUNES, "09:45")), op_de, foto,
-                  "decision_ya_registrada")
-
-    # ------------------------------------------------------------------
-    print("\nCASO 8 - Concurrencia")
-    # Lead con Gate para la primera prueba.
-    _, op_c1 = lead_con_gate()
-    # Un único cuerpo, que se enviará 5 veces.
-    # B5-0: el martes (antes, el lunes).
-    # D32: 09:45 (antes 10:00).
-    misma = visita_acordada(op_c1, MARTES, "09:45")
-    # ThreadPoolExecutor lanza las 5 peticiones a la vez, cada una en su
-    # hilo. map() devuelve las respuestas en el orden en que se LANZARON.
-    with ThreadPoolExecutor(max_workers=5) as ejecutor:
-        # lambda _: ... es una función mínima que ignora su argumento (0 a 4) y envía la misma decisión.
-        respuestas = list(ejecutor.map(lambda _: decidir(misma), range(5)))
-    # (código, creado) de cada respuesta.
-    pares = [(r.status_code, cuerpo(r).get("creado")) for r in respuestas]
-    # Los decision_id distintos (un set no repite).
-    ids = {cuerpo(r).get("decision_id") for r in respuestas}
-    # Se enseña todo en la salida.
-    print(f"      misma decisión x5 -> (código, creado) por petición: {pares}; decision_id {ids}")
-    # sorted(...) ordena los códigos para compararlos sin depender del orden de llegada.
-    comprobar("misma decisión x5: un 201 y cuatro 200", sorted(p[0] for p in pares) == [200, 200, 200, 200, 201])
-    # Un solo creado=true y un único decision_id.
-    comprobar("misma decisión x5: un solo creado=true y el mismo decision_id en las 5",
-              [p[1] for p in pares].count(True) == 1 and len(ids) == 1)
-    # Foto de la oportunidad tras las 5 peticiones.
-    f = foto_op(op_c1)
-    # f[0] decisiones, f[1] visitas, y los logs de decisión: uno de cada.
-    comprobar("misma decisión x5: 1 decisión, 1 visita y 1 log de decisión en la BD",
-              f[0] == 1 and f[1] == 1 and len(logs_decision(op_c1)) == 1, f"({f[:3]})")
-
-    # Lead con Gate para la segunda prueba.
-    _, op_c2 = lead_con_gate()
-    # Cinco cuerpos distintos: tres horas y dos motivos.
-    # B5-0: el miércoles (antes, el lunes).
-    # D32: tres horas de la rejilla (antes 08:30, 09:30 y 10:30).
-    distintas = [visita_acordada(op_c2, MIERCOLES, "08:30"), visita_acordada(op_c2, MIERCOLES, "09:45"),
-                 visita_acordada(op_c2, MIERCOLES, "11:00"), descartar(op_c2, "precio"), descartar(op_c2, "plazo")]
-    # Se lanzan los 5 a la vez; map pasa cada cuerpo a decidir.
-    with ThreadPoolExecutor(max_workers=5) as ejecutor:
-        respuestas = list(ejecutor.map(decidir, distintas))
-    # (código, motivo o decisión) de cada respuesta, para la salida.
-    resumen = [(r.status_code, motivo(r) or cuerpo(r).get("decision")) for r in respuestas]
-    # Se enseña en la salida.
-    print(f"      decisiones distintas x5 -> {resumen}")
-    # Los códigos, ordenados.
-    codigos = sorted(r.status_code for r in respuestas)
-    # Un 201 y cuatro 409.
-    comprobar("distintas x5: exactamente un 201 y cuatro 409", codigos == [201, 409, 409, 409, 409])
-    # Los cuatro 409 son decision_ya_registrada.
-    comprobar("distintas x5: los cuatro 409 son decision_ya_registrada",
-              [motivo(r) for r in respuestas if r.status_code == 409].count("decision_ya_registrada") == 4)
-    # Quién ganó: la decisión de la única respuesta 201 (si la hubo).
-    ganadora = next((cuerpo(r).get("decision") for r in respuestas if r.status_code == 201), None)
-    # Foto tras las 5 peticiones.
-    f = foto_op(op_c2)
-    # Si ganó una visita, debe haber 1 visita; si ganó un descarte, 0.
-    visitas_esperadas = 1 if ganadora == "visita_acordada" else 0
-    # 1 decisión, las visitas esperadas y 1 log de decisión.
-    comprobar(f"distintas x5: 1 decisión y {visitas_esperadas} visita(s) en la BD (ganó {ganadora})",
-              f[0] == 1 and f[1] == visitas_esperadas and len(logs_decision(op_c2)) == 1, f"({f[:3]})")
-
-    # ------------------------------------------------------------------
-    print("\nCASO 9 - Regresión cruzada")
-    # Las dos oportunidades ya decididas, con su token y el estado esperado.
-    for nombre, token, op, estado in [("visita acordada", token_va, op_va, "visita_agendada"),
-                                       ("descartada", token_de, op_de, "perdida")]:
-        # POST /visits sobre un lead con Gate ya decidido: el Gate es
-        # permanente (P5 de /visits), así que sigue bloqueado.
-        foto = foto_op(op)
-        # Petición real a POST /visits con la cabecera de n8n.
-        r = requests.post(f"{BASE}/visits", headers=AUTH_WEBHOOK, timeout=30,
-                          json={"lead_token": token, "fecha": LUNES.isoformat(), "hora": "17:00",
-                                "texto_cliente": "Quiero otra visita"})
-        # 409 presupuesto_con_gate.
-        comprobar(f"POST /visits ({nombre}): 409 presupuesto_con_gate", r.status_code == 409
-                  and motivo(r) == "presupuesto_con_gate", f"({r.status_code}, {motivo(r)})")
-        # Y nada escrito.
-        verificar_sin_escritura(f"   POST /visits ({nombre})", op, foto)
-        # GET /leads/session: lo que verá el router de n8n (P6).
-        r = requests.get(f"{BASE}/leads/session/{token}", headers=AUTH_WEBHOOK, timeout=30)
-        # El JSON de la sesión.
-        j = cuerpo(r)
-        # Estado esperado, y requiere_aprobacion true dentro de 'presupuesto'.
-        comprobar(f"GET /leads/session ({nombre}): estado '{estado}' y requiere_aprobacion true",
-                  r.status_code == 200 and j.get("estado_oportunidad") == estado
-                  and (j.get("presupuesto") or {}).get("requiere_aprobacion") is True,
-                  f"({r.status_code}, {j.get('estado_oportunidad')}, {(j.get('presupuesto') or {}).get('requiere_aprobacion')})")
-
-    # ------------------------------------------------------------------
-    # CASO 9b (Bloque B5, 2026-10-12, D31 y P17): el alias gana el 409
-    # hueco_ocupado. La visita acordada de op_va (CASO 5) ocupa el lunes de
-    # 08:30 a 09:30; otro Gate pide las 08:30 de ese lunes (D32: con la
-    # rejilla, un solape parcial ya no se puede pedir; antes, las 09:00).
-    print("\nCASO 9b - D31: 409 hueco_ocupado también por el alias")
-    # Un Gate nuevo.
-    _, op_hueco = lead_con_gate()
-    # Su foto antes.
-    foto = foto_op(op_hueco)
-    # La petición, a la hora de op_va.
-    r = decidir(visita_acordada(op_hueco, LUNES, "08:30"))
-    # El detalle del 409, para enseñarlo y mirar su lista.
-    d = cuerpo(r).get("detail") if r.status_code == 409 else {}
-    # Se enseña.
-    print(f"      <- {r.status_code} {d}")
-    # 409 hueco_ocupado y nada escrito.
-    verificar_409("visita_acordada sobre la visita de otro Gate (08:30-09:30)", r, op_hueco, foto, "hueco_ocupado")
-    # Con huecos_libres: una lista de horas sin las 08:30 y con las 09:45
-    # (08:30 + 60 + 15: el borde libre con el desplazamiento).
-    libres = (d or {}).get("huecos_libres")
-    # Una lista sin la hora de op_va y con la siguiente de la rejilla.
-    comprobar("   con huecos_libres (lista) sin las 08:30 y con las 09:45",
-              isinstance(libres, list) and "08:30" not in libres and "09:45" in libres,
-              f"({libres})")
-
-    # ------------------------------------------------------------------
-    print("\nCASO 10 - Ningún importe en ninguna respuesta de POST /gate-decisions")
-    # Las respuestas que tengan alguna clave de importe (la lista debe quedar vacía).
-    con_importe = [c for c in cuerpos_gate if claves_con_importe(c)]
-    # 0 respuestas con importes; si las hubiera, se enseñan las dos primeras.
-    comprobar(f"0 claves 'importe' en {len(cuerpos_gate)} respuestas (éxitos y errores)", not con_importe,
-              f"({con_importe[:2]})")
-
-    # ------------------------------------------------------------------
-    print("\nCASO 11 - Coherencia entre el código HTTP y creado")
-    # Los pares que no cumplen ni '201 con True' ni '200 con False'.
-    incoherentes = [p for p in pares_exito if not ((p[0] == 201 and p[1] is True) or (p[0] == 200 and p[1] is False))]
-    # Cuántas respuestas de éxito se han revisado, y cuántas de cada código.
-    print(f"      respuestas de éxito revisadas: {len(pares_exito)} "
-          f"({sum(1 for p in pares_exito if p[0] == 201)} con 201, {sum(1 for p in pares_exito if p[0] == 200)} con 200)")
-    # Ninguna incoherente.
-    comprobar("201 <-> creado=true y 200 <-> creado=false en TODAS las respuestas de éxito",
-              not incoherentes, f"(incoherentes: {incoherentes})")
-
-# finally: se ejecuta SIEMPRE, haya ido bien o mal el try.
+    print("\nCASO 3 - Ningún 500")
+    comprobar(f"ninguna respuesta 500 ({len(codigos)} peticiones)", 500 not in codigos, f"({codigos})")
+# finally: se ejecuta SIEMPRE, haya ido bien o mal lo de arriba.
 finally:
-    # Apagado ordenado del servidor propio (el hilo de este proceso).
+    # Se pide al servidor que termine, y se espera a su hilo como mucho 15 s.
     servidor.should_exit = True
-    # Espera a que el hilo termine, como mucho 15 s.
     hilo.join(timeout=15)
 
-    # Logs de errores 500 de /gate-decisions escritos DURANTE esta prueba.
-    # No llevan marca propia (entity_type 'sistema', entity_id 0): se
-    # buscan por id > id_base y por la ruta, y se borran por id EXACTO solo
-    # si son tantos como 500 ha recibido este script.
-    n_500 = codigos_gate.count(500)
-    # Logs del manejador global con id posterior a la foto y de esta ruta.
-    cur.execute(
-        "SELECT id, detalle->>'tipo' FROM logs WHERE id > %s AND accion = 'error_no_controlado' "
-        "AND detalle->>'ruta' = '/gate-decisions' ORDER BY id;",
-        (FOTO["logs"][0],),
-    )
-    # Todas las filas: (id, tipo de error).
-    logs_500 = cur.fetchall()
-    # commit: cierra la transacción de lectura.
-    cn.commit()
-    # Se enseñan en la salida.
-    print(f"\n  Respuestas 500 de /gate-decisions: {n_500}; logs error_no_controlado de esa ruta: {logs_500}")
-    # Tantos logs como respuestas 500.
-    comprobar("los logs de 500 de /gate-decisions son exactamente los esperados", len(logs_500) == n_500,
-              f"({len(logs_500)} logs, {n_500} respuestas 500)")
-    # Solo si coinciden (y hay alguno), se borran por sus ids exactos.
-    if logs_500 and len(logs_500) == n_500:
-        ejecutar("DELETE FROM logs WHERE id = ANY(%s);", ([f[0] for f in logs_500],))
-        # Y se enseñan los ids borrados.
-        print(f"  Borrados por id exacto: {[f[0] for f in logs_500]}")
-
-    # Limpieza de lo propio y comprobación de que no queda nada.
-    limpiar()
-    # Clientes de prueba que queden (deben ser 0).
-    restos = consultar(f"SELECT count(*) FROM clientes WHERE {PROPIO['clientes']};", {"patron": PATRON_EMAIL})[0]
-    # Se enseña el recuento.
-    print(f"\n  Limpieza: clientes de prueba restantes = {restos}")
-    # Comprobación de la limpieza.
-    comprobar("no queda ningún dato de prueba", restos == 0)
-
-    # Título.
-    print("\nNO TOCA NADA AJENO (mismo id_base que al empezar)")
-    # Recuento de lo ajeno con los mismos id_base.
-    despues = recontar_ajeno(FOTO)
-    # Para cada tabla: lo de antes contra lo de ahora.
-    for tabla, (id_base, antes) in FOTO.items():
-        antiguas, nuevas = despues[tabla]
-        # Las antiguas no pueden haber bajado; las nuevas se enseñan solo como información.
-        comprobar(f"{tabla}: ajenas con id <= {id_base}: {antes} -> {antiguas}", antiguas == antes,
-                  f"(ajenas NUEVAS durante la prueba, solo información: {nuevas})")
-    # Se cierra la conexión propia.
-    cn.close()
-
-# Resumen final y código de salida: 1 si algo falló (para la suite).
+# Resumen y código de salida (1 si algo falló, para la suite).
 total = ok + len(fallos)
 # Línea de separación y resultado: correctas / total.
 print("\n" + "=" * 78)
 print(f"RESULTADO: {ok}/{total} correctas")
 print("=" * 78)
-# Si hubo algún fallo...
+# Si hubo algún fallo, se imprime la lista y el script termina con código 1.
 if fallos:
-    # ...se imprime la lista...
     print("FALLOS:")
-    # (un bucle for: repite la línea de debajo para cada fallo)
+    # Un fallo por línea.
     for f in fallos:
         print(f"  - {f}")
-    # ...y el script termina con código 1, que la suite interpreta como FALLO.
     sys.exit(1)
