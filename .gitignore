@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+
+# Volcado de "antes" de D39.9 (lo escribe check_datos_d39_9_incluye_tipico.py):
+# lleva la huella de cada precio_m2, que con dos decimales se adivina probando.
+# El repositorio es público: no se sube; solo su SHA-256 va en el commit.
+docs/datos/D39_9_tarifas_antes.json
