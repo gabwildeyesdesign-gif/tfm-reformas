@@ -1,0 +1,74 @@
+[
+  {
+    "tipo_reforma": "bano",
+    "nivel_acabados": "basico",
+    "incluye_tipico_anterior": "Fontanería, electricidad, alicatado, sanitarios básicos",
+    "incluye_tipico_nuevo": "Retirada del baño actual y desescombro. Renovación de la fontanería y la electricidad del baño. Alicatado de paredes y suelo nuevos de gama básica. Se cambia todo: plato de ducha o bañera, inodoro, lavabo con mueble de baño y grifería, de gama básica. Permite redistribuir los elementos dentro del baño, sin tirar ni mover tabiques."
+  },
+  {
+    "tipo_reforma": "bano",
+    "nivel_acabados": "medio",
+    "incluye_tipico_anterior": "Fontanería, electricidad, alicatado, sanitarios y mobiliario calidad media",
+    "incluye_tipico_nuevo": "Retirada del baño actual y desescombro. Renovación de la fontanería y la electricidad del baño. Alicatado de paredes y suelo nuevos de calidad media. Se cambia todo: plato de ducha o bañera, inodoro, lavabo con mueble de baño y grifería, de calidad media. Permite redistribuir los elementos dentro del baño, sin tirar ni mover tabiques."
+  },
+  {
+    "tipo_reforma": "bano",
+    "nivel_acabados": "alto",
+    "incluye_tipico_anterior": "Fontanería, electricidad, alicatado, sanitarios y mobiliario gama alta",
+    "incluye_tipico_nuevo": "Retirada del baño actual y desescombro. Renovación de la fontanería y la electricidad del baño. Revestimientos de paredes y suelo nuevos de gama alta. Se cambia todo: plato de ducha o bañera, inodoro, lavabo con mueble de baño y grifería, de gama alta. Permite redistribuir los elementos dentro del baño, sin tirar ni mover tabiques."
+  },
+  {
+    "tipo_reforma": "cocina",
+    "nivel_acabados": "basico",
+    "incluye_tipico_anterior": "Fontanería, electricidad, mobiliario y encimera básicos, electrodomésticos gama básica",
+    "incluye_tipico_nuevo": "Retirada de la cocina actual y desescombro. Renovación de la fontanería y la electricidad de la cocina. Alicatado de paredes y suelo nuevos de gama básica. Se cambia todo: muebles altos y bajos, encimera, fregadero y grifería, de gama básica. Montaje y conexión de tus electrodomésticos; los aparatos no están incluidos. Permite redistribuir los elementos dentro de la cocina, sin tirar ni mover tabiques."
+  },
+  {
+    "tipo_reforma": "cocina",
+    "nivel_acabados": "medio",
+    "incluye_tipico_anterior": "Fontanería, electricidad, mobiliario y encimera calidad media, electrodomésticos gama media",
+    "incluye_tipico_nuevo": "Retirada de la cocina actual y desescombro. Renovación de la fontanería y la electricidad de la cocina. Alicatado de paredes y suelo nuevos de calidad media. Se cambia todo: muebles altos y bajos, encimera, fregadero y grifería, de calidad media. Montaje y conexión de tus electrodomésticos; los aparatos no están incluidos. Permite redistribuir los elementos dentro de la cocina, sin tirar ni mover tabiques."
+  },
+  {
+    "tipo_reforma": "cocina",
+    "nivel_acabados": "alto",
+    "incluye_tipico_anterior": "Fontanería, electricidad, mobiliario y encimera gama alta, electrodomésticos premium",
+    "incluye_tipico_nuevo": "Retirada de la cocina actual y desescombro. Renovación de la fontanería y la electricidad de la cocina. Revestimientos de paredes y suelo nuevos de gama alta. Se cambia todo: muebles altos y bajos, encimera, fregadero y grifería, de gama alta. Incluye electrodomésticos de gama alta, integrados en el mobiliario. Permite redistribuir los elementos dentro de la cocina, sin tirar ni mover tabiques."
+  },
+  {
+    "tipo_reforma": "integral_vivienda",
+    "nivel_acabados": "basico",
+    "incluye_tipico_anterior": "Renovación instalaciones, suelos, cocina y baño básicos, pintura",
+    "incluye_tipico_nuevo": "Retirada y desescombro de lo que se renueva. Renovación de la electricidad y la fontanería de la vivienda. Suelos nuevos y pintura de paredes y techos. Cocina y baño completos de gama básica. Se mantienen las puertas y la carpintería interior existentes. Los electrodomésticos no están incluidos."
+  },
+  {
+    "tipo_reforma": "integral_vivienda",
+    "nivel_acabados": "medio",
+    "incluye_tipico_anterior": "Renovación instalaciones, suelos, cocina y baño calidad media, pintura, carpintería",
+    "incluye_tipico_nuevo": "Retirada y desescombro de lo que se renueva. Renovación de la electricidad y la fontanería de la vivienda. Suelos nuevos y pintura de paredes y techos. Cocina y baño completos de calidad media. Puertas interiores nuevas de calidad media. Los electrodomésticos no están incluidos."
+  },
+  {
+    "tipo_reforma": "integral_vivienda",
+    "nivel_acabados": "alto",
+    "incluye_tipico_anterior": "Renovación instalaciones, suelos, cocina y baño gama alta, carpintería y diseño personalizado",
+    "incluye_tipico_nuevo": "Retirada y desescombro de lo que se renueva. Renovación de la electricidad y la fontanería de la vivienda. Suelos de gama alta y pintura de paredes y techos. Cocina y baño completos de gama alta, con electrodomésticos de gama alta incluidos. Carpintería interior a medida y diseño personalizado de los espacios."
+  },
+  {
+    "tipo_reforma": "parcial_acabados",
+    "nivel_acabados": "basico",
+    "incluye_tipico_anterior": "Pintura, suelo básico, sin instalaciones",
+    "incluye_tipico_nuevo": "Pintura de paredes y techos. Suelo nuevo de gama básica. Se mantienen las puertas existentes. No incluye instalaciones: si necesitas renovar la electricidad o la fontanería, el técnico lo valora aparte en la visita."
+  },
+  {
+    "tipo_reforma": "parcial_acabados",
+    "nivel_acabados": "medio",
+    "incluye_tipico_anterior": "Pintura, suelo calidad media, carpintería interior, sin instalaciones",
+    "incluye_tipico_nuevo": "Pintura de paredes y techos. Suelo nuevo de calidad media, por ejemplo laminado de alta resistencia o gres. Puertas interiores nuevas de calidad media. No incluye instalaciones: si necesitas renovar la electricidad o la fontanería, el técnico lo valora aparte en la visita."
+  },
+  {
+    "tipo_reforma": "parcial_acabados",
+    "nivel_acabados": "alto",
+    "incluye_tipico_anterior": "Pintura, suelo calidad alta, carpintería interior, sin instalaciones",
+    "incluye_tipico_nuevo": "Pintura de paredes y techos. Suelo nuevo de gama alta, por ejemplo madera natural o porcelánico de gran formato. Puertas interiores y frentes de armario de gama alta. No incluye instalaciones: si necesitas renovar la electricidad o la fontanería, el técnico lo valora aparte en la visita."
+  }
+]
