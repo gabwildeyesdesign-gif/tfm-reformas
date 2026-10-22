@@ -768,6 +768,10 @@ SOLO REST.
 > U11 repetido por un Modern Standby de 2 s); regresión de los 17 scripts que
 > crean visitas 17/17; suite 57/57 en una pasada válida. Pendiente solo el
 > veredicto del tutor y el merge, que confirma Gabi.)
+> (Nota 2026-10-22, rama docs/n8n-export-bloque4, pendiente de merge: n8n/
+> está al día con los emails al cliente del bloque 4 (chat, formulario de
+> llamadas, WF3 y WF7_email_cliente, nuevo), exportados tras publicar y
+> saneados con la convención de n8n/README.md. Solo documentación.)
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,

@@ -1,0 +1,472 @@
+{
+  "name": "WF7_email_cliente",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "oportunidad_id",
+              "type": "number"
+            },
+            {
+              "name": "tipo"
+            },
+            {
+              "name": "mensaje_cliente"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -704,
+        -32
+      ],
+      "id": "77b017f9-aceb-4f93-ac5a-58a5725c18a6",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "endpointUrl": "http://host.docker.internal:8000/mcp/",
+        "authentication": "bearerAuth",
+        "tool": {
+          "__rl": true,
+          "value": "get_business_rules",
+          "mode": "list",
+          "cachedResultName": "get_business_rules"
+        },
+        "inputMode": "json",
+        "jsonInput": "{}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        -480,
+        -32
+      ],
+      "id": "4588b064-f32c-4b31-9afb-bef75b0f1489",
+      "name": "leer_reglas",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "RQ0tlIBZIS29yo8Q",
+          "name": "Bearer Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/oportunidades/{{ $('When Executed by Another Workflow').first().json.oportunidad_id }}/ficha",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -272,
+        -32
+      ],
+      "id": "604626b8-2feb-4aca-a3b1-77cb711e3dc9",
+      "name": "leer_ficha",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ---------------------------------------------------------------------------\n// WF7 · Construir el email AL CLIENTE (D39): presupuesto, visita confirmada o\n// recordatorio. Plantilla fija: ningún LLM toca este texto, la cifra ni la\n// fecha (D39.3, Adenda 1.1a). Todo dato variable pasa por esc() (G4).\n// Entrada ($json): la respuesta COMPLETA de GET /oportunidades/{id}/ficha,\n//   { statusCode, headers, body }, o, sin conexión, un dato SIN statusCode\n//   (llega por la salida de error de leer_ficha).\n// Lee además: el disparador (oportunidad_id, tipo, mensaje_cliente) y\n//   leer_reglas (get_business_rules por MCP: \"qué suele incluir\").\n// Salida: { enviar, para, asunto, html, motivo, aviso_tecnico,\n//           mensaje_tecnico, oportunidad_id, tipo }\n// Mode: Run Once for Each Item.\n// ---------------------------------------------------------------------------\n\n// ---- 1. Datos de partida ----------------------------------------------------\nconst entrada = $('When Executed by Another Workflow').first().json; // lo que pidió quien llama\nconst tipo = entrada.tipo;                                   // presupuesto | visita_confirmada | recordatorio\nconst op = entrada.oportunidad_id;                           // número de oportunidad\nconst mensajeCliente = String(entrada.mensaje_cliente ?? '').trim(); // texto opcional del formulario (D39.4)\nconst estado = $json.statusCode;                             // undefined si no hubo conexión\nconst f = $json.body ?? {};                                  // la ficha (o vacío)\n\n// ---- 2. Datos fijos de la empresa (D39.6) ------------------------------------\nconst EMPRESA = 'Reformas Integrales Amedida';               // nombre comercial\nconst TELEFONO = '950 000 000';                              // teléfono de contacto (ficticio)\nconst EMAIL_EMPRESA = 'admin@example.com';      // email de administración (se sanea al exportar)\nconst DIRECCION = 'Calle de la Reforma, 12 · 04001 Almería'; // dirección postal ficticia\n\n// ---- 3. Colores (los mismos que WF2 y la ficha) ------------------------------\nconst AZUL = '#0B3C5D';            // cabecera y títulos\nconst TURQUESA = '#1F8A8A';        // acentos y franjas\nconst TURQUESA_CLARO = '#E3F2F1';  // fondo de las cajas destacadas\nconst FONDO = '#EEF3F6';           // gris azulado alrededor de la tarjeta\nconst TEXTO = '#1F2933';           // texto principal\nconst SUAVE = '#5B6B79';           // texto secundario\n\n// ---- 4. Escapar texto antes de meterlo en HTML (G4) -------------------------\n// Nombre, mensaje y \"qué incluye\" vienen de personas o de la base de datos:\n// esc() cambia los 5 caracteres especiales de HTML por su forma inofensiva.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\n// ---- 5. Salida \"no enviar\" (G3, G5) ------------------------------------------\n// tecnico = true -> el flujo avisa a WF4; false -> se calla (no es un fallo).\n// El mensaje técnico NUNCA lleva datos del cliente.\nfunction noEnviar(motivo, tecnico, mensajeTecnico) {\n  return { json: { enviar: false, motivo, aviso_tecnico: tecnico,\n                   mensaje_tecnico: mensajeTecnico, oportunidad_id: op, tipo } };\n}\n\n// ---- 6. Comprobaciones antes de escribir nada --------------------------------\n// Tipo desconocido: error de quien llama (un flujo mal configurado).\nif (!['presupuesto', 'visita_confirmada', 'recordatorio'].includes(tipo)) {\n  return noEnviar('tipo_desconocido', true, `WF7 llamado con un tipo no previsto: ${tipo}`);\n}\n// Sin código HTTP: no hubo conexión con el backend.\nif (estado === undefined) {\n  return noEnviar('sin_conexion', true, `Sin conexión con el backend al leer la ficha (email ${tipo})`);\n}\n// Cualquier respuesta distinta de 200 es técnica (un 404 aquí es un id mal pasado).\nif (estado !== 200) {\n  return noEnviar('ficha_no_leida', true, `GET /ficha respondió ${estado} (email ${tipo})`);\n}\n// Lead antiguo sin contacto o sin email: no se envía y NO es un fallo (G3).\nconst c = f.contacto ?? {};\nif (c.origen !== 'solicitud' || !c.email) {\n  return noEnviar('sin_contacto', false, '');\n}\n\n// ---- 7. Formatos españoles (solo para MOSTRAR) --------------------------------\nconst eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }); // igual que el chat\nconst num = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 });            // \"12\" o \"8,5\"\n// Fecha larga en hora de Madrid: \"martes, 27 de octubre de 2026\".\nfunction diaLargo(t) {\n  return new Date(t).toLocaleDateString('es-ES', {\n    timeZone: 'Europe/Madrid', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });\n}\n// Hora en hora de Madrid: \"10:00\".\nfunction hora(t) {\n  return new Date(t).toLocaleTimeString('es-ES', {\n    timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit' });\n}\n// Fecha corta para el asunto: \"27/10\".\nfunction diaCorto(t) {\n  return new Date(t).toLocaleDateString('es-ES', {\n    timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit' });\n}\n\n// ---- 8. Diccionarios: códigos del backend -> texto para el cliente ----------\nconst TIPOS = { bano: 'baño', cocina: 'cocina', integral_vivienda: 'reforma integral de la vivienda',\n  parcial_acabados: 'trabajos generales (pintura, electricidad o fontanería)' };\nconst ACABADOS = { basico: 'Básico', medio: 'Medio', alto: 'Alto' };\nconst r = f.reforma ?? {};                                   // tipo, m2, acabados, cambios\nconst tipoTexto = TIPOS[r.tipo_reforma] ?? 'reforma';         // si falta, una palabra neutra\n// Solo el primer nombre en el saludo: menos datos personales en pantalla.\nconst nombre = String(c.nombre ?? '').trim().split(/\\s+/)[0] || '';\n\n// ---- 9. Piezas de HTML reutilizables ----------------------------------------\n// Fila \"etiqueta | valor\": el VALOR siempre pasa por esc().\nfunction fila(etiqueta, valor) {\n  return `<tr><td style=\"padding:6px 0;width:42%;color:${SUAVE};font-size:13px;vertical-align:top;\">${etiqueta}</td>` +\n         `<td style=\"padding:6px 0;color:${TEXTO};font-size:14px;font-weight:bold;\">${esc(valor)}</td></tr>`;\n}\n// Sección con título turquesa y contenido ya construido.\nfunction seccion(titulo, contenido) {\n  return `<tr><td style=\"padding:18px 32px 4px;\">` +\n    `<div style=\"font-size:12px;letter-spacing:1px;text-transform:uppercase;color:${TURQUESA};font-weight:bold;` +\n    `border-bottom:2px solid ${TURQUESA_CLARO};padding-bottom:6px;margin-bottom:6px;\">${titulo}</div>${contenido}</td></tr>`;\n}\n// Párrafo normal (el texto ya debe venir escapado si es variable).\nfunction parrafo(html) {\n  return `<p style=\"font-size:14px;line-height:1.55;margin:8px 0;color:${TEXTO};\">${html}</p>`;\n}\n// Caja destacada (cifra o cita): título pequeño y texto grande.\nfunction caja(titulo, grande) {\n  return `<tr><td style=\"padding:16px 32px 0;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" ` +\n    `style=\"background:${TURQUESA_CLARO};border-left:4px solid ${TURQUESA};border-radius:6px;\"><tr><td style=\"padding:14px 18px;\">` +\n    `<div style=\"font-size:12px;color:${SUAVE};\">${titulo}</div>` +\n    `<div style=\"font-size:22px;font-weight:bold;color:${AZUL};margin-top:4px;\">${grande}</div></td></tr></table></td></tr>`;\n}\n// Email completo: tarjeta blanca de 600 px, cabecera azul, contenido y pie con\n// los datos de la empresa (D39.6) y por qué recibe el email.\nfunction email(titulo, cuerpo, motivoPie) {\n  return `<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"UTF-8\"></head>` +\n    `<body style=\"margin:0;padding:0;background:${FONDO};\">` +\n    `<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:${FONDO};padding:24px 0;\"><tr><td align=\"center\">` +\n    `<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;width:100%;background:#FFFFFF;` +\n    `border-radius:8px;font-family:Arial,Helvetica,sans-serif;color:${TEXTO};\">` +\n    `<tr><td style=\"background:${AZUL};padding:20px 32px;border-radius:8px 8px 0 0;color:#FFFFFF;font-size:18px;font-weight:bold;\">${EMPRESA}</td></tr>` +\n    `<tr><td style=\"height:4px;line-height:4px;font-size:0;background:${TURQUESA};\">&nbsp;</td></tr>` +\n    `<tr><td style=\"padding:24px 32px 0;\"><div style=\"font-size:20px;font-weight:bold;color:${AZUL};\">${titulo}</div></td></tr>` +\n    cuerpo +\n    `<tr><td style=\"padding:24px 32px;\"><div style=\"border-top:1px solid #E5E9ED;padding-top:12px;font-size:12px;line-height:1.5;color:${SUAVE};\">` +\n    `${EMPRESA} · ${DIRECCION}<br>Tel. ${TELEFONO} · ${EMAIL_EMPRESA}<br>${motivoPie}</div></td></tr>` +\n    `</table></td></tr></table></body></html>`;\n}\n// Saludo con el primer nombre (escapado) o sin él.\nconst saludo = nombre ? `Hola, ${esc(nombre)}:` : 'Hola:';\n\n// ---- 10. Email 1: presupuesto (solo sin Gate, G1) ----------------------------\nif (tipo === 'presupuesto') {\n  const p = f.presupuesto;                                   // null si no hay presupuesto\n  if (!p) {                                                  // se llama DESPUÉS de calcular: falta = fallo\n    return noEnviar('sin_presupuesto', true, 'WF7 presupuesto llamado sin presupuesto calculado');\n  }\n  if (p.requiere_aprobacion !== false) {                     // G1: con Gate NUNCA cifra (D18.5.1)\n    return noEnviar('con_gate', true, 'WF7 presupuesto llamado para un caso con Gate: NO se envía');\n  }\n  // \"Qué suele incluir\": la fila de get_business_rules de este tipo y nivel.\n  // El MCP Client entrega la respuesta en content[0].text, como objeto o como\n  // texto JSON (comprobado en el chat, D17.1): se aceptan las dos formas.\n  let incluye = null;\n  try {\n    const bruto = $('leer_reglas').first().json.content?.[0]?.text;      // respuesta de la tool\n    const reglas = typeof bruto === 'string' ? JSON.parse(bruto) : bruto; // texto -> objeto\n    const filaReglas = (reglas?.incluye_tipico ?? []).find(\n      (x) => x.tipo_reforma === r.tipo_reforma && x.nivel_acabados === r.nivel_acabados);\n    incluye = filaReglas?.incluye_tipico ?? null;                         // null si no hay fila\n  } catch (e) {\n    incluye = null;                         // sin reglas: el email sale sin esa sección\n  }\n  const cuerpo =\n    `<tr><td style=\"padding:8px 32px 0;\">${parrafo(saludo)}` +\n    parrafo('Gracias por contarnos tu proyecto. Esta es la estimación orientativa que te mostramos en el chat.') +\n    `</td></tr>` +\n    caja('Estimación orientativa (IVA incluido)',\n         `${esc(eur.format(Number(p.importe_min_con_iva)))} – ${esc(eur.format(Number(p.importe_max_con_iva)))}`) +\n    seccion('Lo que nos contaste', `<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">` +\n      fila('Tipo de reforma', tipoTexto.charAt(0).toUpperCase() + tipoTexto.slice(1)) +\n      fila('Superficie', `${num.format(Number(r.m2))} m²`) +\n      fila('Nivel de acabados', ACABADOS[r.nivel_acabados] ?? '—') + `</table>`) +\n    // D39.9: \"Qué incluye tu estimación\" = el alcance para el que se calculó la\n    // cifra (no \"suele incluir\", que no convence; tampoco una promesa cerrada:\n    // la frase siguiente dice que el técnico lo ajusta en la visita).\n    (incluye ? seccion('Qué incluye tu estimación',\n      parrafo(esc(incluye)) +\n      parrafo('En la visita, el técnico lo ajusta a lo que necesitas de verdad.')) : '') +\n    // D39.10: la visita contada como una ayuda, solo con lo que la empresa hace.\n    seccion('El siguiente paso: tu visita técnica gratuita', parrafo(\n      'El presupuesto definitivo se cierra tras una <b>visita técnica gratuita y sin compromiso</b>. ' +\n      `Un técnico verá tu ${esc(tipoTexto)} en persona, te enseñará nuestro catálogo de acabados y las combinaciones ` +\n      'posibles, y te explicará cada opción con detalle para que decidas con toda la información.') +\n      parrafo(`Para pedirla, responde a este email o llámanos al ${TELEFONO}.`));\n  return { json: { enviar: true, para: c.email, oportunidad_id: op, tipo, motivo: null,\n    aviso_tecnico: false, mensaje_tecnico: '',\n    asunto: `Tu estimación orientativa · ${tipoTexto.charAt(0).toUpperCase() + tipoTexto.slice(1)}`,\n    html: email('Tu estimación orientativa', cuerpo,\n      'Recibes este email porque pediste una estimación en nuestro chat.') } };\n}\n\n// ---- 11. Emails 2 y 3: visita confirmada y recordatorio ----------------------\n// La visita CONFIRMADA de la oportunidad (como mucho hay una activa).\nconst v = (f.visitas ?? []).find((x) => x.estado_visita === 'confirmada');\nif (!v) {                                    // se llama al confirmar: si no hay, es un fallo\n  return noEnviar('sin_visita_confirmada', true, `WF7 ${tipo} llamado sin visita confirmada`);\n}\nconst conGate = f.presupuesto?.requiere_aprobacion === true; // con Gate: nunca cifra (no se lee)\nconst cita = `${esc(diaLargo(v.fecha_visita))}, a las ${esc(hora(v.fecha_visita))}`;\n// Nota de administración (D39.4): solo en la confirmación y solo si se escribió.\nconst nota = (tipo === 'visita_confirmada' && mensajeCliente)\n  ? seccion('Nota de nuestro equipo', parrafo(esc(mensajeCliente).replace(/\\r?\\n/g, '<br>')))\n  : '';\n// D39.10: lo que el técnico hace en la visita, en viñetas (solo lo que la\n// empresa hace de verdad). Cambios estructurales: una viñeta más, solo si los hay.\nconst estructura = r.incluye_cambios_estructurales === true\n  ? '• Comprobará la viabilidad de los cambios en tabiques o estructura que nos comentaste.<br>'\n  : '';\nconst despues = conGate\n  ? 'Con todo lo que vea, preparará tu presupuesto.'\n  : 'Con todo lo que vea, preparará el presupuesto definitivo, que sustituye a la estimación orientativa.';\nconst vinetas =\n  `• Tomará medidas y revisará el estado actual de tu ${esc(tipoTexto)}.<br>` +\n  estructura +\n  '• Te enseñará nuestro catálogo de acabados y las combinaciones posibles.<br>' +\n  '• Te explicará cada opción con detalle y resolverá todas tus dudas, sin compromiso.';\nconst cuerpoVisita =\n  `<tr><td style=\"padding:8px 32px 0;\">${parrafo(saludo)}` +\n  parrafo(tipo === 'visita_confirmada'\n    ? 'Tu visita técnica gratuita está confirmada.'\n    : 'Te recordamos tu visita técnica gratuita.') + `</td></tr>` +\n  caja('Visita técnica', cita) +\n  nota +\n  seccion('Qué hará el técnico por ti', parrafo(\n    `Irá a la dirección que nos indicaste y te dedicará el tiempo que necesites:<br>${vinetas}`) +\n    parrafo(despues)) +\n  seccion('¿Necesitas cambiarla?', parrafo(\n    `Llámanos al ${TELEFONO} o responde a este email y buscamos otro hueco.`));\nconst asunto = tipo === 'visita_confirmada'\n  ? `Visita técnica confirmada · ${diaCorto(v.fecha_visita)} a las ${hora(v.fecha_visita)}`\n  : `Recordatorio de tu visita técnica · ${diaCorto(v.fecha_visita)} a las ${hora(v.fecha_visita)}`;\nreturn { json: { enviar: true, para: c.email, oportunidad_id: op, tipo, motivo: null,\n  aviso_tecnico: false, mensaje_tecnico: '', asunto,\n  html: email(tipo === 'visita_confirmada' ? 'Visita técnica confirmada' : 'Recordatorio de tu visita',\n    cuerpoVisita, 'Recibes este email porque tienes una visita técnica con nosotros.') } };\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        -32
+      ],
+      "id": "45150193-b9df-4615-931b-afbeae5fb717",
+      "name": "construir_email_cliente"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "631fd322-e9d4-4def-8b28-8ef4418fffc3",
+              "leftValue": "={{ $json.enviar }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        208,
+        -32
+      ],
+      "id": "5a2037ce-7ca8-4d37-a5c8-874ecda9d88f",
+      "name": "hay_que_enviar"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.para }}",
+        "subject": "={{ $json.asunto }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Reformas Integrales Amedida",
+          "replyTo": "admin@example.com"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        416,
+        -128
+      ],
+      "id": "fef3728f-1a61-421c-b08b-6efb3fb7897d",
+      "name": "enviar_email_cliente",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "DZcynb8ekco57lqW",
+          "name": "Gmail account 4"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "jVVsWYknS0DDKhaO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jVVsWYknS0DDKhaO",
+          "cachedResultName": "WF4_aviso_tecnico"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "flujo": "={{ $workflow.name }}",
+            "nodo": "enviar_email_cliente",
+            "mensaje_error": "={{ 'Gmail no envió el email al cliente (' + $('construir_email_cliente').first().json.tipo + '): ' + ($json.error?.message ?? 'sin mensaje') }}",
+            "oportunidad_id": "={{ $('When Executed by Another Workflow').first().json.oportunidad_id }}",
+            "ejecucion_id": "={{ $execution.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "flujo",
+              "displayName": "flujo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nodo",
+              "displayName": "nodo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "ejecucion_id",
+              "displayName": "ejecucion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        640,
+        -32
+      ],
+      "id": "16bcb3f8-b311-4450-b480-aaae58136aa2",
+      "name": "avisar_fallo_envio"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "317efeff-4945-4f04-8275-138560064fd9",
+              "leftValue": "={{ $json.aviso_tecnico }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        416,
+        96
+      ],
+      "id": "5c01f531-3f9b-48d0-b4a0-bdadcd0c9b71",
+      "name": "es_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "jVVsWYknS0DDKhaO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jVVsWYknS0DDKhaO",
+          "cachedResultName": "WF4_aviso_tecnico"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "flujo": "={{ $workflow.name }}",
+            "nodo": "construir_email_cliente",
+            "mensaje_error": "={{ $json.mensaje_tecnico }}",
+            "oportunidad_id": "={{ $('When Executed by Another Workflow').first().json.oportunidad_id }}",
+            "ejecucion_id": "={{ $execution.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "flujo",
+              "displayName": "flujo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "nodo",
+              "displayName": "nodo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "ejecucion_id",
+              "displayName": "ejecucion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        640,
+        176
+      ],
+      "id": "dae7894b-d030-4ee2-a934-728e509e6778",
+      "name": "avisar_fallo_lectura"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "leer_reglas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_reglas": {
+      "main": [
+        [
+          {
+            "node": "leer_ficha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_ficha": {
+      "main": [
+        [
+          {
+            "node": "construir_email_cliente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "construir_email_cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "construir_email_cliente": {
+      "main": [
+        [
+          {
+            "node": "hay_que_enviar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hay_que_enviar": {
+      "main": [
+        [
+          {
+            "node": "enviar_email_cliente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "es_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviar_email_cliente": {
+      "main": [
+        [],
+        [
+          {
+            "node": "avisar_fallo_envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "es_aviso_tecnico": {
+      "main": [
+        [
+          {
+            "node": "avisar_fallo_lectura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "XyWcmtuXIy3yT4eY",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "id": "l8edafYQrjMMI7ci",
+  "tags": []
+}

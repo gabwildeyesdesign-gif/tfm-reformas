@@ -24,10 +24,10 @@
       "type": "n8n-nodes-base.formTrigger",
       "typeVersion": 2.5,
       "position": [
-        -3136,
-        1632
+        -1104,
+        7584
       ],
-      "id": "f94066e1-5aae-4d03-9ec0-e3ce5a7a9c9e",
+      "id": "34908acf-8429-441e-8952-267739d4864b",
       "name": "On form submission",
       "credentials": {
         "httpBasicAuth": {
@@ -44,10 +44,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -2688,
-        1376
+        -656,
+        7376
       ],
-      "id": "e19350f3-619f-421c-860e-865a9913e686",
+      "id": "39246a35-38f1-44b2-9180-b27789769019",
       "name": "preparar_ficha"
     },
     {
@@ -78,10 +78,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        -2464,
-        1376
+        -432,
+        7376
       ],
-      "id": "854e0d0d-da61-4657-abc7-c3aa9f86cd68",
+      "id": "a1b11b75-a50e-4fbd-a910-8d77f84f6144",
       "name": "caso_registrable"
     },
     {
@@ -117,10 +117,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -2016,
-        624
+        16,
+        6720
       ],
-      "id": "c05c026e-ebff-4830-9e1b-7ea4e31c5f18",
+      "id": "d0f7437f-5948-4022-9d47-541a23fc40d3",
       "name": "pagina_resultado"
     },
     {
@@ -133,10 +133,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -896,
-        1392
+        3824,
+        5568
       ],
-      "id": "efcd644b-bf3c-4a6d-9a49-566bb59319e8",
+      "id": "81f2fecf-d080-44d5-9182-8fc6471677f2",
       "name": "sin_registro"
     },
     {
@@ -149,10 +149,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -2688,
-        1568
+        2480,
+        5760
       ],
-      "id": "8f2ca335-5140-4179-87aa-3187882d6d44",
+      "id": "84223b76-49c7-4324-bf8f-aa7fa35de187",
       "name": "sistema_no_disponible"
     },
     {
@@ -215,10 +215,10 @@
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
       "position": [
-        -1792,
-        624
+        240,
+        6720
       ],
-      "id": "770932ba-f6b3-45d3-9a96-47133657c836",
+      "id": "bd3dbc65-c4ff-4a7d-bd66-0d3c60fb4d97",
       "name": "segun_decision"
     },
     {
@@ -273,24 +273,24 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -1568,
-        720
+        3152,
+        6816
       ],
-      "id": "5a517639-7867-4981-a29f-3997097c53db",
+      "id": "fb13b38e-cc56-4f15-ba81-cba2656bee57",
       "name": "pagina_descarte"
     },
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar el resultado (tras la página del resultado). F2, 2026-10-12.\n// D32, 2026-10-14: en \"Visita acordada\" y \"Otra hora\", la fecha sale de la página\n//   \"Día\" (vía preparar_pagina_hora) y la hora de la página \"Hora\". Las lecturas\n//   de otros nodos usan .first() (= su ÚLTIMA ejecución): en el bucle de la agenda\n//   este nodo puede ejecutarse más de una vez y .item no sirve en bucles.\n// Entrada ($json): lo rellenado en la última página (pagina_hora, pagina_descarte,\n//   pagina_confirmar_hora o pagina_cancela).\n// Salida: { valido, mensaje, cuerpo, resumen_html }\n//   valido       -> true si todo cuadra; false = no se envía nada\n//   cuerpo       -> el JSON EXACTO para POST /resultados-llamada (contrato, sección 3)\n//   resumen_html -> el resumen para la página de confirmación\n// Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Lo que dejó preparar_ficha: número, tipo de llamada, resultados admitidos y visita pedida.\nconst ficha = $('preparar_ficha').first().json;\nconst oportunidad_id = ficha.oportunidad_id;\n\n// Lee lo elegido en una página de resultado. Si esa página no se ha usado en\n// esta ejecución, n8n lanza un error: se atrapa y se devuelve undefined.\nfunction eleccionDe(nodo) {\n  try { return $(nodo).first().json.decision; } catch (e) { return undefined; }\n}\n// Gate y seguimiento usan pagina_resultado; la confirmación, pagina_resultado_confirmacion.\nconst eleccion = eleccionDe('pagina_resultado') ?? eleccionDe('pagina_resultado_confirmacion');\n\n// Texto del desplegable -> resultado que admite el backend.\nconst RESULTADOS = {\n  'Visita acordada': 'visita_acordada',\n  'Descartar': 'descartar',\n  'Confirmar la hora pedida': 'confirmar_hora',\n  'Otra hora': 'otra_hora',\n  'El cliente cancela': 'cliente_cancela',\n};\n// Texto del desplegable -> motivo que admite el backend.\nconst MOTIVOS = {\n  'Precio: le parece caro': 'precio',\n  'Plazo: no le encajan los tiempos': 'plazo',\n  'No contesta (tras varios intentos)': 'no_contesta',\n  'Sigue sin decidirse (última llamada)': 'sin_decision',\n  'Proyecto no viable técnicamente': 'proyecto_no_viable',\n  'Otro (explícalo en el informe)': 'otro',\n};\n// Etiquetas para el resumen que verá el operador antes de confirmar.\nconst ETIQUETAS = {\n  visita_acordada: 'Visita acordada', descartar: 'DESCARTAR (definitivo)',\n  confirmar_hora: 'Confirmar la hora pedida', otra_hora: 'Otra hora (la pedida se cancela)',\n  cliente_cancela: 'EL CLIENTE CANCELA (definitivo)',\n};\nconst TIPOS_LLAMADA = { gate: 'Gate (aprobación manual)', seguimiento: 'Seguimiento del presupuesto', confirmacion_visita: 'Confirmación de visita pedida' };\n\n// Salida de error: así no se envía nada al backend.\nfunction invalido(mensaje) {\n  return { json: { valido: false, mensaje, cuerpo: null, resumen_html: '' } };\n}\n// Escapar texto antes de meterlo en HTML.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n// Una fila \"etiqueta: valor\" del resumen. El valor SIEMPRE pasa por esc().\nfunction fila(etiqueta, valor) {\n  // v2 (14/10): sin style (n8n lo elimina); el valor va en negrita.\n  return `<tr><td>${etiqueta}</td><td><strong>${esc(valor)}</strong></td></tr>`;\n}\n// \"2026-10-14\" + \"11:00\" -> \"miércoles 14/10/2026 a las 11:00\".\n// Date.UTC + getUTCDay: la zona horaria del servidor no puede mover el día.\nfunction fechaLegible(fecha, hora) {\n  const [a, m, d] = fecha.split('-');\n  const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];\n  const dia = DIAS[new Date(Date.UTC(Number(a), Number(m) - 1, Number(d))).getUTCDay()];\n  return `${dia} ${d}/${m}/${a} a las ${hora}`;\n}\n\n// ---- 1. Comprobaciones comunes ----------------------------------------------\nif (!oportunidad_id) return invalido('No se ha podido recuperar el número de oportunidad. Vuelve a abrir el formulario.');\n// Traducir lo elegido; si no está en el diccionario, mejor parar que adivinar.\nconst resultado = RESULTADOS[eleccion];\nif (!resultado) return invalido(`Resultado no reconocido: \"${eleccion}\". Avisa al responsable técnico.`);\n// Defensa: el resultado tiene que estar entre los que el backend dijo que admite esta llamada.\nif (!(ficha.resultados ?? []).includes(resultado)) {\n  return invalido(`\"${eleccion}\" no se admite en esta llamada. Vuelve a abrir el formulario.`);\n}\n// El informe, sin espacios sobrantes; el backend exige de 1 a 2.000 caracteres.\nconst informe = String($json.informe ?? '').trim();\nif (informe.length === 0) return invalido('El informe de la llamada está vacío.');\nif (informe.length > 2000) return invalido(`El informe tiene ${informe.length} caracteres; el máximo es 2.000.`);\n\n// ---- 2. El cuerpo según el resultado (tabla de la sección 3 del contrato) ---\nlet cuerpo;\nlet filas = fila('Llamada', TIPOS_LLAMADA[ficha.tipo_llamada] ?? ficha.tipo_llamada) +\n            fila('Resultado', ETIQUETAS[resultado]);\n\nif (resultado === 'visita_acordada' || resultado === 'otra_hora') {\n  // D32: la fecha, la del día elegido en esta vuelta (la guarda preparar_pagina_hora);\n  // la hora, el botón elegido en la página \"Hora\". Nadie las escribe a mano.\n  let fecha = '';\n  try { fecha = String($('preparar_pagina_hora').first().json.fecha ?? ''); } catch (e) { fecha = ''; }\n  const hora = String($json.hora ?? '');\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(fecha) || !/^\\d{2}:\\d{2}$/.test(hora)) {\n    return invalido('Falta la fecha o la hora de la visita.');\n  }\n  // \"Otra hora\" no puede ser la misma que pidió el cliente (el backend daría 422).\n  const vp = ficha.visita_pedida;\n  if (resultado === 'otra_hora' && vp && fecha === vp.fecha && hora === vp.hora) {\n    return invalido('Es la misma hora que pidió el cliente: vuelve a abrir el formulario y elige \"Confirmar la hora pedida\".');\n  }\n  cuerpo = { oportunidad_id, resultado, fecha, hora, informe };\n  filas += fila('Visita', fechaLegible(fecha, hora));\n} else if (resultado === 'confirmar_hora') {\n  // La hora PEDIDA, tal cual la dio la ficha (nadie la escribe a mano).\n  const vp = ficha.visita_pedida;\n  if (!vp) return invalido('No se encuentra la visita pedida. Vuelve a abrir el formulario.');\n  cuerpo = { oportunidad_id, resultado, fecha: vp.fecha, hora: vp.hora, informe };\n  filas += fila('Visita', fechaLegible(vp.fecha, vp.hora));\n} else {\n  // descartar o cliente_cancela: motivo OBLIGATORIO, sin fecha ni hora.\n  const motivo = MOTIVOS[$json.motivo];\n  if (!motivo) return invalido(`Motivo no reconocido: \"${$json.motivo}\". Avisa al responsable técnico.`);\n  // Quien cancela ha contestado y ha decidido: esos dos motivos no valen (D29.3).\n  if (resultado === 'cliente_cancela' && (motivo === 'no_contesta' || motivo === 'sin_decision')) {\n    return invalido('Ese motivo no vale cuando el cliente cancela. Elige otro.');\n  }\n  cuerpo = { oportunidad_id, resultado, motivo, informe };\n  filas += fila('Motivo', $json.motivo);\n}\n\n// ---- 3. El resumen para la página de confirmación ---------------------------\n// El informe, escapado y con sus saltos de línea convertidos en <br>.\nconst informeHtml = esc(informe).replace(/\\r?\\n/g, '<br>');\n// v2 (14/10): sin style (n8n lo elimina).\nconst resumen_html =\n  `<p><strong>Oportunidad ${esc(oportunidad_id)}</strong></p>` +   // el número, en negrita\n  `<table>${filas}` +                                               // las filas del resultado\n  `<tr><td>Informe</td><td>${informeHtml}</td></tr>` +              // el informe escrito\n  `</table>`;\n\n// Todo listo.\nreturn { json: { valido: true, mensaje: '', cuerpo, resumen_html } };\n"
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar el resultado (tras la página del resultado). F2, 2026-10-12.\n// D32, 2026-10-14: en \"Visita acordada\" y \"Otra hora\", la fecha sale de la página\n//   \"Día\" (vía preparar_pagina_hora) y la hora de la página \"Hora\". Las lecturas\n//   de otros nodos usan .first() (= su ÚLTIMA ejecución): en el bucle de la agenda\n//   este nodo puede ejecutarse más de una vez y .item no sirve en bucles.\n// Entrada ($json): lo rellenado en la última página (pagina_hora, pagina_descarte,\n//   pagina_confirmar_hora o pagina_cancela).\n// Salida: { valido, mensaje, cuerpo, resumen_html, mensaje_cliente }\n//   mensaje_cliente -> D39.4 (21/10): nota opcional para el email de WF7; '' sin visita\n//   valido       -> true si todo cuadra; false = no se envía nada\n//   cuerpo       -> el JSON EXACTO para POST /resultados-llamada (contrato, sección 3)\n//   resumen_html -> el resumen para la página de confirmación\n// Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Lo que dejó preparar_ficha: número, tipo de llamada, resultados admitidos y visita pedida.\nconst ficha = $('preparar_ficha').first().json;\nconst oportunidad_id = ficha.oportunidad_id;\n\n// Lee lo elegido en una página de resultado. Si esa página no se ha usado en\n// esta ejecución, n8n lanza un error: se atrapa y se devuelve undefined.\nfunction eleccionDe(nodo) {\n  try { return $(nodo).first().json.decision; } catch (e) { return undefined; }\n}\n// Gate y seguimiento usan pagina_resultado; la confirmación, pagina_resultado_confirmacion.\nconst eleccion = eleccionDe('pagina_resultado') ?? eleccionDe('pagina_resultado_confirmacion');\n\n// Texto del desplegable -> resultado que admite el backend.\nconst RESULTADOS = {\n  'Visita acordada': 'visita_acordada',\n  'Descartar': 'descartar',\n  'Confirmar la hora pedida': 'confirmar_hora',\n  'Otra hora': 'otra_hora',\n  'El cliente cancela': 'cliente_cancela',\n};\n// Texto del desplegable -> motivo que admite el backend.\nconst MOTIVOS = {\n  'Precio: le parece caro': 'precio',\n  'Plazo: no le encajan los tiempos': 'plazo',\n  'No contesta (tras varios intentos)': 'no_contesta',\n  'Sigue sin decidirse (última llamada)': 'sin_decision',\n  'Proyecto no viable técnicamente': 'proyecto_no_viable',\n  'Otro (explícalo en el informe)': 'otro',\n};\n// Etiquetas para el resumen que verá el operador antes de confirmar.\nconst ETIQUETAS = {\n  visita_acordada: 'Visita acordada', descartar: 'DESCARTAR (definitivo)',\n  confirmar_hora: 'Confirmar la hora pedida', otra_hora: 'Otra hora (la pedida se cancela)',\n  cliente_cancela: 'EL CLIENTE CANCELA (definitivo)',\n};\nconst TIPOS_LLAMADA = { gate: 'Gate (aprobación manual)', seguimiento: 'Seguimiento del presupuesto', confirmacion_visita: 'Confirmación de visita pedida' };\n\n// Salida de error: así no se envía nada al backend.\nfunction invalido(mensaje) {\n  return { json: { valido: false, mensaje, cuerpo: null, resumen_html: '' } };\n}\n// Escapar texto antes de meterlo en HTML.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n// Una fila \"etiqueta: valor\" del resumen. El valor SIEMPRE pasa por esc().\nfunction fila(etiqueta, valor) {\n  // v2 (14/10): sin style (n8n lo elimina); el valor va en negrita.\n  return `<tr><td>${etiqueta}</td><td><strong>${esc(valor)}</strong></td></tr>`;\n}\n// \"2026-10-14\" + \"11:00\" -> \"miércoles 14/10/2026 a las 11:00\".\n// Date.UTC + getUTCDay: la zona horaria del servidor no puede mover el día.\nfunction fechaLegible(fecha, hora) {\n  const [a, m, d] = fecha.split('-');\n  const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];\n  const dia = DIAS[new Date(Date.UTC(Number(a), Number(m) - 1, Number(d))).getUTCDay()];\n  return `${dia} ${d}/${m}/${a} a las ${hora}`;\n}\n\n// ---- 1. Comprobaciones comunes ----------------------------------------------\nif (!oportunidad_id) return invalido('No se ha podido recuperar el número de oportunidad. Vuelve a abrir el formulario.');\n// Traducir lo elegido; si no está en el diccionario, mejor parar que adivinar.\nconst resultado = RESULTADOS[eleccion];\nif (!resultado) return invalido(`Resultado no reconocido: \"${eleccion}\". Avisa al responsable técnico.`);\n// Defensa: el resultado tiene que estar entre los que el backend dijo que admite esta llamada.\nif (!(ficha.resultados ?? []).includes(resultado)) {\n  return invalido(`\"${eleccion}\" no se admite en esta llamada. Vuelve a abrir el formulario.`);\n}\n// El informe, sin espacios sobrantes; el backend exige de 1 a 2.000 caracteres.\nconst informe = String($json.informe ?? '').trim();\nif (informe.length === 0) return invalido('El informe de la llamada está vacío.');\nif (informe.length > 2000) return invalido(`El informe tiene ${informe.length} caracteres; el máximo es 2.000.`);\n// D39.4 (21/10): el mensaje OPCIONAL para el cliente. Solo existe en las páginas\n// \"Hora\" y \"Confirmar hora\"; en las demás llega vacío. Va al email (WF7), NUNCA al backend.\nconst mensaje_cliente = String($json.mensaje_cliente ?? '').trim();\n// Límite propio del formulario: un email, no una carta.\nif (mensaje_cliente.length > 500) {\n  return invalido(`El mensaje para el cliente tiene ${mensaje_cliente.length} caracteres; el máximo es 500.`);\n}\n\n// ---- 2. El cuerpo según el resultado (tabla de la sección 3 del contrato) ---\nlet cuerpo;\nlet filas = fila('Llamada', TIPOS_LLAMADA[ficha.tipo_llamada] ?? ficha.tipo_llamada) +\n            fila('Resultado', ETIQUETAS[resultado]);\n\nif (resultado === 'visita_acordada' || resultado === 'otra_hora') {\n  // D32: la fecha, la del día elegido en esta vuelta (la guarda preparar_pagina_hora);\n  // la hora, el botón elegido en la página \"Hora\". Nadie las escribe a mano.\n  let fecha = '';\n  try { fecha = String($('preparar_pagina_hora').first().json.fecha ?? ''); } catch (e) { fecha = ''; }\n  const hora = String($json.hora ?? '');\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(fecha) || !/^\\d{2}:\\d{2}$/.test(hora)) {\n    return invalido('Falta la fecha o la hora de la visita.');\n  }\n  // \"Otra hora\" no puede ser la misma que pidió el cliente (el backend daría 422).\n  const vp = ficha.visita_pedida;\n  if (resultado === 'otra_hora' && vp && fecha === vp.fecha && hora === vp.hora) {\n    return invalido('Es la misma hora que pidió el cliente: vuelve a abrir el formulario y elige \"Confirmar la hora pedida\".');\n  }\n  cuerpo = { oportunidad_id, resultado, fecha, hora, informe };\n  filas += fila('Visita', fechaLegible(fecha, hora));\n} else if (resultado === 'confirmar_hora') {\n  // La hora PEDIDA, tal cual la dio la ficha (nadie la escribe a mano).\n  const vp = ficha.visita_pedida;\n  if (!vp) return invalido('No se encuentra la visita pedida. Vuelve a abrir el formulario.');\n  cuerpo = { oportunidad_id, resultado, fecha: vp.fecha, hora: vp.hora, informe };\n  filas += fila('Visita', fechaLegible(vp.fecha, vp.hora));\n} else {\n  // descartar o cliente_cancela: motivo OBLIGATORIO, sin fecha ni hora.\n  const motivo = MOTIVOS[$json.motivo];\n  if (!motivo) return invalido(`Motivo no reconocido: \"${$json.motivo}\". Avisa al responsable técnico.`);\n  // Quien cancela ha contestado y ha decidido: esos dos motivos no valen (D29.3).\n  if (resultado === 'cliente_cancela' && (motivo === 'no_contesta' || motivo === 'sin_decision')) {\n    return invalido('Ese motivo no vale cuando el cliente cancela. Elige otro.');\n  }\n  cuerpo = { oportunidad_id, resultado, motivo, informe };\n  filas += fila('Motivo', $json.motivo);\n}\n\n// ---- 3. El resumen para la página de confirmación ---------------------------\n// El informe, escapado y con sus saltos de línea convertidos en <br>.\nconst informeHtml = esc(informe).replace(/\\r?\\n/g, '<br>');\n// v2 (14/10): sin style (n8n lo elimina).\n// D39.4 (21/10): ¿queda una visita confirmada? Solo entonces sale el email al cliente.\nconst conVisita = ['visita_acordada', 'confirmar_hora', 'otra_hora'].includes(resultado);\n// La fila del mensaje: solo con visita; el operador ve qué recibirá el cliente antes de registrar.\nconst filaMensaje = !conVisita ? '' :\n  `<tr><td>Mensaje para el cliente</td><td>${mensaje_cliente\n    ? esc(mensaje_cliente).replace(/\\r?\\n/g, '<br>')                // escapado, con sus saltos de línea\n    : 'Sin mensaje: el email saldrá sin nota'}</td></tr>`;          // vacío: se dice claramente\nconst resumen_html =\n  `<p><strong>Oportunidad ${esc(oportunidad_id)}</strong></p>` +   // el número, en negrita\n  `<table>${filas}` +                                               // las filas del resultado\n  `<tr><td>Informe</td><td>${informeHtml}</td></tr>` +              // el informe escrito\n  filaMensaje +                                                     // D39.4: el mensaje (solo con visita)\n  `</table>`;\n\n// Todo listo. mensaje_cliente va FUERA de cuerpo: el backend no lo recibe ni lo guarda (D39.4).\nreturn { json: { valido: true, mensaje: '', cuerpo, resumen_html, mensaje_cliente: conVisita ? mensaje_cliente : '' } };\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1344,
-        880
+        3376,
+        5280
       ],
-      "id": "7334c69b-f284-4a30-aec0-a7cad0a77709",
+      "id": "a19c345d-8976-463a-8bb3-85d7ca1a414f",
       "name": "preparar_decision"
     },
     {
@@ -321,10 +321,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        -1120,
-        880
+        3600,
+        5280
       ],
-      "id": "f3681bf0-96cf-4d23-98dc-4dd0f4d96394",
+      "id": "c9039ede-8bd8-4a4e-8f01-d32998c14545",
       "name": "decision_valida"
     },
     {
@@ -360,10 +360,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -896,
-        880
+        3824,
+        5248
       ],
-      "id": "59a1d9c2-cdb2-48bd-8f0f-b7485e3f546a",
+      "id": "9049d624-e6db-4373-b0f8-bee749eb33ba",
       "name": "pagina_confirmacion"
     },
     {
@@ -394,10 +394,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        -672,
-        880
+        4048,
+        5248
       ],
-      "id": "5493c781-2e69-404f-bc06-0906f2d27dd3",
+      "id": "a3875ca1-7386-4f84-bfa5-1dbf5efde75e",
       "name": "confirmado"
     },
     {
@@ -410,10 +410,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -448,
-        1296
+        4272,
+        5488
       ],
-      "id": "864cf05a-2922-45f4-a71e-7df5cea8011b",
+      "id": "c8f4c600-1041-49da-8f3e-96678c64bef4",
       "name": "registro_cancelado"
     },
     {
@@ -424,10 +424,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -224,
-        672
+        4496,
+        4960
       ],
-      "id": "932f5f39-284f-46b0-83ca-601d69420baa",
+      "id": "1ae6dc10-15cf-43dc-8245-8ca77f6915cc",
       "name": "traducir_resultado"
     },
     {
@@ -440,10 +440,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        1120,
-        624
+        5840,
+        4848
       ],
-      "id": "dd2e7b01-353a-4445-9096-89b1bcc33ae7",
+      "id": "aa837277-b9f2-467e-b5cb-7e91fc31db6f",
       "name": "pantalla_resultado_final"
     },
     {
@@ -456,10 +456,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -224,
-        864
+        4496,
+        5152
       ],
-      "id": "52d51ef6-8f48-4172-abbc-895da5ad69a3",
+      "id": "5d9e5692-ca2c-40b4-970e-57002de3674a",
       "name": "registro_incierto"
     },
     {
@@ -479,10 +479,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        -2912,
-        1632
+        -880,
+        7584
       ],
-      "id": "a2d38637-6815-4c75-ab93-8ee6a49ca0de",
+      "id": "67c8cee4-9656-44ac-bb38-3580e9ba9c59",
       "name": "leer_ficha",
       "credentials": {
         "httpHeaderAuth": {
@@ -513,10 +513,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        -448,
-        864
+        4272,
+        5152
       ],
-      "id": "7e74620b-2fde-474d-8130-4798302ae93c",
+      "id": "75bae57b-0865-4a95-b156-ba02938d8b3b",
       "name": "registrar_resultado",
       "credentials": {
         "httpHeaderAuth": {
@@ -586,10 +586,10 @@
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
       "position": [
-        -2240,
-        912
+        -208,
+        6848
       ],
-      "id": "1af3efb4-51a0-4a41-b57c-64da34afbb4a",
+      "id": "9a1d1733-6acc-444a-ba6b-5a9983d02e1e",
       "name": "segun_tipo_llamada"
     },
     {
@@ -628,10 +628,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -2016,
-        1040
+        16,
+        7056
       ],
-      "id": "ff160d07-e0ac-428e-adb2-7336461f1619",
+      "id": "22ac3273-8296-49d9-ac09-e05e8bf0c828",
       "name": "pagina_resultado_confirmacion"
     },
     {
@@ -719,10 +719,10 @@
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
       "position": [
-        -1792,
-        1024
+        240,
+        7040
       ],
-      "id": "cb02cc45-2ab7-4ee4-8aa2-3723fa008c1b",
+      "id": "71183898-8019-4bd0-80c7-7710a93a4c8a",
       "name": "segun_decision_confirmacion"
     },
     {
@@ -739,6 +739,12 @@
               "fieldName": "informe",
               "placeholder": "Qué se habló y qué se confirmó.",
               "requiredField": true
+            },
+            {
+              "fieldLabel": "Mensaje para el cliente (aparecerá en el email)",
+              "fieldType": "textarea",
+              "fieldName": "mensaje_cliente",
+              "placeholder": "Opcional. Por ejemplo, qué preparar para la visita o cómo acceder al edificio. Nada de valoraciones internas."
             }
           ]
         },
@@ -749,10 +755,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -1568,
-        912
+        3152,
+        7008
       ],
-      "id": "38fb60c6-a4f8-4ae1-9d6e-0a62b1d66aad",
+      "id": "1e7be4ac-7318-4f1a-bba0-7eaae714db1a",
       "name": "pagina_confirmar_hora"
     },
     {
@@ -801,10 +807,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -1568,
-        1296
+        3152,
+        7200
       ],
-      "id": "67e4899c-913d-4700-a81a-4b974a07be5f",
+      "id": "7792a984-51d7-416e-a200-22e7039dc05a",
       "name": "pagina_cancela"
     },
     {
@@ -814,10 +820,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        0,
-        1760
+        5840,
+        5888
       ],
-      "id": "0b93a126-b6dc-42ff-9dac-fcf001209b8d",
+      "id": "b4f70787-09d5-4a68-b407-d192e93ecc07",
       "name": "preparar_aviso_tecnico"
     },
     {
@@ -897,10 +903,10 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
       "position": [
-        224,
-        1760
+        6064,
+        5888
       ],
-      "id": "c002be73-e5c4-4110-ae86-a8eef48b7336",
+      "id": "7e19652c-068b-4fbd-bfed-5b719a324a2d",
       "name": "llamar_aviso_tecnico"
     },
     {
@@ -910,10 +916,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1568,
-        160
+        464,
+        6592
       ],
-      "id": "3f9ae3e7-5976-4d7c-9c47-80f0a4880e4f",
+      "id": "ec95a9f7-d320-45db-abff-d5970067ddce",
       "name": "entrar_agenda"
     },
     {
@@ -933,10 +939,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        -1344,
-        160
+        688,
+        6368
       ],
-      "id": "93005c33-6092-4383-9d2a-2f74525a2584",
+      "id": "2d179ca7-530f-4acd-8182-406e158b141f",
       "name": "leer_dias",
       "credentials": {
         "httpHeaderAuth": {
@@ -953,10 +959,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1120,
-        160
+        912,
+        6160
       ],
-      "id": "b0e2696c-06d0-4fb2-8be0-0ebbf6d1aecc",
+      "id": "e7d94c5a-aaac-4cc2-aed1-e697532f027d",
       "name": "preparar_pagina_dia"
     },
     {
@@ -987,10 +993,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        -896,
-        160
+        1136,
+        6160
       ],
-      "id": "6de5beb1-7156-4832-af4d-cc14a0049858",
+      "id": "36fa7436-be07-4c21-bafd-3ad1220fb04e",
       "name": "agenda_ok"
     },
     {
@@ -1004,10 +1010,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -672,
-        160
+        1360,
+        5936
       ],
-      "id": "8269fd20-944d-4197-b709-6583a82ac248",
+      "id": "62705cf7-492e-4ede-8509-932823388852",
       "name": "pagina_dia"
     },
     {
@@ -1017,10 +1023,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -448,
-        160
+        1584,
+        5936
       ],
-      "id": "e5c4f034-800f-4531-9d78-9c149c52a715",
+      "id": "52c2214d-c404-4176-823a-5589d392f23f",
       "name": "elegir_dia"
     },
     {
@@ -1109,10 +1115,10 @@
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
       "position": [
-        -224,
-        160
+        1808,
+        5920
       ],
-      "id": "44eb429e-24e2-4978-a20f-bd3ee6ca33dd",
+      "id": "98634bf8-09fc-427a-924f-135a45dcac2a",
       "name": "segun_dia"
     },
     {
@@ -1138,10 +1144,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        0,
-        0
+        2032,
+        5584
       ],
-      "id": "9fd3b101-09c5-4368-a03d-93f9af289be3",
+      "id": "9917e1bd-df65-4593-b9b6-688ea9379dd6",
       "name": "pagina_otra_fecha"
     },
     {
@@ -1161,10 +1167,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        -1568,
-        400
+        2256,
+        5696
       ],
-      "id": "74bc314b-7138-40aa-8c98-f21de3616d05",
+      "id": "6ff01066-3175-4996-81dc-201f79a08cac",
       "name": "leer_horas",
       "credentials": {
         "httpHeaderAuth": {
@@ -1176,15 +1182,15 @@
     },
     {
       "parameters": {
-        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar la página \"Hora\" (D32). 2026-10-14.\n// Entrada ($json): la respuesta COMPLETA de GET /huecos-libres?fecha=... (modo un día).\n// Se llama AL ABRIR la página: si durante la llamada alguien cogió una hora,\n// aquí ya no aparece (contrato 4b).\n// Salida (1 elemento):\n//   ok: true  -> { campos, titulo, fecha }\n//   ok: false -> { mensaje, aviso_tecnico, nodo_error, mensaje_tecnico, codigo }\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Código HTTP y cuerpo.\nconst estado = $input.first().json.statusCode;\nconst b = $input.first().json.body ?? {};\n// Lo que dejó entrar_agenda en esta vuelta.\nconst ctx = $('entrar_agenda').first().json;\n// Texto fijo de la opción que vuelve a la página \"Día\" (contrato 4b).\nconst NINGUNA = 'Ninguna le va bien → elegir otro día';\n\n// Escapar texto antes de meterlo en HTML.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')     // < y > : impiden abrir etiquetas HTML\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')   // comillas: impiden salir de un atributo\n    .replace(/'/g, '&#39;');\n}\n\n// ---- 1. El backend no respondió 200: fallo técnico, aviso y fin -------------\n// (Un 422 aquí = fecha mal escrita: no lo puede provocar el operador, que elige\n// de una lista o de un calendario; por eso también es técnico.)\nif (estado !== 200) {\n  return [{\n    json: {\n      ok: false,\n      aviso_tecnico: true,\n      mensaje: `No se han podido leer las horas libres (código ${estado}). No se ha registrado nada. Avisa al responsable técnico.`,\n      nodo_error: 'leer_horas',\n      mensaje_tecnico: `GET /huecos-libres?fecha=... respondió ${estado}.`,\n      codigo: estado,\n    },\n  }];\n}\n\n// ---- 2. Las horas: solo textos con forma HH:MM ------------------------------\nconst filtrar = (lista) => (Array.isArray(lista) ? lista : []).filter((h) => typeof h === 'string' && /^\\d{2}:\\d{2}$/.test(h));\n// Todas juntas (las opciones), y por franja (para el texto de arriba).\nconst horas = filtrar(b.horas);\nconst manana = filtrar(b.manana);\nconst tarde = filtrar(b.tarde);\n\n// \"2026-10-15\" + \"jueves\" -> \"Jueves 15/10/2026\" (se recorta el texto: sin zonas horarias).\nconst fecha = String(b.fecha ?? '');\nconst [a, m, d] = fecha.split('-');\nconst diaSemana = String(b.dia_semana ?? '');\nconst diaLegible = `${diaSemana.charAt(0).toUpperCase()}${diaSemana.slice(1)} ${d}/${m}/${a}`;\n\n// Por qué no hay horas, si no las hay (el backend lo dice en sin_horas_motivo).\nconst MOTIVOS_SIN_HORAS = {\n  dia_completo: 'Ese día ya no queda ninguna hora libre (se han ocupado todas).',\n  fin_de_semana: 'Es fin de semana: no hay visitas.',\n  fecha_pasada: 'Esa fecha ya ha pasado.',\n};\n\n// El informe que ya se escribió en una vuelta anterior, para no perderlo.\n// Si la página \"Hora\" todavía no se ha usado, n8n lanza un error: texto vacío.\nlet informePrevio = '';\ntry { informePrevio = String($('pagina_hora').first().json.informe ?? ''); } catch (e) { informePrevio = ''; }\n\n// ---- 3. El texto de arriba de la página -------------------------------------\nlet html = `<p><strong>${esc(diaLegible)}</strong> · Oportunidad ${esc(ctx.oportunidad_id)} · ${esc(ctx.resultado_texto)}</p>`;\nif (horas.length > 0) {\n  // Las horas libres de este momento, por franja (una franja vacía no se escribe).\n  const partes = [];\n  if (manana.length > 0) partes.push(`mañana: ${manana.join(' · ')}`);\n  if (tarde.length > 0) partes.push(`tarde: ${tarde.join(' · ')}`);\n  html += `<p>Horas libres ahora mismo — ${esc(partes.join(' — '))}.</p>`;\n} else {\n  // Ninguna hora: se dice por qué y solo queda volver a elegir día.\n  const motivo = MOTIVOS_SIN_HORAS[b.sin_horas_motivo] ?? 'Ese día no hay ninguna hora libre.';\n  // v2: ⚠️ y negrita en vez de color (n8n borra style).\n  html += `<p>⚠️ <strong>${esc(motivo)}</strong> Elige \"${esc(NINGUNA)}\".</p>`;\n}\n\n// ---- 4. Los campos de la página ---------------------------------------------\nconst campos = [\n  // El texto de arriba.\n  { fieldType: 'html', html },\n  // Las horas como botones (radio), más la opción de volver a \"Día\". Obligatorio.\n  {\n    fieldLabel: 'Hora de la visita',\n    fieldName: 'hora',\n    fieldType: 'radio',\n    fieldOptions: { values: horas.map((h) => ({ option: h })).concat([{ option: NINGUNA }]) },\n    requiredField: true,\n  },\n  // El informe: obligatorio si hay horas (hará falta para registrar); si no las\n  // hay, opcional, y conserva lo ya escrito para la siguiente vuelta.\n  {\n    fieldLabel: 'Informe de la llamada',\n    fieldName: 'informe',\n    fieldType: 'textarea',\n    placeholder: 'Qué se habló, qué se acordó y dudas del cliente.',\n    defaultValue: informePrevio,\n    requiredField: horas.length > 0,\n  },\n];\n\n// Todo listo: los campos, el título y la fecha (la usará preparar_decision).\nreturn [{\n  json: {\n    ok: true,\n    campos,\n    titulo: `Oportunidad ${ctx.oportunidad_id} · Elegir hora`,\n    fecha,\n  },\n}];\n"
+        "jsCode": "// ---------------------------------------------------------------------------\n// Formulario de llamadas · Preparar la página \"Hora\" (D32). 2026-10-14.\n// Entrada ($json): la respuesta COMPLETA de GET /huecos-libres?fecha=... (modo un día).\n// Se llama AL ABRIR la página: si durante la llamada alguien cogió una hora,\n// aquí ya no aparece (contrato 4b).\n// Salida (1 elemento):\n//   ok: true  -> { campos, titulo, fecha }\n//   ok: false -> { mensaje, aviso_tecnico, nodo_error, mensaje_tecnico, codigo }\n// D39.4, 2026-10-21: campo opcional \"Mensaje para el cliente\" (email de WF7).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Código HTTP y cuerpo.\nconst estado = $input.first().json.statusCode;\nconst b = $input.first().json.body ?? {};\n// Lo que dejó entrar_agenda en esta vuelta.\nconst ctx = $('entrar_agenda').first().json;\n// Texto fijo de la opción que vuelve a la página \"Día\" (contrato 4b).\nconst NINGUNA = 'Ninguna le va bien → elegir otro día';\n\n// Escapar texto antes de meterlo en HTML.\nfunction esc(valor) {\n  return String(valor)\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')     // < y > : impiden abrir etiquetas HTML\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')   // comillas: impiden salir de un atributo\n    .replace(/'/g, '&#39;');\n}\n\n// ---- 1. El backend no respondió 200: fallo técnico, aviso y fin -------------\n// (Un 422 aquí = fecha mal escrita: no lo puede provocar el operador, que elige\n// de una lista o de un calendario; por eso también es técnico.)\nif (estado !== 200) {\n  return [{\n    json: {\n      ok: false,\n      aviso_tecnico: true,\n      mensaje: `No se han podido leer las horas libres (código ${estado}). No se ha registrado nada. Avisa al responsable técnico.`,\n      nodo_error: 'leer_horas',\n      mensaje_tecnico: `GET /huecos-libres?fecha=... respondió ${estado}.`,\n      codigo: estado,\n    },\n  }];\n}\n\n// ---- 2. Las horas: solo textos con forma HH:MM ------------------------------\nconst filtrar = (lista) => (Array.isArray(lista) ? lista : []).filter((h) => typeof h === 'string' && /^\\d{2}:\\d{2}$/.test(h));\n// Todas juntas (las opciones), y por franja (para el texto de arriba).\nconst horas = filtrar(b.horas);\nconst manana = filtrar(b.manana);\nconst tarde = filtrar(b.tarde);\n\n// \"2026-10-15\" + \"jueves\" -> \"Jueves 15/10/2026\" (se recorta el texto: sin zonas horarias).\nconst fecha = String(b.fecha ?? '');\nconst [a, m, d] = fecha.split('-');\nconst diaSemana = String(b.dia_semana ?? '');\nconst diaLegible = `${diaSemana.charAt(0).toUpperCase()}${diaSemana.slice(1)} ${d}/${m}/${a}`;\n\n// Por qué no hay horas, si no las hay (el backend lo dice en sin_horas_motivo).\nconst MOTIVOS_SIN_HORAS = {\n  dia_completo: 'Ese día ya no queda ninguna hora libre (se han ocupado todas).',\n  fin_de_semana: 'Es fin de semana: no hay visitas.',\n  fecha_pasada: 'Esa fecha ya ha pasado.',\n};\n\n// El informe que ya se escribió en una vuelta anterior, para no perderlo.\n// Si la página \"Hora\" todavía no se ha usado, n8n lanza un error: texto vacío.\nlet informePrevio = '';\ntry { informePrevio = String($('pagina_hora').first().json.informe ?? ''); } catch (e) { informePrevio = ''; }\n// D39.4 (21/10): lo mismo con el mensaje para el cliente, si ya se escribió en otra vuelta.\nlet mensajePrevio = '';\ntry { mensajePrevio = String($('pagina_hora').first().json.mensaje_cliente ?? ''); } catch (e) { mensajePrevio = ''; }\n\n// ---- 3. El texto de arriba de la página -------------------------------------\nlet html = `<p><strong>${esc(diaLegible)}</strong> · Oportunidad ${esc(ctx.oportunidad_id)} · ${esc(ctx.resultado_texto)}</p>`;\nif (horas.length > 0) {\n  // Las horas libres de este momento, por franja (una franja vacía no se escribe).\n  const partes = [];\n  if (manana.length > 0) partes.push(`mañana: ${manana.join(' · ')}`);\n  if (tarde.length > 0) partes.push(`tarde: ${tarde.join(' · ')}`);\n  html += `<p>Horas libres ahora mismo — ${esc(partes.join(' — '))}.</p>`;\n} else {\n  // Ninguna hora: se dice por qué y solo queda volver a elegir día.\n  const motivo = MOTIVOS_SIN_HORAS[b.sin_horas_motivo] ?? 'Ese día no hay ninguna hora libre.';\n  // v2: ⚠️ y negrita en vez de color (n8n borra style).\n  html += `<p>⚠️ <strong>${esc(motivo)}</strong> Elige \"${esc(NINGUNA)}\".</p>`;\n}\n\n// ---- 4. Los campos de la página ---------------------------------------------\nconst campos = [\n  // El texto de arriba.\n  { fieldType: 'html', html },\n  // Las horas como botones (radio), más la opción de volver a \"Día\". Obligatorio.\n  {\n    fieldLabel: 'Hora de la visita',\n    fieldName: 'hora',\n    fieldType: 'radio',\n    fieldOptions: { values: horas.map((h) => ({ option: h })).concat([{ option: NINGUNA }]) },\n    requiredField: true,\n  },\n  // El informe: obligatorio si hay horas (hará falta para registrar); si no las\n  // hay, opcional, y conserva lo ya escrito para la siguiente vuelta.\n  {\n    fieldLabel: 'Informe de la llamada',\n    fieldName: 'informe',\n    fieldType: 'textarea',\n    placeholder: 'Qué se habló, qué se acordó y dudas del cliente.',\n    defaultValue: informePrevio,\n    requiredField: horas.length > 0,\n  },\n  // D39.4 (21/10): mensaje OPCIONAL que el cliente leerá en el email de la visita\n  // confirmada (WF7). No es el informe: el informe es interno y nunca sale de la empresa.\n  {\n    fieldLabel: 'Mensaje para el cliente (aparecerá en el email)',\n    fieldName: 'mensaje_cliente',\n    fieldType: 'textarea',\n    placeholder: 'Opcional. Por ejemplo, qué preparar para la visita o cómo acceder al edificio. Nada de valoraciones internas.',\n    defaultValue: mensajePrevio,\n    requiredField: false,\n  },\n];\n\n// Todo listo: los campos, el título y la fecha (la usará preparar_decision).\nreturn [{\n  json: {\n    ok: true,\n    campos,\n    titulo: `Oportunidad ${ctx.oportunidad_id} · Elegir hora`,\n    fecha,\n  },\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1344,
-        400
+        2480,
+        5568
       ],
-      "id": "88175d75-2380-45e3-b098-cf8a46e3128f",
+      "id": "27998a75-ff3d-4516-9ae5-93949accfbe9",
       "name": "preparar_pagina_hora"
     },
     {
@@ -1215,10 +1221,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        -1120,
-        400
+        2704,
+        5568
       ],
-      "id": "dcb4a16a-457c-4e5d-ae30-41160e057381",
+      "id": "21ade702-12a4-4cc0-bf39-24e5d9e6b066",
       "name": "hora_ok"
     },
     {
@@ -1232,10 +1238,10 @@
       "type": "n8n-nodes-base.form",
       "typeVersion": 2.5,
       "position": [
-        -896,
-        400
+        2928,
+        5392
       ],
-      "id": "6ab0d458-b316-4910-a0d5-98739d316c3b",
+      "id": "efe24b77-155b-4b9d-9336-451290bf08a3",
       "name": "pagina_hora"
     },
     {
@@ -1266,10 +1272,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        -672,
-        400
+        3152,
+        5392
       ],
-      "id": "a6b7dffc-4b71-462b-b215-ecc2c19654b4",
+      "id": "ab696066-6065-4a5f-83cc-46b125ebab69",
       "name": "segun_hora"
     },
     {
@@ -1300,10 +1306,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        0,
-        672
+        4720,
+        4896
       ],
-      "id": "ef941494-43fe-489b-b0d6-09e77e21409a",
+      "id": "7c3d68da-41f7-45a0-851b-f26e4faa2d1a",
       "name": "segun_traduccion"
     },
     {
@@ -1313,10 +1319,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        224,
-        624
+        4944,
+        4896
       ],
-      "id": "cc8b1782-3668-4dbb-907a-2129d0f12907",
+      "id": "f606eeda-4853-4002-a7b1-68e71d28e111",
       "name": "preparar_calendario"
     },
     {
@@ -1347,10 +1353,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        448,
-        624
+        5168,
+        4896
       ],
-      "id": "1ca53710-29ee-4c60-9b03-6a6c3a9eb763",
+      "id": "5e5bedc5-761b-401d-9296-8a108732187f",
       "name": "necesita_calendario"
     },
     {
@@ -1460,10 +1466,10 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
       "position": [
-        672,
-        528
+        5392,
+        4816
       ],
-      "id": "8c4f943c-7df6-4773-83da-a4a9c1abd509",
+      "id": "e0a52ad7-cf90-44ca-b239-aa3ce427816d",
       "name": "llamar_calendario",
       "onError": "continueRegularOutput"
     },
@@ -1474,11 +1480,112 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        896,
-        624
+        5616,
+        4896
       ],
-      "id": "6982be22-7067-4597-924c-3ecbc2e8505e",
+      "id": "ac23e02e-081b-467e-a39d-b27fe2b49d53",
       "name": "cerrar_pantalla"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5a8e2c41-7b3d-4f6a-9e1c-2d4b6f8a0c13",
+              "leftValue": "={{ $json.statusCode === 201 && ['visita_acordada', 'confirmar_hora', 'otra_hora'].includes($json.body?.resultado) && !!$json.body?.visita_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4496,
+        5344
+      ],
+      "name": "email_visita",
+      "id": "c4606d0d-5e09-4e2d-8ed7-1484fc800c36",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "l8edafYQrjMMI7ci",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/l8edafYQrjMMI7ci",
+          "cachedResultName": "WF7_email_cliente"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "oportunidad_id": "={{ $('preparar_decision').first().json.cuerpo.oportunidad_id }}",
+            "tipo": "visita_confirmada",
+            "mensaje_cliente": "={{ $('preparar_decision').first().json.mensaje_cliente }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "tipo",
+              "displayName": "tipo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "mensaje_cliente",
+              "displayName": "mensaje_cliente",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        4720,
+        5344
+      ],
+      "name": "lanzar_email_visita",
+      "id": "cd7f183b-e0a7-40ce-90a9-8dde81bf9e37",
+      "onError": "continueRegularOutput"
     }
   ],
   "pinData": {},
@@ -1949,6 +2056,11 @@
             "node": "traducir_resultado",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "email_visita",
+            "type": "main",
+            "index": 0
           }
         ],
         [
@@ -2060,6 +2172,17 @@
           },
           {
             "node": "preparar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "email_visita": {
+      "main": [
+        [
+          {
+            "node": "lanzar_email_visita",
             "type": "main",
             "index": 0
           }

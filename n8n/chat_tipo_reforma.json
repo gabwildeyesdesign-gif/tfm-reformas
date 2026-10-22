@@ -172,7 +172,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// ---------------------------------------------------------------------------\n// Cierre determinista post-calculate_estimate.\n// Convierte la respuesta del backend en el texto que ve el cliente.\n// NINGÚN LLM toca este texto ni la cifra (Adenda 1.1a).\n// ---------------------------------------------------------------------------\n\n// 1) Extraer la respuesta de calculate_estimate del envoltorio del MCP Client.\n//    Forma real verificada: $json.content[0].text. En esta ejecución llegó\n//    como OBJETO; en D17.1 (observation) otro dato llegó como STRING JSON.\n//    Aceptamos las dos para no depender de cómo lo entregue n8n.\nlet datos = null;\nlet incidencia = null;\n\nconst bruto = $json.content?.[0]?.text;   // ?. = si algo es undefined, devuelve\n                                          // undefined en vez de romper\nif (typeof bruto === 'string') {\n  try {\n    datos = JSON.parse(bruto);            // string JSON -> objeto\n  } catch (e) {\n    incidencia = 'texto_no_es_json';      // llegó texto, pero no es JSON\n  }\n} else if (bruto && typeof bruto === 'object') {\n  datos = bruto;                          // ya viene como objeto\n} else {\n  incidencia = 'respuesta_mcp_sin_contenido';\n}\n\n// 2) Formato de moneda español. Intl.NumberFormat viene de serie en Node.js.\n//    Nota: en es-ES, las cifras de 4 dígitos NO llevan punto de millar\n//    (\"4840,00 €\") porque así lo fija la norma (CLDR/RAE); de 5 en adelante\n//    sí (\"13.915,00 €\"). Es intencionado, no un error.\nconst eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });\n\n// El backend manda los importes como string decimal (\"4840.00\") para no\n// perder precisión. Aquí solo se muestran, no se calcula nada con ellos,\n// así que convertir a Number para formatear es seguro.\nfunction importeValido(valor) {\n  const n = Number(valor);\n  return (valor !== null && valor !== undefined && valor !== '' && Number.isFinite(n)) ? n : null;\n}\n\n// 3) Clasificación. Cada caso exige TODAS sus condiciones; lo que no encaje\n//    exactamente cae en el caso 5. Nunca se muestra una cifra \"por si acaso\".\nlet caso = 5;\nlet texto;\n\nif (datos && incidencia === null) {\n  const gate   = datos.requiere_aprobacion;\n  const motivo = datos.motivo_gate;\n  const min    = importeValido(datos.importe_min_con_iva);\n  const max    = importeValido(datos.importe_max_con_iva);\n\n  if (datos.status === 'requiere_revision') {\n    caso = 1;\n  } else if (gate === true && (motivo === 'cambios_estructurales' || motivo === 'ambos')) {\n    caso = 2;\n  } else if (gate === true && motivo === 'importe_superior_umbral') {\n    caso = 3;\n  } else if (gate === false && motivo === null && datos.status === 'presupuesto_enviado'\n             && min !== null && max !== null && min <= max) {\n    caso = 4;\n    texto =\n      `Según los datos que nos has facilitado, la estimación orientativa para tu reforma ` +\n      `es de entre ${eur.format(min)} y ${eur.format(max)} (IVA incluido).\\n\\n` +\n      `Es una pre-estimación: el presupuesto definitivo se confirma tras una visita ` +\n      `técnica, que es gratuita. Si tienes alguna duda o quieres solicitar la visita, dímelo.`;\n  } else {\n    incidencia = 'combinacion_no_prevista';   // p. ej. un status nuevo del backend\n  }\n}\n\n// 4) Textos de los casos sin cifra (D18.5: en Gate NUNCA se muestra importe).\n//    Casos 2 y 3 (Gate), revisados el 2026-10-04 por D19.3: un cliente con\n//    Gate NO pide la visita desde el chat (POST /visits responde 409); es\n//    administración quien le llama, avisada al momento por WF2 (email +\n//    Telegram). Solo se promete lo que se puede cumplir: \"en horario laboral\".\nif (caso === 1) {\n  texto =\n    'No hemos podido calcular automáticamente una estimación para tu proyecto. ' +\n    'Un técnico lo revisará y se pondrá en contacto contigo.';\n} else if (caso === 2) {\n  texto =\n    'Como tu proyecto incluye cambios estructurales (muros, tabiques o estructura), ' +\n    'un técnico tiene que verlo en persona antes de darte una cifra. ' +\n    'Nuestro equipo te llamará lo antes posible, en horario laboral, ' +\n    'para concertar una visita, que es gratuita.';\n} else if (caso === 3) {\n  texto =\n    'Por las características de tu proyecto, un técnico lo revisará personalmente. ' +\n    'Nuestro equipo te llamará lo antes posible, en horario laboral, ' +\n    'para darte una información más precisa.';\n} else if (caso === 5) {\n  texto =\n    'Hemos recibido tus datos correctamente. Un técnico revisará tu solicitud ' +\n    'y se pondrá en contacto contigo.';\n}\n\n// 5) Salida. \"output\" es el campo que lee el Chat Trigger (VERIFICADO en\n//    ejecución real, 2026-09-24). Se devuelven los IDs y el caso para el\n//    router y para WF2, pero NUNCA los importes: WF2 los lee del backend con\n//    GET /gate-avisos/{oportunidad_id}, con la llave del Gate.\nreturn {\n  json: {\n    output: texto,\n    caso,\n    incidencia,                                   // null si todo fue normal\n    oportunidad_id: datos?.oportunidad_id ?? null,\n    presupuesto_id: datos?.presupuesto_id ?? null,\n    requiere_aprobacion: datos?.requiere_aprobacion ?? null,\n    motivo_gate: datos?.motivo_gate ?? null,\n    // true solo si el presupuesto se creó en ESTA llamada. El nodo\n    // gate_HITL lo exige para lanzar WF2: si n8n reintenta o el cálculo\n    // se repite, el backend contesta creado=false y administración NO recibe\n    // un segundo aviso (decisión P2 de calculate-estimate). ?? null: si no se\n    // pudo leer la respuesta, \"no sabemos\" (null) no es lo mismo que \"no\" (false).\n    creado: datos?.creado ?? null,\n  },\n};"
+        "jsCode": "// ---------------------------------------------------------------------------\n// Cierre determinista post-calculate_estimate.\n// Convierte la respuesta del backend en el texto que ve el cliente.\n// NINGÚN LLM toca este texto ni la cifra (Adenda 1.1a).\n// 21/10 (D39.5): en el caso 4, si el presupuesto es NUEVO (creado === true),\n// el texto avisa del email; es justo cuando el flujo lanza WF7 (G2).\n// ---------------------------------------------------------------------------\n\n// 1) Extraer la respuesta de calculate_estimate del envoltorio del MCP Client.\n//    Forma real verificada: $json.content[0].text. En esta ejecución llegó\n//    como OBJETO; en D17.1 (observation) otro dato llegó como STRING JSON.\n//    Aceptamos las dos para no depender de cómo lo entregue n8n.\nlet datos = null;\nlet incidencia = null;\n\nconst bruto = $json.content?.[0]?.text;   // ?. = si algo es undefined, devuelve\n                                          // undefined en vez de romper\nif (typeof bruto === 'string') {\n  try {\n    datos = JSON.parse(bruto);            // string JSON -> objeto\n  } catch (e) {\n    incidencia = 'texto_no_es_json';      // llegó texto, pero no es JSON\n  }\n} else if (bruto && typeof bruto === 'object') {\n  datos = bruto;                          // ya viene como objeto\n} else {\n  incidencia = 'respuesta_mcp_sin_contenido';\n}\n\n// 2) Formato de moneda español. Intl.NumberFormat viene de serie en Node.js.\n//    Nota: en es-ES, las cifras de 4 dígitos NO llevan punto de millar\n//    (\"4840,00 €\") porque así lo fija la norma (CLDR/RAE); de 5 en adelante\n//    sí (\"13.915,00 €\"). Es intencionado, no un error.\nconst eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });\n\n// El backend manda los importes como string decimal (\"4840.00\") para no\n// perder precisión. Aquí solo se muestran, no se calcula nada con ellos,\n// así que convertir a Number para formatear es seguro.\nfunction importeValido(valor) {\n  const n = Number(valor);\n  return (valor !== null && valor !== undefined && valor !== '' && Number.isFinite(n)) ? n : null;\n}\n\n// 3) Clasificación. Cada caso exige TODAS sus condiciones; lo que no encaje\n//    exactamente cae en el caso 5. Nunca se muestra una cifra \"por si acaso\".\nlet caso = 5;\nlet texto;\n\nif (datos && incidencia === null) {\n  const gate   = datos.requiere_aprobacion;\n  const motivo = datos.motivo_gate;\n  const min    = importeValido(datos.importe_min_con_iva);\n  const max    = importeValido(datos.importe_max_con_iva);\n\n  if (datos.status === 'requiere_revision') {\n    caso = 1;\n  } else if (gate === true && (motivo === 'cambios_estructurales' || motivo === 'ambos')) {\n    caso = 2;\n  } else if (gate === true && motivo === 'importe_superior_umbral') {\n    caso = 3;\n  } else if (gate === false && motivo === null && datos.status === 'presupuesto_enviado'\n             && min !== null && max !== null && min <= max) {\n    caso = 4;\n    // D39.5: la frase del email SOLO si este presupuesto se ha creado en esta\n    // llamada (creado === true). Es la misma condición con la que el nodo\n    // email_presupuesto lanza WF7: en un reintento (creado = false) no sale\n    // email, así que tampoco se promete.\n    const avisoEmail = datos.creado === true\n      ? 'En unos minutos recibirás este resumen en tu email. '   // con espacio final\n      : '';                                                       // sin email, sin frase\n    texto =\n      `Según los datos que nos has facilitado, la estimación orientativa para tu reforma ` +\n      `es de entre ${eur.format(min)} y ${eur.format(max)} (IVA incluido).\\n\\n` +\n      `Es una pre-estimación: el presupuesto definitivo se confirma tras una visita ` +\n      `técnica, que es gratuita. ` + avisoEmail +                 // la frase va aquí, si toca\n      `Si tienes alguna duda o quieres solicitar la visita, dímelo.`;\n  } else {\n    incidencia = 'combinacion_no_prevista';   // p. ej. un status nuevo del backend\n  }\n}\n\n// 4) Textos de los casos sin cifra (D18.5: en Gate NUNCA se muestra importe).\n//    Casos 2 y 3 (Gate), revisados el 2026-10-04 por D19.3: un cliente con\n//    Gate NO pide la visita desde el chat (POST /visits responde 409); es\n//    administración quien le llama, avisada al momento por WF2 (email +\n//    Telegram). Solo se promete lo que se puede cumplir: \"en horario laboral\".\nif (caso === 1) {\n  texto =\n    'No hemos podido calcular automáticamente una estimación para tu proyecto. ' +\n    'Un técnico lo revisará y se pondrá en contacto contigo.';\n} else if (caso === 2) {\n  texto =\n    'Como tu proyecto incluye cambios estructurales (muros, tabiques o estructura), ' +\n    'un técnico tiene que verlo en persona antes de darte una cifra. ' +\n    'Nuestro equipo te llamará lo antes posible, en horario laboral, ' +\n    'para concertar una visita, que es gratuita.';\n} else if (caso === 3) {\n  texto =\n    'Por las características de tu proyecto, un técnico lo revisará personalmente. ' +\n    'Nuestro equipo te llamará lo antes posible, en horario laboral, ' +\n    'para darte una información más precisa.';\n} else if (caso === 5) {\n  texto =\n    'Hemos recibido tus datos correctamente. Un técnico revisará tu solicitud ' +\n    'y se pondrá en contacto contigo.';\n}\n\n// 5) Salida. \"output\" es el campo que lee el Chat Trigger (VERIFICADO en\n//    ejecución real, 2026-09-24). Se devuelven los IDs y el caso para el\n//    router, para WF2 y para WF7, pero NUNCA los importes: WF2 y WF7 los leen\n//    del backend (aviso del Gate y ficha), con su propia llave.\nreturn {\n  json: {\n    output: texto,\n    caso,                                         // email_presupuesto exige caso 4\n    incidencia,                                   // null si todo fue normal\n    oportunidad_id: datos?.oportunidad_id ?? null,\n    presupuesto_id: datos?.presupuesto_id ?? null,\n    requiere_aprobacion: datos?.requiere_aprobacion ?? null,\n    motivo_gate: datos?.motivo_gate ?? null,\n    // true solo si el presupuesto se creó en ESTA llamada. gate_HITL (WF2) y\n    // email_presupuesto (WF7) lo exigen: si n8n reintenta o el cálculo se\n    // repite, el backend contesta creado=false y no sale un segundo aviso ni\n    // un segundo email (decisión P2 de calculate-estimate; G2 de D39).\n    // ?? null: si no se pudo leer la respuesta, \"no sabemos\" (null) no es lo\n    // mismo que \"no\" (false).\n    creado: datos?.creado ?? null,\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -806,6 +806,103 @@
       "id": "31e2d8c6-ee2f-4a69-a59b-de9e6963fce3",
       "name": "avisar_fallo_agente2",
       "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "7c1e5a2b-3d4f-4a6b-9c8d-1e2f3a4b5c6d",
+              "leftValue": "={{ $json.caso === 4 && $json.creado === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -336,
+        544
+      ],
+      "id": "d712673f-cdf8-4ec2-81a5-efa720548676",
+      "name": "email_presupuesto",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "l8edafYQrjMMI7ci",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/l8edafYQrjMMI7ci",
+          "cachedResultName": "WF7_email_cliente"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "oportunidad_id": "={{ $json.oportunidad_id }}",
+            "tipo": "presupuesto"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "tipo",
+              "displayName": "tipo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "mensaje_cliente",
+              "displayName": "mensaje_cliente",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -32,
+        528
+      ],
+      "id": "4dc9f5af-4b4c-44ca-85ee-2fa1eb97ff2d",
+      "name": "lanzar_email_presupuesto",
+      "onError": "continueRegularOutput"
     }
   ],
   "pinData": {},
@@ -904,6 +1001,11 @@
           },
           {
             "node": "gate_HITL",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "email_presupuesto",
             "type": "main",
             "index": 0
           }
@@ -1058,6 +1160,17 @@
           {
             "node": "Agente2_asesor",
             "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "email_presupuesto": {
+      "main": [
+        [
+          {
+            "node": "lanzar_email_presupuesto",
+            "type": "main",
             "index": 0
           }
         ]
