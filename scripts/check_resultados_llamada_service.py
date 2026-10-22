@@ -579,10 +579,29 @@ SQL_FOTO_U = ("SELECT (SELECT count(*) FROM decisiones_gate WHERE oportunidad_id
 # Restos de una ejecución cortada; después, el pool de los servicios.
 limpiar_u()
 db.init_pool()
+# Condición 4 del tutor (2026-10-22): los logs de S8 se cuentan ANTES,
+# DURANTE y DESPUÉS, y los ajenos que ya existían no se tocan.
+# SQL: el id más alto de logs ahora y cuántas filas hay hasta él.
+LOGS_BASE, AJENOS_ANTES = leer_u("SELECT COALESCE(max(id), 0), count(*) FROM logs;", ())
+# SQL: logs de oportunidades con la marca (tras la limpieza: 0).
+SQL_LOGS_MARCA = ("SELECT count(*) FROM logs WHERE entity_type = 'oportunidad' AND entity_id IN ("
+                  "SELECT o.id FROM oportunidades o JOIN leads l ON l.id = o.lead_id "
+                  "JOIN clientes c ON c.id = l.cliente_id WHERE c.email LIKE %s);")
+antes_marca = leer_u(SQL_LOGS_MARCA, (PATRON_U,))[0]
+print(f"  [INFO] S8 logs con la marca ANTES: {antes_marca}; logs ajenos hasta el id {LOGS_BASE}: {AJENOS_ANTES}")
+comprobar("S8: ANTES, 0 logs con la marca (tras borrar restos)", antes_marca == 0, f"({antes_marca})")
+# Los ids de las oportunidades de S8, para contar sus logs también después de
+# borrarlas (entonces la marca ya no se puede seguir por el email).
+IDS_U = []
+# SQL: logs de esas oportunidades, por su id exacto.
+SQL_LOGS_IDS = "SELECT count(*) FROM logs WHERE entity_type = 'oportunidad' AND entity_id = ANY(%s);"
 # try/finally: pase lo que pase, reglas restauradas, pool cerrado y limpieza.
 try:
-    # Dos Gates propios, ya confirmados por los servicios.
-    op_u9, op_u10 = gate_u(), gate_u()
+    # Dos Gates propios, ya confirmados por los servicios; sus ids se apuntan.
+    op_u9 = gate_u()
+    IDS_U.append(op_u9)
+    op_u10 = gate_u()
+    IDS_U.append(op_u10)
     # Las reglas rotas EN MEMORIA, como en S3 y S7 (la fila real no se toca).
     romper_reglas()
     # U9: visita_acordada por registrar_resultado (con su commit): 503.
@@ -629,6 +648,10 @@ try:
     foto = leer_u(SQL_FOTO_U, {"op": op_u10})
     comprobar("U10: 1 resultado, 0 visitas, 0 logs de configuración y 1 log de decisión",
               foto[:4] == (1, 0, 0, 1), f"({foto})")
+    # DURANTE: los logs de las dos oportunidades (cálculo, U9 y U10).
+    durante = leer_u(SQL_LOGS_IDS, (IDS_U,))[0]
+    print(f"  [INFO] S8 logs con la marca DURANTE: {durante} (oportunidades {IDS_U})")
+    comprobar("S8: DURANTE, al menos 2 logs propios (el del 503 de U9 y la decisión de U10)", durante >= 2, f"({durante})")
 finally:
     # Siempre: los nombres reales, el pool cerrado y lo propio borrado.
     restaurar_reglas()
@@ -637,6 +660,15 @@ finally:
     # SQL: los clientes con la marca que queden (tienen que ser 0).
     restos = leer_u("SELECT count(*) FROM clientes WHERE email LIKE %s;", (PATRON_U,))[0]
     comprobar("S8: no queda ningún dato propio (marca check-resultado-svc-u-)", restos == 0, f"({restos})")
+    # DESPUÉS: 0 logs de esas oportunidades, y los ajenos de antes, intactos.
+    despues = leer_u(SQL_LOGS_IDS, (IDS_U,))[0]
+    # SQL: filas de logs con id <= LOGS_BASE (las que ya existían).
+    ajenos_despues = leer_u("SELECT count(*) FROM logs WHERE id <= %s;", (LOGS_BASE,))[0]
+    print(f"  [INFO] S8 logs con la marca DESPUÉS: {despues}; logs hasta el id {LOGS_BASE}: "
+          f"{AJENOS_ANTES} -> {ajenos_despues}")
+    comprobar("S8: DESPUÉS, 0 logs de sus oportunidades", despues == 0, f"({despues})")
+    comprobar("S8: los logs que ya existían (id <= base) siguen todos", ajenos_despues == AJENOS_ANTES,
+              f"({AJENOS_ANTES} -> {ajenos_despues})")
     cn_u.close()
 
 # Resumen y código de salida (1 si hubo fallos; lo mira la suite).

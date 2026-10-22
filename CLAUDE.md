@@ -763,6 +763,11 @@ SOLO REST.
 > Misma regla de siempre: no hacer merge sin la confirmación explícita de
 > Gabi, después de la revisión del tutor, y siempre con `--ff-only`.
 > Después del merge: reiniciar el uvicorn del 8000 SIN --reload (app/ cambia).
+> (Nota 2026-10-22, tarde: la fase 2 del bloque 5 está HECHA: verde 18/18,
+> 57/57 y 210/210; los 15 mutantes en rojo (U1, U2, U4-U14, 401 y 404, con
+> U11 repetido por un Modern Standby de 2 s); regresión de los 17 scripts que
+> crean visitas 17/17; suite 57/57 en una pasada válida. Pendiente solo el
+> veredicto del tutor y el merge, que confirma Gabi.)
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1162,6 +1167,18 @@ y sin argumentos sale con código 2. Tras el retiro quedan 57 archivos. La
 cifra 56 vale si ese check se ejecuta APARTE (con --esperado nuevo), no
 dentro de la suite; si entra en ella, son 57. Pendiente de decidir antes de
 la fase 2.)
+(Nota 2026-10-22, veredicto del tutor sobre fe0378c: check_datos_d39_9_incluye_tipico
+ENTRA en la suite con --esperado nuevo (vigila que D39.9 sigue aplicado): la
+suite tiene 57 scripts. Quien la lance tiene que pasarle ese argumento; sin él
+sale con código 2. 57/57 con código 0 en UNA pasada válida el 2026-10-22, de
+13:22:35 a 13:39:49, sin Kernel-Power 41, 506 ni 507 entre 13:21 y 13:41, con
+1,93 GB libres y ningún chrome, msedge, docker/vmmem ni WINWORD. OJO: el
+portátil iba con BATERÍA (decisión de Gabi; con batería la pantalla y la
+suspensión saltan a los 15 min, no a los 30). check_graceful_shutdown y
+check_mcp_connection desde copias en el 8030 y el 8031; uvicorn del 8031
+detenido por su PID 3924 (log = netstat). Salida de los cinco de P4 revisada
+a mano: sin fallos. Datos reales de las 10 tablas iguales antes (00:37) y
+después (13:40), 0 filas nuevas.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2

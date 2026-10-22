@@ -673,20 +673,24 @@ decisiones_gate (el UNIQUE (oportunidad_id) se mantiene, P6 de aquel plan).
 
 Para qué: devuelve los datos de un caso con Gate que necesita
 administración para llamar al cliente. Lo usan WF2 (el aviso a
-administración por email; ver el paso 1 de la sección 3) y el formulario de
-n8n de POST /gate-decisions, para mostrar si el caso ya está gestionado.
+administración por email; ver el paso 1 de la sección 3) (hasta el
+2026-10-22, también el formulario del alias POST /gate-decisions, quitado;
+el formulario de hoy usa la ficha, 5.9).
 Nunca un agente de IA: devuelve importes y datos personales de un caso con
 Gate, que D18.5.1 prohíbe dar al Agente 2. Solo REST, sin tool MCP, y de
 SOLO LECTURA. Plan completo, decisiones D1-D4 y P1-P7:
 docs/Plan_Endpoint_Aviso_Gate.txt.
 
-Autenticación: la misma de POST /gate-decisions (5.5), cabecera
+Autenticación: la misma de POST /resultados-llamada (5.5 y 5.10), cabecera
 X-Gate-Secret con el valor de GATE_SECRET. NO se acepta X-Webhook-Secret:
 esa llave la tiene la herramienta del Agente 2. El valor de WEBHOOK_SECRET
 da 401 tanto en X-Webhook-Secret como en X-Gate-Secret (verificado). El 401
-es idéntico al de /leads y /gate-decisions ({"detail": "No autorizado"},
+es idéntico al de /leads y /resultados-llamada ({"detail": "No autorizado"},
 WWW-Authenticate: APIKey) y va antes que la validación del parámetro de la
 ruta (sin cabecera y con id "abc": 401, verificado).
+(Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión
+anterior en aba39c4. Donde decía /gate-decisions, hoy es POST
+/resultados-llamada.)
 
 Entrada: solo el parámetro de la ruta, oportunidad_id, entero > 0
 (Annotated[int, Path(gt=0)]). Sin cuerpo. Lo envía un workflow
@@ -695,7 +699,7 @@ determinista, no un LLM (1.1a no aplica).
 Respuesta 200, campo a campo (fechas en hora de Madrid con su desfase;
 importes y m2 como Decimal, que viaja en el JSON como TEXTO exacto):
   oportunidad_id        oportunidades.id (el formulario lo necesita para
-                        llamar a POST /gate-decisions).
+                        llamar a POST /resultados-llamada).
   estado_oportunidad    oportunidades.estado; uno de los 8 valores de
                         EstadoOportunidad (app/schemas/common.py), que
                         replica el CHECK oportunidades_estado_check.
@@ -752,7 +756,7 @@ explica motivo_gate. El umbral que se aplicó de verdad solo está en la foto
 del cálculo en logs, y no se lee de ahí (P3 del plan: no se hace depender
 el contrato de un JSONB de auditoría sin esquema).
 
-Formato de los errores de negocio: el mismo que /visits y /gate-decisions,
+Formato de los errores de negocio: el mismo que /visits y /resultados-llamada,
 {"detail": {"motivo": "<código>", "mensaje": "<texto>"}}.
 
 | Código | motivo | Cuándo | Reintento en n8n |
@@ -768,7 +772,7 @@ Formato de los errores de negocio: el mismo que /visits y /gate-decisions,
 No hay 503 (no usa reglas_negocio) ni 201 (no crea nada).
 
 Orden de las comprobaciones: 401 -> 422 -> 404 -> 409 sin_presupuesto ->
-409 sin_gate -> 200. Igual que /gate-decisions hasta sin_gate. No depende
+409 sin_gate -> 200. Igual que el alias /gate-decisions (quitado) hasta sin_gate. No depende
 del estado: un caso con Gate ya decidido ('visita_agendada', 'perdida' o,
 tras la visita, 'ganada') sigue devolviendo su aviso, con su decisión.
 
@@ -824,6 +828,10 @@ cambia.
 
 5.7 GET /llamadas-del-dia (añadido el 2026-10-07, rama feat/n0-listado-wf3)
 
+(Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión
+anterior en aba39c4. Donde decía /gate-decisions, hoy es POST
+/resultados-llamada.)
+
 Para qué: devuelve la lista diaria de llamadas que WF3 (n8n) envía a
 administración cada día laborable a las 9:00 (D25.2: un barrido al día, una
 sola lista). n8n no lee la base de datos (D21.6). NO cambia ningún estado: el
@@ -835,7 +843,7 @@ docs/Plan_Endpoint_Listado_WF3.txt. Las decisiones de Gabi se citan como D25
 (D25.2, D25.4, D25.7, D25.8, D25.14, D25.15 y D25.16) y D24.4; su documento se
 añadirá a docs/ después del merge.
 
-Autenticación: la de /gate-decisions y /gate-avisos, cabecera X-Gate-Secret
+Autenticación: la de /resultados-llamada y /gate-avisos, cabecera X-Gate-Secret
 (GATE_SECRET). NO X-Webhook-Secret, que tiene la herramienta del Agente 2: la
 lista lleva nombres y teléfonos de todos los clientes pendientes. El valor de
 WEBHOOK_SECRET da 401 en cualquiera de las dos cabeceras (verificado). El 401
@@ -1040,6 +1048,10 @@ de esta lista NO cambia.
 5.8 POST /create-followup-task (añadido el 2026-10-08, rama
 feat/n0-create-followup-task)
 
+(Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión
+anterior en aba39c4. Donde decía /gate-decisions, hoy es POST
+/resultados-llamada.)
+
 Para qué: abre el seguimiento de 48 h (Adenda, sección 2, motivo
 sin_respuesta_visita) de una oportunidad sin Gate cuyo cliente no ha
 pedido visita. La pasa de 'presupuesto_enviado' a 'seguimiento_pendiente' y
@@ -1049,7 +1061,7 @@ seguimientos_por_abrir, nunca un agente: solo REST, sin tool MCP (la tool
 queda para N1+, fila 5). Plan completo y decisiones P1-P12:
 docs/Plan_Endpoint_Create_Followup_Task.txt.
 
-Autenticación: X-Gate-Secret (GATE_SECRET), como /gate-decisions y
+Autenticación: X-Gate-Secret (GATE_SECRET), como /resultados-llamada y
 /llamadas-del-dia: cambia el estado de una oportunidad y es una
 herramienta de administración; WEBHOOK_SECRET lo tiene la herramienta del
 Agente 2. El valor de WEBHOOK_SECRET da 401 en las dos cabeceras
@@ -1106,7 +1118,7 @@ Orden de las comprobaciones: 401 -> 422 -> 404 (tras el FOR UPDATE) ->
     no es 'presupuesto_enviado', y un reintento de n8n daría 409.
   - Los 409 van de lo estructural a lo pasajero: plazo_no_cumplido es el
     último porque es el único que se arregla solo con el tiempo.
-Concurrencia: POST /visits y POST /gate-decisions bloquean la misma fila,
+Concurrencia: POST /visits y POST /resultados-llamada bloquean la misma fila,
 así que se ponen en fila con este endpoint. Si el cliente pide visita entre
 la lista de las 9:00 y la llamada de WF3, el endpoint da 409
 estado_no_permitido sin escribir. Verificado: 5 peticiones simultáneas ->
@@ -1151,6 +1163,10 @@ abrir (b) se puede registrar también sin haberlo abierto antes.
 5.9 GET /oportunidades/{oportunidad_id}/ficha (añadido el 2026-10-10, rama
 feat/n0-ficha-oportunidad)
 
+(Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión
+anterior en aba39c4. Donde decía /gate-decisions, hoy es POST
+/resultados-llamada.)
+
 (Nota 2026-10-20, rama feat/n0-resumen-solicitud.) La raíz gana la misma
 clave que GET /gate-avisos: resumen_solicitud (texto o null), después de
 reforma. Ver 5.12.
@@ -1165,7 +1181,7 @@ esta rama). Nunca un agente de IA: devuelve email, importes e informes
 (D18.5). Solo REST, sin tool MCP, y de SOLO LECTURA. Plan completo y
 decisiones P1-P12: docs/Plan_Endpoint_Ficha_Oportunidad.txt.
 
-Autenticación: X-Gate-Secret (GATE_SECRET), como /gate-decisions,
+Autenticación: X-Gate-Secret (GATE_SECRET), como /resultados-llamada,
 /gate-avisos, /llamadas-del-dia y /create-followup-task. A diferencia de
 ellos, la dependencia va en el ROUTER (APIRouter(prefix="/oportunidades",
 dependencies=[...]), P8): cualquier ruta futura bajo /oportunidades la
