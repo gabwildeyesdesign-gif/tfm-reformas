@@ -1,20 +1,20 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-10-20 10:49:11 UTC
+-- Generado por scripts/dump_schema.py el 2026-10-22 17:20:06 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
 -- table_constraints, key_column_usage y check_constraints), pg_constraint
 -- (claves foráneas) y pg_indexes, no copiado de ningun archivo previo.
 --
--- Tablas: 10, en orden topológico: cada una después de las
+-- Tablas: 11, en orden topológico: cada una después de las
 -- tablas a las que apunta, para que el archivo se pueda ejecutar entero.
 -- ==========================================================================
 
 
 -- ------------------------------------------------------------------------
--- Tabla: clientes   (24 filas en el momento del volcado)
+-- Tabla: clientes   (31 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE clientes (
     id                       SERIAL NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE clientes (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: leads   (32 filas en el momento del volcado)
+-- Tabla: leads   (42 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE leads (
     id                       SERIAL NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE leads (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: logs   (52 filas en el momento del volcado)
+-- Tabla: logs   (77 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE logs (
     id                       SERIAL NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE logs (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: oportunidades   (32 filas en el momento del volcado)
+-- Tabla: oportunidades   (42 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE oportunidades (
     id                       SERIAL NOT NULL,
@@ -80,7 +80,26 @@ CREATE TABLE oportunidades (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: presupuestos   (24 filas en el momento del volcado)
+-- Tabla: direcciones_obra   (0 filas en el momento del volcado)
+-- ------------------------------------------------------------------------
+CREATE TABLE direcciones_obra (
+    id                       SERIAL NOT NULL,
+    oportunidad_id           INTEGER NOT NULL,
+    calle_numero             TEXT NOT NULL,
+    codigo_postal            TEXT NOT NULL,
+    municipio                TEXT NOT NULL,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT direcciones_obra_oportunidad_id_fkey FOREIGN KEY (oportunidad_id) REFERENCES oportunidades(id),
+    CONSTRAINT direcciones_obra_pkey PRIMARY KEY (id),
+    CONSTRAINT direcciones_obra_oportunidad_id_key UNIQUE (oportunidad_id),
+    CONSTRAINT chk_direcciones_obra_calle_numero CHECK ((calle_numero = btrim(calle_numero)) AND ((char_length(calle_numero) >= 1) AND (char_length(calle_numero) <= 150))),
+    CONSTRAINT chk_direcciones_obra_codigo_postal CHECK (codigo_postal ~ '^(0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}$'::text),
+    CONSTRAINT chk_direcciones_obra_municipio CHECK ((municipio = btrim(municipio)) AND ((char_length(municipio) >= 1) AND (char_length(municipio) <= 100)))
+);
+
+-- ------------------------------------------------------------------------
+-- Tabla: presupuestos   (34 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE presupuestos (
     id                       SERIAL NOT NULL,
@@ -145,7 +164,7 @@ CREATE TABLE umbrales_gate (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: visitas   (11 filas en el momento del volcado)
+-- Tabla: visitas   (13 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE visitas (
     id                       SERIAL NOT NULL,
@@ -163,7 +182,7 @@ CREATE TABLE visitas (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: decisiones_gate   (15 filas en el momento del volcado)
+-- Tabla: decisiones_gate   (17 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE decisiones_gate (
     id                       SERIAL NOT NULL,
@@ -199,6 +218,7 @@ CREATE UNIQUE INDEX visitas_una_activa_por_oportunidad ON public.visitas USING b
 -- ==========================================================================
 ALTER TABLE clientes         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE decisiones_gate  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE direcciones_obra ENABLE ROW LEVEL SECURITY;
 ALTER TABLE leads            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE logs             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE oportunidades    ENABLE ROW LEVEL SECURITY;

@@ -147,6 +147,30 @@ la sección 6 con la salida literal.
       tutor.
   N15 El esquema convierte un número en texto (sin strict o con str()).
       Previsto: S1 y HTTP CASO 1 ("CP como NÚMERO").
+  N16 (Añadida el 2026-10-22, C1 del veredicto al PASO 1, H-D42-1.) Sin el
+      validador del carácter nulo en DireccionObra.recortar. Previsto,
+      línea exacta: HTTP CASO 1 en rojo: "[FALLO] calle con U+0000 -> 422
+      (H-D42-1) (500)", "[FALLO] municipio con U+0000 -> 422 (H-D42-1)
+      (500)" y "[FALLO] U+0000: 0 logs error_no_controlado nuevos y 0 filas
+      nuevas (H-D42-1) (n -> n+2)"; además CASO 6 "ninguna respuesta 500"
+      en rojo; y en S1 del servicio, "[FALLO] calle con el carácter nulo
+      U+0000 -> 422" y "[FALLO] municipio con el carácter nulo U+0000 ->
+      422" (el esquema lo acepta). N14 redefinida: APROBADA por el tutor.
+
+Cambios del veredicto al PASO 1 (2026-10-22), escritos ANTES de la primera
+prueba de la fase 2:
+  C1 (H-D42-1) psycopg2 rechaza un texto con U+0000 con ValueError antes
+     de enviarlo (no psycopg2.Error: no pasa por el except de H2), así que
+     sería un 500. DireccionObra da 422 si alguno de los tres textos lo
+     lleva; el mensaje no copia el valor. Pruebas: S1 y HTTP CASO 1 (422,
+     0 filas nuevas, 0 error_no_controlado nuevos). Hipótesis del tutor
+     SIN ejecutar: se comprueba con N16. El campo "informe" tiene
+     probablemente el mismo hueco: deuda anterior, NO se toca (anotada en
+     CLAUDE.md como H-D42-1, para la revisión).
+  C2 ficha_oportunidad_service.py: "cinco consultas" -> "seis" en el
+     docstring de leer_ficha y los dos comentarios de obtener_ficha, y
+     fuera la nota "léase seis". También el docstring del módulo (línea 9),
+     que decía lo mismo y el veredicto no nombraba.
 
 ======================================================================
 5. Fase 2 (cuando Gabi lo diga)
@@ -164,4 +188,80 @@ con salidas reales y push. Sin merge.
 ======================================================================
 6. Resultados
 ======================================================================
-(Fase 1: SIN ejecutar. Se rellena en la fase 2.)
+(Fase 1: SIN ejecutar, commit 7bf7989.)
+
+Fase 2, 2026-10-22 (veredicto del tutor al PASO 1: C1 y C2, escritos ANTES
+de la primera prueba). Condiciones a las 18:27:39 y antes de cada tanda:
+2,33-2,65 GB libres, ningún chrome, msedge, docker/vmmem ni WINWORD,
+enchufado (AC). Kernel-Power 41/506/507: NINGUNO en ninguna tanda.
+
+Lecturas previas (18:28): 1 visita real activa en 14 días (id 10068,
+confirmada, 23/10 11:00), lejos de los bloques de los scripts. Foto de las
+10 tablas (recuento y SHA-256, sin filas) en el scratchpad.
+
+Tanda 1b, antes de migrar (18:29:39-18:30:10):
+  check_migracion_direcciones_obra sin migrar   2/42 (FALLA, previsto)
+  --ensayo paso16                               43/43
+  N3 (copia sin el CHECK del CP)                32/43 (11 FALLOS del CP)
+  N13 (copia sin ENABLE ROW LEVEL SECURITY)     42/43 ("RLS activada (False)")
+  (La tanda 1, 18:28:30, dio lo mismo salvo "sin migrar": el script
+  reventaba con UndefinedTable en el INSERT fuera de SAVEPOINT. Corregido:
+  sin tabla, 3 FALLOS contados y la excepción propia SinTabla.)
+
+Migración real, tras "confirmo la migración paso16": 2026-10-22
+19:19:47-19:19:49, código 0 ("restricciones 6; RLS True; filas 0", commit).
+Después: check_migracion_direcciones_obra 42/42. dump_schema: 11 tablas,
+26 PK/UNIQUE/FK, 21 CHECK; check_schema_actual_ejecutable 10/10.
+
+Verdes (19:20-19:24): check_direccion_obra_service 88/88 (en la primera
+ejecución 87/88: la S2 buscaba el nombre de la tabla en el TEXTO entero y
+contaba un comentario de app/schemas/resultados_llamada.py; corregida para
+mirar solo los textos del código, por ast), check_direccion_obra_http 43/43
+(C1 en verde; marca 0 veces en 50 respuestas barridas y en logs; 0 respuestas
+500 en 70 peticiones; H3: 4 respuestas 422 repiten la marca, [INFO]),
+check_ficha_oportunidad_http 70/70. CONTROL (copia sin cambios): 88/88 y 43/43.
+
+Mutantes (copias de app/ y scripts/ con secretos en el entorno, de uno en
+uno; servicio | HTTP; servicio con la versión FINAL del script, 19:50-19:56):
+  N1  80/88 (8 CP)              | 38/43 (4 CP con 500 + "ningún 500")
+  N2  83/88                     | 37/43 (500 por el CHECK y por U+0000)
+  N4  88/88 (no mira la ficha)  | 38/43 (5 de la ficha)
+  N5  85/88 (nombre en datos_oportunidad.py; AvisoGateResponse y
+      LeadSessionResponse con calle_numero) | 42/43 (marca en gate-avisos x2)
+  N6  84/88                     | 39/43 (claves exactas x3 y marca)
+  N7  85/88                     | 39/43 (log con la marca x3; logs: 3)
+  N8  75/86 (CP x8; "from None"; CheckViolation sin sanear x2)
+                                | 37/43 (marca en logs.detalle: 4; 500)
+  N9a 74/88 | 30/43. La forma del plan (otra conexión con su commit) NO
+      puede guardar nada: espera al FOR UPDATE de la transacción principal
+      (pgcode 55P03 con lock_timeout 5 s, 4 veces): hipótesis confirmada.
+  N9b (commit() dentro de la transacción tras el upsert) 74/88 (CommitProhibido
+      x3 en S3; S4: "(1, 0, 1, 0, 'pendiente_aprobacion')": quedan la
+      dirección y la visita) | 43/43 (HTTP no lo mira, previsto)
+  N10 87/88 (D42.4)             | 43/43 (previsto: solo el servicio)
+  N11 86/88                     | 39/43
+  N12 86/88 (H1 x2)             | 42/43 (la ficha cambia)
+  N14 82/88 (null/ausente x3, seguimiento sin dirección x2, H1) | 40/43
+      (en la primera ejecución el script del servicio reventaba con
+      ValidationError: registrar() y H2 construían el cuerpo fuera del try
+      o sin dirección; corregido)
+  N15 87/88                     | 39/43 (CP 28013 -> 201)
+  N16 86/88 (U+0000 x2)         | 39/43: exactamente el previsto de la
+      sección 4 (500 x2, "0 -> 2" logs error_no_controlado, "ningún 500").
+  Limpieza: "no toca nada ajeno" y "no quedan datos propios" en las 15
+  ejecuciones HTTP; 0 clientes propios y 0 filas en direcciones_obra tras
+  la N14 que reventó.
+
+Regresión de los 17 scripts que crean visitas + los 2 nuevos
+(19:57:04-20:11:37): 19/19 con código 0, con los mismos recuentos que el
+bloque 5 (resultados_llamada_http 210/210, visits_http 98/98, ...).
+
+Suite completa, 60 scripts en UNA pasada (20:11:58-20:30:29): 60/60 con
+código 0 (check_datos_d39_9_incluye_tipico con --esperado nuevo;
+check_graceful_shutdown y check_mcp_connection desde copias en el 8030 y el
+8031; uvicorn del 8031 detenido por su PID 11900, log = netstat; lanzador
+16432 terminado). Los cinco de P4 revisados a mano: sin fallos
+(check_rls_estado: 11 tablas, todas con RLS, 0 políticas).
+
+Foto de las tablas después (20:31): las 10 de antes, IDÉNTICAS (recuento y
+SHA-256); direcciones_obra 0 filas.

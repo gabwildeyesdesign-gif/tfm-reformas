@@ -370,6 +370,24 @@ try:
         r = registrar(op_forma, {"resultado": "visita_acordada", "fecha": str(D_FORMA), "hora": "11:00",
                                  "direccion_obra": {**DIR_A, **cambios}})
         comprobar(f"{titulo} -> 422", r.status_code == 422, f"({r.status_code})")
+    # H-D42-1 (C1): el carácter nulo U+0000. Sin el validador, psycopg2 lo
+    # rechaza con ValueError y sale un 500 (N16). Se cuentan los
+    # error_no_controlado de esta ruta desde el id base, antes y después.
+    SQL_500_RUTA = ("SELECT count(*) FROM logs WHERE id > %s AND accion = 'error_no_controlado' "
+                    "AND detalle->>'ruta' = '/resultados-llamada';")
+    # SQL: SQL_500_RUTA, antes de los dos envíos.
+    errores_antes = consultar(SQL_500_RUTA, (FOTO["logs"][0],))[0][0]
+    # La calle y el municipio con el carácter nulo dentro (y la marca).
+    for titulo, cambios in (("calle con U+0000", {"calle_numero": f"Calle {MARCA}\u0000 1"}),
+                            ("municipio con U+0000", {"municipio": "Madr\u0000id"})):
+        r = registrar(op_forma, {"resultado": "visita_acordada", "fecha": str(D_FORMA), "hora": "11:00",
+                                 "direccion_obra": {**DIR_A, **cambios}})
+        comprobar(f"{titulo} -> 422 (H-D42-1)", r.status_code == 422, f"({r.status_code})")
+    # SQL: SQL_500_RUTA, después; y la foto de la oportunidad, sin cambios.
+    errores_despues = consultar(SQL_500_RUTA, (FOTO["logs"][0],))[0][0]
+    comprobar("U+0000: 0 logs error_no_controlado nuevos y 0 filas nuevas (H-D42-1)",
+              errores_despues == errores_antes and foto_op(op_forma) == antes,
+              f"({errores_antes} -> {errores_despues})")
     # Un objeto con un resultado SIN visita: descartar (Gate) y cliente_cancela.
     r = registrar(op_forma, {"resultado": "descartar", "motivo": "precio", "direccion_obra": DIR_A})
     comprobar("descartar con direccion_obra -> 422", r.status_code == 422, f"({r.status_code})")

@@ -6,7 +6,7 @@ docs/Plan_Endpoint_Ficha_Oportunidad.txt).
 SOLO LECTURA, con tres barreras (plan, 2.9):
   1. get_db_connection(), que termina con rollback y nunca hace commit;
   2. la PRIMERA orden es SQL_MODO_TRANSACCION (REPEATABLE READ, READ
-     ONLY): Postgres rechaza cualquier escritura, y las cinco consultas
+     ONLY): Postgres rechaza cualquier escritura, y las seis consultas
      ven la MISMA foto de los datos, así que la ficha no se contradice
      aunque alguien escriba en medio;
   3. ningún FOR UPDATE.
@@ -14,9 +14,8 @@ No escribe nada, tampoco en logs (P7: la auditoría de lecturas queda
 para D26.5).
 
 (Nota 2026-10-22, D42: desde la rama feat/n0-direccion-obra son SEIS
-consultas: la sexta, SQL_DIRECCION, lee la dirección de la obra. Donde abajo
-dice "las cinco consultas", léase seis. La ficha es la ÚNICA lectura que la
-devuelve, D42.5.)
+consultas: la sexta, SQL_DIRECCION, lee la dirección de la obra. La ficha es
+la ÚNICA lectura que la devuelve, D42.5.)
 
 El contacto, la reforma, las fotos y el presupuesto se construyen con las
 MISMAS funciones que GET /gate-avisos (datos_oportunidad.py).
@@ -299,7 +298,7 @@ SQL_DIRECCION = """
 
 def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
     """
-    Las cinco consultas, con el cursor de quien llama y DENTRO de su
+    Las seis consultas, con el cursor de quien llama y DENTRO de su
     transacción (no abre, no cierra y no fija el modo: eso lo hace
     obtener_ficha). Recibe el cursor, como leer_listado, para que las
     pruebas puedan ejecutarla dentro de una transacción suya.
@@ -456,9 +455,9 @@ def obtener_ficha(oportunidad_id: int) -> FichaOportunidadResponse:
         # El cursor se cierra SIEMPRE al salir de este bloque.
         with conn.cursor() as cursor:
             # PRIMERA orden de la transacción: REPEATABLE READ (una sola
-            # foto para las cinco consultas) y READ ONLY (Postgres rechaza
+            # foto para las seis consultas) y READ ONLY (Postgres rechaza
             # cualquier escritura). Tiene que ir antes de cualquier otra.
             # SQL: SQL_MODO_TRANSACCION.
             cursor.execute(SQL_MODO_TRANSACCION)
-            # Las cinco consultas, en esa misma transacción.
+            # Las seis consultas, en esa misma transacción.
             return leer_ficha(cursor, oportunidad_id)

@@ -241,7 +241,10 @@ for titulo, cambios in (("calle vacía", {"calle_numero": ""}), ("calle solo esp
                         ("código postal con cifras árabes orientales", {"codigo_postal": "٢٨٠١٣"}),
                         ("código postal vacío", {"codigo_postal": ""}),
                         ("código postal como NÚMERO 28013 (N15)", {"codigo_postal": 28013}),
-                        ("código postal null", {"codigo_postal": None})):
+                        ("código postal null", {"codigo_postal": None}),
+                        # H-D42-1 (C1): el carácter nulo, que psycopg2 rechazaría con un 500.
+                        ("calle con el carácter nulo U+0000", {"calle_numero": "Calle\u0000 1"}),
+                        ("municipio con el carácter nulo U+0000", {"municipio": "Madr\u0000id"})):
     comprobar(f"{titulo} -> 422", direccion_valida(**cambios) is False)
 # Clave de más y de menos, y un texto en vez de un objeto.
 acepta, _ = valido(cuerpo("visita_acordada", direccion_obra={**DIR_A, "piso": "3B"}, **CAMPOS["visita_acordada"]))
@@ -268,10 +271,28 @@ comprobar("los tres textos se recortan (como exigen los CHECK)",
 # ======================================================================
 print("\nS2. Estático: D42.5 y H2")
 # ======================================================================
-# Los .py de app/ que nombran la tabla.
+
+
+def textos_de_codigo(ruta):
+    """Los textos entre comillas del código de un archivo (donde vive el SQL),
+    sin docstrings ni comentarios (los comentarios no están en el ast)."""
+    # El árbol del archivo.
+    arbol = ast.parse(ruta.read_text(encoding="utf-8"))
+    # Los docstrings: la primera sentencia de módulo, clase o función, si es texto.
+    docstrings = {id(n.body[0].value) for n in ast.walk(arbol)
+                  if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                  and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+    # Los demás textos (también los trozos de un f-string).
+    return [n.value for n in ast.walk(arbol) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in docstrings]
+
+
+# Los .py de app/ cuyo CÓDIGO nombra la tabla. (Corregido en la fase 2,
+# 2026-10-22: antes se buscaba en el texto entero y contaba un comentario de
+# app/schemas/resultados_llamada.py; un JOIN la nombraría en un texto.)
 nombran = sorted(str(p.relative_to(RAIZ_REPO)).replace("\\", "/") for p in (RAIZ_REPO / "app").rglob("*.py")
-                 if "direcciones_obra" in p.read_text(encoding="utf-8"))
-comprobar("solo el servicio de resultados y la ficha nombran direcciones_obra",
+                 if any("direcciones_obra" in t for t in textos_de_codigo(p)))
+comprobar("solo el servicio de resultados y la ficha nombran direcciones_obra en su código",
           nombran == ["app/services/ficha_oportunidad_service.py", "app/services/resultados_llamada_service.py"],
           f"({nombran})")
 
@@ -374,9 +395,14 @@ def logs_de(op):
 # El registro con el cursor de la prueba, dentro de su SAVEPOINT.
 def registrar(op, resultado, direccion=None, **campos):
     """registrar_resultado_con_cursor con el cursor de la prueba; (respuesta, rechazo) o (None, excepción)."""
-    # El cuerpo validado por el esquema (como en la ruta).
-    data = ResultadoLlamadaCreate(oportunidad_id=op, resultado=resultado, informe="prueba D42",
-                                  direccion_obra=direccion, **campos)
+    # El cuerpo validado por el esquema (como en la ruta). Si el esquema lo
+    # rechaza (un 422), se devuelve como rechazo: un FALLO contado, no una
+    # traza (corregido en la fase 2: con la N14 el script reventaba aquí).
+    try:
+        data = ResultadoLlamadaCreate(oportunidad_id=op, resultado=resultado, informe="prueba D42",
+                                      direccion_obra=direccion, **campos)
+    except ValidationError as error:
+        return None, error
     # SQL: un punto al que volver (un rechazo de negocio aborta la transacción).
     cur.execute("SAVEPOINT registro;")
     # Un commit() dentro sería CommitProhibido, y un rechazo de negocio (409,
@@ -494,8 +520,10 @@ try:
     # H2: una dirección que Postgres rechaza (el esquema saltado a propósito
     # con model_construct: 151 caracteres, con la marca).
     op_h2 = oportunidad("pendiente_aprobacion", True)
+    # Con una dirección válida al construir (así vale también con la N14) y
+    # la rota puesta después.
     data = ResultadoLlamadaCreate(oportunidad_id=op_h2, resultado="visita_acordada", informe="prueba H2",
-                                  fecha=str(D_H2), hora="11:00")
+                                  fecha=str(D_H2), hora="11:00", direccion_obra=DIR_A)
     data.direccion_obra = DireccionObra.model_construct(calle_numero=MARCA + "x" * MAX_CALLE_NUMERO,
                                                         codigo_postal="28013", municipio="Municipio de Prueba")
     # SQL: un punto al que volver (el error aborta la transacción).
@@ -627,7 +655,7 @@ try:
     op_h2b = gate_u()
     # Un cuerpo válido y, después, una dirección que el CHECK rechaza (CP 53000).
     data = ResultadoLlamadaCreate(oportunidad_id=op_h2b, resultado="visita_acordada", informe="prueba H2",
-                                  fecha=str(D_H2B), hora="11:00")
+                                  fecha=str(D_H2B), hora="11:00", direccion_obra=DIR_A)
     data.direccion_obra = DireccionObra.model_construct(calle_numero=f"Calle {MARCA} 3", codigo_postal="53000",
                                                         municipio="Municipio de Prueba")
     try:

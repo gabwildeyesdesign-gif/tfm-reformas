@@ -1836,8 +1836,8 @@ dirección que nos indicaste". Decisión D42 (Gabi y tutor, 2026-10-22) y
 veredicto del tutor al PASO 0 (el mismo día): plan
 docs/Plan_Direccion_Obra_D42.txt.
 
-Base de datos (migración paso16, PREPARADA SIN APLICAR en la fase 1; se
-aplica en la fase 2 tras "confirmo la migración paso16"): tabla PROPIA
+Base de datos (migración paso16, APLICADA el 2026-10-22 a las 19:19:49 tras
+"confirmo la migración paso16"; solo expand): tabla PROPIA
 direcciones_obra (D42.1), una fila como mucho por oportunidad: id,
 oportunidad_id (UNIQUE, clave foránea a oportunidades), calle_numero,
 codigo_postal, municipio, created_at y updated_at, todas NOT NULL. RLS
@@ -1890,7 +1890,10 @@ Limitación aceptada (H3): un 422 de FastAPI repite lo enviado ("input") a
   nombre y el teléfono: limitación de n8n, no del backend.
 Verificación: check_migracion_direcciones_obra, check_direccion_obra_service
 y check_direccion_obra_http (puerto 8035), con las pruebas en negativo
-N1-N15 del plan; recuentos de la fase 2 en el plan y en su commit.
+N1-N16 del plan. Fase 2 (2026-10-22): 42/42, 88/88 y 43/43; N1-N16 en rojo;
+regresión 19/19; suite 60/60 en una pasada válida (sección 6 del plan).
+H-D42-1 (C1 del veredicto al PASO 1): un texto con U+0000 en la dirección da
+422 (psycopg2 lo rechazaría con ValueError, un 500).
 
 6. Revisión técnica final — hallazgos y resolución
 

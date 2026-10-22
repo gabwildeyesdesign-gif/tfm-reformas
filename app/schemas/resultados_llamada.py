@@ -143,6 +143,12 @@ class DireccionObra(BaseModel):
     @field_validator("calle_numero", "codigo_postal", "municipio", mode="before")
     @classmethod
     def recortar(cls, valor):
+        # H-D42-1 (C1 del veredicto al PASO 1): psycopg2 rechaza un texto con
+        # el carácter nulo U+0000 ANTES de enviarlo, con un ValueError (no un
+        # psycopg2.Error): sin esto sería un 500. Aquí, 422. El mensaje no
+        # copia el valor (es confidencial).
+        if isinstance(valor, str) and "\x00" in valor:
+            raise ValueError("no se admite el carácter nulo (U+0000)")
         # El recorte compartido (strip).
         return texto_sin_espacios_en_los_extremos(valor)
 

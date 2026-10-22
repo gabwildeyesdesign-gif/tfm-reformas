@@ -800,12 +800,22 @@ SOLO REST.
 > formulario (limitación de n8n, no del backend). OJO: la migración paso16
 > (tabla direcciones_obra, la 11.ª, con RLS) está PREPARADA SIN APLICAR: se
 > aplica en la fase 2 tras "confirmo la migración paso16", y después se
-> regenera docs/schema_actual.sql. La foto de datos reales pasa a 11 tablas
+> regenera docs/schema_actual.sql. (Nota 2026-10-22, noche: paso16 APLICADA
+> el 2026-10-22 a las 19:19:49, tras la frase del tutor; check 2/42 antes y
+> 42/42 después; docs/schema_actual.sql regenerado. Fase 2 HECHA: verdes,
+> N1-N16 en rojo, regresión 19/19 y suite 60/60; pendiente solo el veredicto
+> del tutor y el merge, que confirma Gabi.) La foto de datos reales pasa a 11 tablas
 > (solo SHA-256 y recuentos). Misma regla de siempre: no hacer merge sin la
 > confirmación explícita de Gabi, después de la revisión del tutor, y siempre
 > con `--ff-only`. Después del merge: reiniciar el uvicorn del 8000 SIN
 > --reload (app/ cambia); en n8n (tutor y Gabi), el campo obligatorio del
 > formulario y la dirección en la página de la ficha.
+> (Nota 2026-10-22, H-D42-1, hallazgo del tutor en el PASO 1, PARA LA
+> REVISIÓN: psycopg2 rechaza un texto con el carácter nulo U+0000 antes de
+> enviarlo, con ValueError, no psycopg2.Error. En direccion_obra se corrige
+> en esta rama (422, C1). El campo "informe" de POST /resultados-llamada
+> tiene probablemente el mismo hueco (un 500 en vez de un 422): es deuda
+> anterior y NO se toca aquí; lo mismo puede pasar en otros textos libres.)
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1225,6 +1235,14 @@ el 8000), y sigue incluyendo check_datos_d39_9_incluye_tipico con
 que se aplique paso16 (es su primera prueba en negativo). Los dos que crean
 visitas tienen su bloque al final de scripts/fechas_prueba.py. Todavía sin
 ninguna pasada: fase 1, SIN ejecutar.)
+(Nota 2026-10-22, noche, fase 2 de D42: 60/60 con código 0 en UNA pasada
+válida, de 20:11:58 a 20:30:29, sin Kernel-Power 41, 506 ni 507, enchufado,
+2,51 GB libres y ningún chrome, msedge, docker/vmmem ni WINWORD.
+check_graceful_shutdown y check_mcp_connection desde copias en el 8030 y el
+8031; uvicorn del 8031 detenido por su PID 11900 (log = netstat). Salida de
+los cinco de P4 revisada a mano: sin fallos. Datos reales de las 10 tablas
+anteriores iguales antes (18:28) y después (20:31); direcciones_obra, 0
+filas. Detalle: sección 6 de docs/Plan_Direccion_Obra_D42.txt.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2

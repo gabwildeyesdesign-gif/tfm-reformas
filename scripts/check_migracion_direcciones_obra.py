@@ -142,6 +142,10 @@ class ConexionSinCommit(psycopg2.extensions.connection):
         raise CommitProhibido("commit() en una conexión de prueba: la prueba termina siempre en ROLLBACK")
 
 
+class SinTabla(Exception):
+    """Antes de migrar: corta el punto 2 cuando la tabla no existe."""
+
+
 def tabla_existe(cur):
     """True si la tabla existe (to_regclass da NULL si no)."""
     # SQL: el nombre resuelto, o NULL.
@@ -406,6 +410,17 @@ try:
     # Las otras restricciones.
     debe_rechazarse("oportunidad inexistente -> clave foránea", {}, "23503", FK, oportunidad_id=-1)
     debe_rechazarse("calle NULL -> NOT NULL", {"calle_numero": None}, "23502", None)
+    # Sin tabla (antes de migrar), lo que sigue no va en SAVEPOINT y daría
+    # una traza: sus tres comprobaciones cuentan como FALLO, sin consultar.
+    # (Corregido en la fase 2: antes de migrar el script reventaba aquí.)
+    if not existe:
+        # Una por cada comprobación que se salta.
+        for titulo in ("segunda fila de la misma oportunidad -> clave única",
+                       "ON CONFLICT (oportunidad_id) DO UPDATE se acepta",
+                       "el upsert deja UNA fila, con los textos nuevos"):
+            comprobar(titulo, False, "(la tabla no existe)")
+        # Se salta al except de abajo y al finally (ROLLBACK), sin tocar la tabla.
+        raise SinTabla
     # SQL: una fila de verdad (dentro de la transacción) para la clave única.
     cur.execute(f"INSERT INTO {TABLA} (oportunidad_id, calle_numero, codigo_postal, municipio) "
                 "VALUES (%s, %s, %s, %s);",
@@ -428,6 +443,9 @@ try:
     cuantas, sustituida = cur.fetchone()
     comprobar("el upsert deja UNA fila, con los textos nuevos", cuantas == 1 and sustituida is True,
               f"(filas {cuantas}, sustituida {sustituida})")
+# Sin tabla: ya se han contado los FALLOS; se sigue con el punto 3.
+except SinTabla:
+    pass
 # Siempre: ROLLBACK de todo (también del ensayo).
 finally:
     cn.rollback()
