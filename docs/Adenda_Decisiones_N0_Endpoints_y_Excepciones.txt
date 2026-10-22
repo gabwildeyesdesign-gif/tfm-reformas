@@ -18,8 +18,8 @@ endpoints y revisión técnica final.
 | 6 | GET /leads/session/{lead_token} | lead_token en la ruta (1 a 100 caracteres, mismas reglas que POST /leads) | 200 siempre que la petición sea válida: existe, lead_id, oportunidad_id, estado_oportunidad, presupuesto {existe, requiere_aprobacion, motivo_gate}. NUNCA importes (ver 5.3) | Router de n8n, al inicio de cada turno del chat: decide si el mensaje va al Agente 1 (captura) o al Agente 2 (asesor). Solo REST  **[Nota 2026-10-12, rama feat/n0-agente2]** Añade reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales} y plazo_orientativo (D18.7; null salvo baño o cocina con presupuesto, sin Gate y sin cambios); 503 configuracion_incompleta solo si hace falta un plazo y su regla falta. Sigue sin importes. Ver 5.11 |
 | 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) (hasta el 2026-10-22, también el formulario del alias POST /gate-decisions, quitado; ver 5.5). Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 |
 | 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura. **[Nota 2026-10-11, rama feat/n0-resumen-lista-diaria, D26.1]** Cada elemento lleva además el objeto "solicitud" {m2 (texto exacto o null), nivel_acabados, incluye_cambios_estructurales}, siempre presente, después de tipo_reforma; los de visita (d y e), además, texto_cliente de ESA visita. Siguen sin salir email e importes. Ver la nota del 2026-10-11 en 5.7 |
-| 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 |
-| 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) |
+| 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 **[Nota 2026-10-22, rama feat/n0-direccion-obra, D42]** Una clave más en la raíz, direccion_obra: {calle_numero, codigo_postal, municipio} o null. CONFIDENCIAL: es la ÚNICA respuesta que la devuelve (D42.5). Ver 5.13 |
+| 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) **[Nota 2026-10-22, rama feat/n0-direccion-obra, D42]** Entrada OPCIONAL direccion_obra {calle_numero, codigo_postal, municipio} con visita_acordada, confirmar_hora y otra_hora (422 con descartar y cliente_cancela; null = no enviarla); se guarda en direcciones_obra en la misma transacción. La respuesta NO cambia (nunca la devuelve). Ver 5.13 |
 | 11 | GET /huecos-libres | Sin parámetros (modo días) o ?fecha=AAAA-MM-DD (modo un día); cualquier otro parámetro, 422. Cabecera X-Gate-Secret, puesta en el router (ver 5.11 e) | 200 siempre que la petición sea válida. Modo días: modo, generado_en, dias [{fecha, dia_semana, manana, tarde, num_horas_libres, etiqueta}]. Modo un día: modo, generado_en, fecha, dia_semana, manana, tarde, horas, sin_horas_motivo (null, fecha_pasada, fin_de_semana o dia_completo). NUNCA datos de otras visitas. 401, 422 de forma, 503 configuracion_incompleta sin log | **[Añadido 2026-10-13, D32]** El formulario de n8n de POST /resultados-llamada, en sus páginas "Día" y "Hora". El Agente 2 tiene la misma consulta como tool MCP consultar_huecos_libres (sin etiqueta). Solo lectura. Forma exacta: docs/Contrato_Formulario_Llamadas.md |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
@@ -1825,6 +1825,72 @@ Verificación (2026-10-20): check_migracion_resumen_solicitud 12/12 (2/12 antes
 de migrar; ensayo sin CHECK 10/13), check_resumen_solicitud_service 38/38,
 check_resumen_solicitud_http 62/62 (puerto 8034), pruebas en negativo N1-N10
 y suite completa 57/57 en una pasada válida (secciones 15-18 del plan).
+
+5.13 Dirección de la obra, D42 (añadido el 2026-10-22, rama
+feat/n0-direccion-obra)
+
+Para qué (hallazgo H-D39-1): el técnico necesita la dirección de la obra y el
+sistema no la guardaba; administración la pregunta por teléfono en la llamada
+que confirma la visita, y el email de visita confirmada dice "Irá a la
+dirección que nos indicaste". Decisión D42 (Gabi y tutor, 2026-10-22) y
+veredicto del tutor al PASO 0 (el mismo día): plan
+docs/Plan_Direccion_Obra_D42.txt.
+
+Base de datos (migración paso16, PREPARADA SIN APLICAR en la fase 1; se
+aplica en la fase 2 tras "confirmo la migración paso16"): tabla PROPIA
+direcciones_obra (D42.1), una fila como mucho por oportunidad: id,
+oportunidad_id (UNIQUE, clave foránea a oportunidades), calle_numero,
+codigo_postal, municipio, created_at y updated_at, todas NOT NULL. RLS
+activada sin políticas, como las demás. Defensa doble (D42.3): el esquema
+DireccionObra (422) y tres CHECK: textos iguales a su btrim, calle de 1 a 150
+y municipio de 1 a 100 caracteres; código postal
+^(0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}$ (5 cifras, provincia 01-52).
+
+POST /resultados-llamada, entrada (P1 = A del veredicto):
+  direccion_obra   OPCIONAL en la API: {calle_numero, codigo_postal,
+                   municipio}, extra="forbid"; null = no enviarla. Solo con
+                   los resultados que dejan visita (visita_acordada,
+                   confirmar_hora, otra_hora); con descartar o
+                   cliente_cancela, un objeto da 422 sin escribir nada.
+                   codigo_postal es TEXTO: 28013 sin comillas da 422 (sin
+                   conversión). Es obligatoria solo en el formulario de n8n
+                   (D42.2); la obligatoriedad en la API (opción B) queda para
+                   N1.
+POST /resultados-llamada, respuesta: SIN CAMBIOS (las mismas claves; nunca la
+  dirección, D42.5).
+Escritura (D42.4): en la MISMA transacción que la visita y el resultado (todo
+  o nada), upsert por oportunidad_id. El log del resultado (con visita) lleva
+  "direccion_obra_registrada": true/false, nunca el texto; sin visita, la
+  clave no se escribe.
+Repetición (H1): un resultado es definitivo. La repetición exacta (200) NO
+  mira la dirección (no entra en la comparación, como el informe) ni la
+  escribe; otro resultado da 409, como siempre. Limitación de N0: una
+  dirección ya registrada no se puede corregir por la API; en N1 se
+  editaría desde la ficha. El upsert queda como protección.
+Error al guardarla (H2): si Postgres la rechazara (solo si el esquema y los
+  CHECK dejaran de coincidir), el error se vuelve a lanzar SANEADO
+  (DireccionObraNoGuardada, "from None"): solo pgcode y nombre de la
+  restricción, nunca el texto de Postgres, que copia la fila entera y el
+  manejador global guardaría en logs. 500 y rollback de todo.
+GET /oportunidades/{id}/ficha: una clave más en la raíz, direccion_obra
+  ({calle_numero, codigo_postal, municipio} o null; sin fechas), leída con
+  una consulta PROPIA de la ficha (SQL_DIRECCION).
+D42.5, CONFIDENCIAL: la ficha es la ÚNICA lectura que la devuelve. NUNCA en
+  GET /gate-avisos, GET /llamadas-del-dia, GET /leads/session, GET
+  /huecos-libres, las tools MCP, las respuestas de POST /resultados-llamada,
+  /visits, /calculate-estimate o /create-followup-task, ni en logs.detalle.
+  Regla: la tabla no se añade a COLUMNAS_CASO ni a ninguna consulta
+  compartida.
+Limitación aceptada (H3): un 422 de FastAPI repite lo enviado ("input") a
+  quien lo envió (el formulario). No se guarda en ninguna tabla. Según la
+  exportación saneada de n8n (f1301af, n8n/WF_formulario_llamadas.json), el
+  formulario solo enseña "El sistema ha rechazado el formato de los datos" y
+  WF4 recibe el código y su título, nunca el cuerpo. El historial de
+  ejecuciones de n8n guarda lo escrito en el formulario, como ya guarda el
+  nombre y el teléfono: limitación de n8n, no del backend.
+Verificación: check_migracion_direcciones_obra, check_direccion_obra_service
+y check_direccion_obra_http (puerto 8035), con las pruebas en negativo
+N1-N15 del plan; recuentos de la fase 2 en el plan y en su commit.
 
 6. Revisión técnica final — hallazgos y resolución
 

@@ -42,6 +42,9 @@ from app.schemas.common import MAX_FOTOS_LEAD, EstadoOportunidad, EstadoVisita, 
 # resultado y el motivo eran los Enum del Gate; desde B2 se importan, sin
 # copiarlos, con los tres tipos, los cinco resultados y 'sin_decision'.
 from app.schemas.resultados_llamada import MotivoResultado, ResultadoLlamada, TipoLlamada
+# D42: la dirección de la obra, con la MISMA clase que la entrada de POST
+# /resultados-llamada (tres claves, extra="forbid").
+from app.schemas.resultados_llamada import DireccionObra
 
 
 class EventoEstado(str, Enum):
@@ -210,3 +213,8 @@ class FichaOportunidadResponse(BaseModel):
     # Las OTRAS oportunidades con el mismo email (no verificado); [] si no
     # hay. Nunca la propia.
     otras_oportunidades_mismo_email: list[OtraOportunidad]
+    # D42 (2026-10-22): la dirección de la obra (calle_numero, codigo_postal,
+    # municipio), o null si no hay ninguna guardada. CONFIDENCIAL: esta ficha
+    # es la ÚNICA respuesta que la devuelve (D42.5). Sin fechas (veredicto
+    # del tutor al PASO 0).
+    direccion_obra: DireccionObra | None

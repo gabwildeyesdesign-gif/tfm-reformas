@@ -306,6 +306,15 @@ parámetro solo_gate del servicio, GateDecisionCreate, GateDecisionResponse
 y MotivoDescarte (DecisionGate se queda: lo usan GET /gate-avisos y la
 ficha). X-Gate-Secret sigue siendo la llave de todas las rutas de
 administración. Detalle: Adenda 5.5, reescrita.)
+(Nota 2026-10-22, D42: en la rama feat/n0-direccion-obra (pendiente de
+merge), POST /resultados-llamada admite direccion_obra {calle_numero,
+codigo_postal, municipio}, OPCIONAL y solo con los resultados que dejan visita
+(422 con descartar y cliente_cancela), y la guarda en la tabla nueva
+direcciones_obra (paso16) en la misma transacción. CONFIDENCIAL (D42.5): solo
+la devuelve GET /oportunidades/{id}/ficha; ninguna otra ruta ni tool, ni las
+respuestas de POST /resultados-llamada, ni logs (solo
+"direccion_obra_registrada": true/false). Sin endpoints ni tools nuevos.
+Detalle: Adenda 5.13.)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -772,6 +781,31 @@ SOLO REST.
 > está al día con los emails al cliente del bloque 4 (chat, formulario de
 > llamadas, WF3 y WF7_email_cliente, nuevo), exportados tras publicar y
 > saneados con la convención de n8n/README.md. Solo documentación.)
+>
+> **(Nota 2026-10-22, tarde.) Bloque actual: D42, la dirección de la obra**
+> (hallazgo H-D39-1; decisión D42 y veredicto del tutor al PASO 0), en la rama
+> `feat/n0-direccion-obra`, **pendiente de merge** (PASO 1, fase 1, SIN
+> ejecutar; la fase 2 la decide Gabi). Plan docs/Plan_Direccion_Obra_D42.txt;
+> contrato en la Adenda 5.13 y en docs/Contrato_Formulario_Llamadas.md.
+> Decisiones: P1 = A (direccion_obra opcional en la API, obligatoria solo en
+> el formulario; B queda para N1), H1 (la repetición no mira ni escribe la
+> dirección; el upsert queda como protección), H2 (el error de Postgres al
+> guardarla se relanza saneado, "from None", sin el texto de la fila), H4
+> (ningún script imprime una fila de direcciones_obra). H3, limitación
+> aceptada sin código: un 422 de FastAPI repite lo enviado ("input"), también
+> la dirección, a quien lo envió; no se guarda en ninguna tabla; según la
+> exportación de n8n (f1301af), el formulario solo enseña "El sistema ha
+> rechazado el formato de los datos" y WF4 recibe el código y su título,
+> nunca el cuerpo; el historial de ejecuciones de n8n guarda lo escrito en el
+> formulario (limitación de n8n, no del backend). OJO: la migración paso16
+> (tabla direcciones_obra, la 11.ª, con RLS) está PREPARADA SIN APLICAR: se
+> aplica en la fase 2 tras "confirmo la migración paso16", y después se
+> regenera docs/schema_actual.sql. La foto de datos reales pasa a 11 tablas
+> (solo SHA-256 y recuentos). Misma regla de siempre: no hacer merge sin la
+> confirmación explícita de Gabi, después de la revisión del tutor, y siempre
+> con `--ff-only`. Después del merge: reiniciar el uvicorn del 8000 SIN
+> --reload (app/ cambia); en n8n (tutor y Gabi), el campo obligatorio del
+> formulario y la dirección en la página de la ficha.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1183,6 +1217,14 @@ check_mcp_connection desde copias en el 8030 y el 8031; uvicorn del 8031
 detenido por su PID 3924 (log = netstat). Salida de los cinco de P4 revisada
 a mano: sin fallos. Datos reales de las 10 tablas iguales antes (00:37) y
 después (13:40), 0 filas nuevas.)
+(Nota 2026-10-22, rama feat/n0-direccion-obra, D42: la suite pasa a 60
+scripts (veredicto del tutor), con check_migracion_direcciones_obra,
+check_direccion_obra_service y check_direccion_obra_http (puerto 8035, nunca
+el 8000), y sigue incluyendo check_datos_d39_9_incluye_tipico con
+--esperado nuevo. check_migracion_direcciones_obra FALLA a propósito hasta
+que se aplique paso16 (es su primera prueba en negativo). Los dos que crean
+visitas tienen su bloque al final de scripts/fechas_prueba.py. Todavía sin
+ninguna pasada: fase 1, SIN ejecutar.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1553,6 +1595,11 @@ rápida, no sustituye esa documentación. Contiene:
   paso15; pruebas en negativo N1-N10 con previsto y real; H-B1-1, H-C-2,
   D37.1; suite 57/57 (secciones 12-19). D36 y D37 los tiene el tutor en el
   Proyecto de claude.ai.
+- Plan_Direccion_Obra_D42.txt — plan de D42 (rama feat/n0-direccion-obra):
+  tabla propia direcciones_obra (paso16), el veredicto del tutor al PASO 0
+  (P1 = A, H1-H4, resultados sin visita, forma del campo, regla de D42.5),
+  pruebas en negativo N1-N15 y resultados de la fase 2. D42 lo tiene el tutor
+  en el Proyecto de claude.ai.
 - Decisiones_D28_Resumen_Conversacion_y_Enlace_Ficha.md y
   Decisiones_D29_Me_Lo_Pienso_y_Ultima_Llamada.md — D28 (resumen de la
   conversación, rama 2) y D29 (copiados del Proyecto de claude.ai el

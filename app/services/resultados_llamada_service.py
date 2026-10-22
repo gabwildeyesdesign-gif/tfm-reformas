@@ -22,12 +22,21 @@ oportunidad bloqueada (FOR UPDATE): POST /visits y POST /create-followup-task
 bloquean la misma fila, así que las operaciones sobre una oportunidad se
 ponen en fila.
 
+D42 (2026-10-22): con un resultado que deja visita y una direccion_obra, la
+dirección se guarda en la tabla direcciones_obra (upsert por oportunidad_id,
+D42.4) en esta MISMA transacción. Es CONFIDENCIAL (D42.5): el log solo dice
+"direccion_obra_registrada" (true/false) y un error al guardarla se vuelve a
+lanzar SANEADO (H2): sin el texto de Postgres, que copia la fila entera.
+
 Como todo services/, este archivo NO importa fastapi ni fastmcp. Cuando un
 resultado no se puede registrar, lanza una excepción con un "motivo" (código
 estable) y un "mensaje"; el adaptador app/api/resultados_llamada.py decide
 el código HTTP.
 """
 
+# psycopg2: solo para reconocer sus errores (psycopg2.Error) al guardar la
+# dirección de la obra (D42, H2).
+import psycopg2
 # Json: le dice a psycopg2 que un diccionario de Python va a una columna
 # JSONB (logs.detalle).
 from psycopg2.extras import Json
@@ -99,6 +108,10 @@ TEXTO_OTRA_HORA = ("Visita confirmada por teléfono por administración a otra h
 LOG_ENTITY_TYPE_OPORTUNIDAD = "oportunidad"
 ACCION_DECISION_REGISTRADA = "gate_decision_registrada"
 ACCION_LLAMADA_REGISTRADA = "llamada_registrada"
+# D42: la clave del log de todo resultado con visita: true si se guardó la
+# dirección de la obra, false si no llegó (así queda rastro de un olvido del
+# formulario, P1 = A). NUNCA el texto de la dirección.
+CLAVE_LOG_DIRECCION = "direccion_obra_registrada"
 
 # Mensajes de la ruta.
 MENSAJE_SIN_PRESUPUESTO = "La oportunidad todavía no tiene presupuesto: no hay ninguna llamada que registrar."
@@ -141,6 +154,16 @@ class EstadoNoPermiteResultado(ResultadoRechazado):
     sin_presupuesto, resultado_ya_registrado, estado_no_permitido,
     con_gate, contacto_registrado, visita_existente, plazo_no_cumplido,
     resultado_no_admitido, visita_cambiada y visita_activa_existente.
+    """
+
+
+class DireccionObraNoGuardada(RuntimeError):
+    """
+    D42, H2: Postgres no aceptó la dirección de la obra (-> 500 y rollback
+    de TODO). Se lanza en lugar del error de psycopg2, que copia la fila
+    entera en su texto ("Failing row contains (...)") y el manejador global
+    lo guardaría en logs. Solo lleva el código de Postgres (pgcode) y el
+    nombre de la restricción: nunca pgerror, ni el detalle, ni un valor.
     """
 
 
@@ -372,7 +395,9 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio):
     else:
         es_repeticion = False
     # Repetición: lo que ya estaba, sin escribir nada (el informe nuevo se
-    # ignora y se conserva el original).
+    # ignora y se conserva el original). D42, H1: la direccion_obra tampoco
+    # entra en la comparación ni se escribe; una ya registrada no se puede
+    # corregir por la API (limitación de N0; en N1, desde la ficha).
     if es_repeticion:
         # D33: sin visita, no hay fin (ni lectura de reglas).
         fin = None
@@ -452,6 +477,17 @@ def _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id,
     else:
         nuevo_estado = ESTADO_PERDIDA
 
+    # D42: la dirección de la obra, solo con un resultado que deja visita
+    # (el esquema ya da 422 si llega con los demás). None: sin visita, el
+    # log no lleva la clave; True/False: con visita, si llegó o no.
+    direccion_registrada = None
+    if r in CON_FECHA:
+        # ¿La envió el formulario? (P1 = A: es opcional en la API.)
+        direccion_registrada = data.direccion_obra is not None
+        # Si la envió, upsert en ESTA transacción (todo o nada, D42.4).
+        if direccion_registrada:
+            _guardar_direccion(cursor, oportunidad_id, data.direccion_obra)
+
     # SQL: la fila del resultado, con su tipo y sus dos visitas (las claves
     # foráneas dobles garantizan que son de ESTA oportunidad). El informe ya
     # llega recortado del esquema, como exige el CHECK.
@@ -500,6 +536,10 @@ def _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id,
         detalle = {"llamada_id": llamada_id, "tipo_llamada": tipo.value, "resultado": r.value,
                    "motivo": data.motivo.value if data.motivo else None, "visita_id": visita_id,
                    "visita_cancelada_id": cancelada_id, "fecha_visita": fecha_iso, "estado": nuevo_estado}
+    # D42: con visita, si se guardó la dirección (solo true/false, nunca el
+    # texto); sin visita, la clave no se escribe.
+    if direccion_registrada is not None:
+        detalle[CLAVE_LOG_DIRECCION] = direccion_registrada
     # SQL: UNA fila en logs, asociada a la oportunidad, con el detalle JSONB.
     cursor.execute(
         "INSERT INTO logs (entity_type, entity_id, accion, detalle) VALUES (%s, %s, %s, %s);",
@@ -521,6 +561,48 @@ def _escribir(cursor, data, tipo, oportunidad_id, estado, inicio, solicitada_id,
         visita_cancelada_id=cancelada_id,
         creado=True,
     )
+
+
+def _guardar_direccion(cursor, oportunidad_id, direccion):
+    """
+    D42.4: guarda la dirección de la obra de la oportunidad, o SUSTITUYE la
+    que tuviera (upsert por oportunidad_id), dentro de la transacción de
+    quien llama. Hoy un resultado es definitivo y no hay segunda vía para
+    sustituirla (H1): el upsert es una protección y la prueba el servicio.
+
+    H2: un error de Postgres se vuelve a lanzar SANEADO (ver
+    DireccionObraNoGuardada); la transacción entera se deshace.
+    """
+    # try SOLO alrededor del upsert (condición del tutor): un error de otra
+    # sentencia de la transacción no pasa por aquí.
+    try:
+        # SQL: la fila de la oportunidad, o, si ya existe (UNIQUE), sus tres
+        # textos nuevos y updated_at = now(). EXCLUDED es la fila que se
+        # intentaba insertar. Los valores van aparte, nunca en el texto.
+        cursor.execute(
+            """
+            INSERT INTO direcciones_obra (oportunidad_id, calle_numero, codigo_postal, municipio)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (oportunidad_id) DO UPDATE
+            SET calle_numero = EXCLUDED.calle_numero, codigo_postal = EXCLUDED.codigo_postal,
+                municipio = EXCLUDED.municipio, updated_at = now();
+            """,
+            (oportunidad_id, direccion.calle_numero, direccion.codigo_postal, direccion.municipio),
+        )
+    # Un error de Postgres: solo su código y el nombre de la restricción.
+    except psycopg2.Error as error:
+        # diag.constraint_name: el nombre de la restricción, o None.
+        restriccion = error.diag.constraint_name
+        # "from None": el error original NO va encadenado (su texto lleva la
+        # fila, y uvicorn imprimiría la cadena entera en la consola).
+        raise DireccionObraNoGuardada(
+            f"No se pudo guardar la dirección de la obra de la oportunidad {oportunidad_id} "
+            f"(pgcode {error.pgcode}, restricción {restriccion}). Se omite el detalle: dato confidencial."
+        ) from None
+    # Segunda barrera: insertada o sustituida, exactamente una fila.
+    if cursor.rowcount != 1:
+        raise RuntimeError(f"Segunda barrera: el upsert de la dirección de la oportunidad {oportunidad_id} "
+                           f"cambió {cursor.rowcount} filas (se esperaba 1).")
 
 
 def _insertar_visita_confirmada(cursor, oportunidad_id, inicio, texto):

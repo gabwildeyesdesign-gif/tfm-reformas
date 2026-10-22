@@ -13,6 +13,11 @@ SOLO LECTURA, con tres barreras (plan, 2.9):
 No escribe nada, tampoco en logs (P7: la auditoría de lecturas queda
 para D26.5).
 
+(Nota 2026-10-22, D42: desde la rama feat/n0-direccion-obra son SEIS
+consultas: la sexta, SQL_DIRECCION, lee la dirección de la obra. Donde abajo
+dice "las cinco consultas", léase seis. La ficha es la ÚNICA lectura que la
+devuelve, D42.5.)
+
 El contacto, la reforma, las fotos y el presupuesto se construyen con las
 MISMAS funciones que GET /gate-avisos (datos_oportunidad.py).
 
@@ -38,6 +43,8 @@ from app.schemas.ficha_oportunidad import (
     PresupuestoFicha,
     VisitaFicha,
 )
+# D42: el objeto de la dirección de la obra (el mismo que la entrada).
+from app.schemas.resultados_llamada import DireccionObra
 
 # Los estados de la oportunidad y los resultados de una llamada del Gate.
 from app.schemas.common import EstadoOportunidad
@@ -278,6 +285,18 @@ SQL_OTRAS = """
 """
 
 
+# Consulta 6 (D42, 2026-10-22), la dirección de la obra: CONFIDENCIAL
+# (D42.5). Es una consulta PROPIA de la ficha, a propósito: la tabla
+# direcciones_obra NO se nombra en COLUMNAS_CASO ni en ninguna consulta
+# compartida (gate-avisos, lista diaria, sesión), para que ninguna otra
+# lectura pueda devolverla por error. Como mucho una fila (UNIQUE).
+SQL_DIRECCION = """
+    SELECT d.calle_numero, d.codigo_postal, d.municipio
+    FROM direcciones_obra d
+    WHERE d.oportunidad_id = %(oportunidad_id)s;
+"""
+
+
 def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
     """
     Las cinco consultas, con el cursor de quien llama y DENTRO de su
@@ -376,6 +395,18 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
         for otra_id, tipo, estado, solicitada in cursor.fetchall()
     ]
 
+    # 6. La dirección de la obra (D42), en esta misma foto.
+    # SQL: consulta 6 (SQL_DIRECCION).
+    cursor.execute(SQL_DIRECCION, parametros)
+    # La fila, o None si no hay dirección guardada.
+    fila_direccion = cursor.fetchone()
+    # Con fila: las tres claves; sin ella, null en la ficha.
+    direccion = None
+    if fila_direccion is not None:
+        # Una variable por columna, y el objeto del contrato.
+        calle_numero, codigo_postal, municipio = fila_direccion
+        direccion = DireccionObra(calle_numero=calle_numero, codigo_postal=codigo_postal, municipio=municipio)
+
     # La respuesta completa. Pydantic comprueba cada campo con el esquema,
     # y extra="forbid" impide añadir ninguno que no esté declarado.
     return FichaOportunidadResponse(
@@ -401,6 +432,8 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
         historial=historial,
         historial_cuadra=cuadra,
         otras_oportunidades_mismo_email=otras,
+        # D42: la dirección de la obra, o None.
+        direccion_obra=direccion,
     )
 
 

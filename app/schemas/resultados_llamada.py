@@ -16,6 +16,10 @@ Bloque B2 (2026-10-11): tres tipos de llamada y cinco resultados.
 Y un motivo más en el catálogo, 'sin_decision' (D29.3), que el alias no
 aceptaba.
 
+D42 (2026-10-22, rama feat/n0-direccion-obra): direccion_obra, opcional, solo
+con los resultados que dejan visita (CON_FECHA). Es CONFIDENCIAL (D42.5): no
+sale en ninguna respuesta de esta ruta, solo en la ficha.
+
 Aquí solo se comprueba la FORMA de los datos. Que el resultado sea del tipo
 de llamada de esa oportunidad (que se sabe con la base de datos) lo decide
 app/services/resultados_llamada_service.py.
@@ -104,6 +108,44 @@ CON_MOTIVO = (ResultadoLlamada.DESCARTAR, ResultadoLlamada.CLIENTE_CANCELA)
 #   Motivos que NO valen al cancelar: quien cancela, contestó y decidió (C6, D29.3).
 MOTIVOS_NO_EN_CANCELACION = (MotivoResultado.NO_CONTESTA, MotivoResultado.SIN_DECISION)
 
+# D42.3 (2026-10-22): los límites de la dirección de la obra. Los MISMOS que
+# los CHECK de la tabla direcciones_obra (migración paso16): si se cambia
+# uno aquí, hay que cambiarlo allí con otra migración (defensa doble).
+MAX_CALLE_NUMERO = 150
+MAX_MUNICIPIO = 100
+# Código postal español: 5 cifras, y las dos primeras (la provincia) de 01 a
+# 52. [0-9] y no \d: \d aceptaría también cifras de otros alfabetos.
+PATRON_CODIGO_POSTAL = r"^(0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}$"
+
+
+class DireccionObra(BaseModel):
+    """
+    La dirección de la obra (D42). CONFIDENCIAL: solo entra por POST
+    /resultados-llamada y solo sale por la ficha (D42.5). La misma clase
+    sirve para la entrada y para la ficha (app/schemas/ficha_oportunidad.py).
+    """
+
+    # extra="forbid": una clave no declarada (por ejemplo "piso") da 422.
+    model_config = ConfigDict(extra="forbid")
+
+    # Calle y número (y piso, si se escribe aquí), de 1 a 150 caracteres
+    # contados DESPUÉS de recortar los extremos.
+    calle_numero: str = Field(min_length=1, max_length=MAX_CALLE_NUMERO)
+    # strict=True: SOLO texto. Un número (28013 sin comillas) da 422 en vez
+    # de convertirse; un código como 01001 perdería el cero de delante.
+    codigo_postal: str = Field(strict=True, pattern=PATRON_CODIGO_POSTAL)
+    # El municipio, de 1 a 100 caracteres recortados.
+    municipio: str = Field(min_length=1, max_length=MAX_MUNICIPIO)
+
+    # Recorta los extremos de los tres textos antes de medirlos (se guardan
+    # así: los CHECK exigen texto = btrim(texto)). Si no es texto, el
+    # recorte compartido lo deja pasar tal cual y Pydantic da su 422 de tipo.
+    @field_validator("calle_numero", "codigo_postal", "municipio", mode="before")
+    @classmethod
+    def recortar(cls, valor):
+        # El recorte compartido (strip).
+        return texto_sin_espacios_en_los_extremos(valor)
+
 
 class ResultadoLlamadaCreate(BaseModel):
     """
@@ -131,6 +173,12 @@ class ResultadoLlamadaCreate(BaseModel):
     # Siempre obligatorio, de 1 a MAX_INFORME_GATE caracteres contados
     # DESPUÉS de recortar los extremos (lo hace el validador de abajo).
     informe: str = Field(min_length=1, max_length=MAX_INFORME_GATE)
+
+    # D42 (2026-10-22): la dirección de la obra. OPCIONAL en la API (P1 = A
+    # del veredicto del tutor: es obligatoria solo en el formulario de n8n,
+    # D42.2). Solo con los resultados que dejan una visita (CON_FECHA); en
+    # los demás, un objeto da 422 (validador de abajo). null = no enviarla.
+    direccion_obra: DireccionObra | None = None
 
     # mode="before": se ejecutan sobre lo que llegó en el JSON, antes de
     # convertirlo al tipo del campo. @classmethod: Pydantic 2 los llama con
@@ -185,6 +233,10 @@ class ResultadoLlamadaCreate(BaseModel):
             # Con fecha o con hora: 422 (no queda ninguna visita).
             if self.fecha is not None or self.hora is not None:
                 raise ValueError(f"con resultado={r} no se admiten fecha ni hora")
+            # D42: con dirección de la obra, 422 (no hay visita a la que ir);
+            # ignorarla haría creer que se guardó un dato que se tira.
+            if self.direccion_obra is not None:
+                raise ValueError(f"con resultado={r} no se admite direccion_obra: no queda ninguna visita")
             # Al cancelar, ni 'no_contesta' ni 'sin_decision' (C6, D29.3).
             if self.resultado == ResultadoLlamada.CLIENTE_CANCELA and self.motivo in MOTIVOS_NO_EN_CANCELACION:
                 raise ValueError(f"con resultado={r} no se admite motivo={self.motivo.value}: quien cancela, ha decidido")

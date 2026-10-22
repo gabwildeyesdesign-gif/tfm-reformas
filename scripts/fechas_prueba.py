@@ -64,6 +64,10 @@ SCRIPTS = (
     # D32 (2026-10-13): los dos de GET /huecos-libres.
     "check_huecos_libres_service",
     "check_huecos_libres_http",
+    # D42 (2026-10-22): los dos de la dirección de la obra (crean visitas por
+    # POST /resultados-llamada y registrar_resultado).
+    "check_direccion_obra_service",
+    "check_direccion_obra_http",
 )
 
 # Los estados de visita que ocupan un hueco (D31).

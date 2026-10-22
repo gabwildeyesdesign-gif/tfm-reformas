@@ -33,6 +33,11 @@ escribió el Agente 1 sobre lo que quiere el cliente. El formulario NO lo necesi
 operador, con `esc()` y como "Resumen del asistente" (orientativo; `null` en las solicitudes anteriores al
 2026-10-20). Contrato: Adenda, 5.12.
 
+**[Nota 2026-10-22, D42]** La ficha trae también `direccion_obra` (en la raíz): `{calle_numero, codigo_postal,
+municipio}` o `null`. Es CONFIDENCIAL: la ficha es la única lectura que la devuelve. El formulario no la necesita para
+decidir nada (la pregunta siempre que quede una visita, sección 3); la página de la ficha la enseñará al técnico, con
+`esc()`. Contrato: Adenda, 5.13.
+
 | `tipo_llamada` | Cuándo | `resultados` |
 |---|---|---|
 | `gate` | Caso con Gate pendiente | `visita_acordada`, `descartar` |
@@ -53,8 +58,27 @@ Gate y seguimiento usan **las mismas páginas** (D25.10). La única rama nueva e
 | `hora` | `"HH:MM"` | Inicio de la visita, hora de Madrid. Sin segundos ni zona (`"10:00Z"` da 422). |
 | `motivo` | texto | Ver la tabla de motivos. |
 | `informe` | texto | **Siempre.** 1 a 2000 caracteres (sin contar espacios de los extremos). Para la auditoría anual. |
+| `direccion_obra` | objeto o `null` | (D42, desde el 2026-10-22, rama feat/n0-direccion-obra) La dirección de la obra: ver abajo. |
 
 Ningún otro campo: uno de más da 422.
+
+### `direccion_obra` (D42): la dirección de la obra, CONFIDENCIAL
+
+El técnico necesita la dirección; administración la pregunta en la llamada. **En el formulario es OBLIGATORIA** cuando
+queda una visita confirmada (`visita_acordada`, `confirmar_hora`, `otra_hora`) (D42.2). En la API es **opcional**
+(veredicto del tutor, P1 = A): si el formulario no la envía, la visita se registra igual, la ficha da `null` y el log
+dice `"direccion_obra_registrada": false`. Con `descartar` o `cliente_cancela`, un objeto da **422** (no queda ninguna
+visita); `"direccion_obra": null` vale lo mismo que no enviarla, con cualquier resultado.
+
+| Clave | Tipo | Regla (422 si no se cumple) |
+|---|---|---|
+| `calle_numero` | texto | Calle y número (y piso, si se quiere). 1 a 150 caracteres, sin contar espacios de los extremos. |
+| `codigo_postal` | **texto** | 5 cifras españolas con provincia 01-52 (`^(0[1-9]\|[1-4][0-9]\|5[0-2])[0-9]{3}$`). Siempre entre comillas: `28013` como número da 422 (un `01001` perdería el cero). |
+| `municipio` | texto | 1 a 100 caracteres, sin contar espacios de los extremos. |
+
+Ninguna otra clave dentro del objeto (una de más, por ejemplo `piso`, da 422). Se guarda en la misma transacción que la
+visita (todo o nada). **La respuesta NO la devuelve nunca**, y no sale en ninguna otra lectura (lista diaria, aviso del
+Gate, sesión, tools del agente, logs): solo en la ficha, `direccion_obra` (D42.5).
 
 ### Qué campos lleva cada resultado
 
@@ -87,7 +111,10 @@ Ningún otro campo: uno de más da 422.
 {"oportunidad_id": 1530, "resultado": "confirmar_hora", "fecha": "2026-10-13", "hora": "11:00", "informe": "Confirma la hora que pidió."}
 {"oportunidad_id": 1531, "resultado": "otra_hora", "fecha": "2026-10-13", "hora": "17:00", "informe": "Prefiere por la tarde."}
 {"oportunidad_id": 1532, "resultado": "cliente_cancela", "motivo": "plazo", "informe": "Ya no le corre prisa; cancela."}
+{"oportunidad_id": 1533, "resultado": "visita_acordada", "fecha": "2026-10-19", "hora": "11:00", "informe": "Acepta visita.", "direccion_obra": {"calle_numero": "Calle Ejemplo 12, 3º B", "codigo_postal": "28013", "municipio": "Madrid"}}
 ```
+
+(El último ejemplo, D42: la dirección es inventada.)
 
 Franjas de visita (de `reglas_negocio`, hoy): mañana de 08:30 a 13:30 y tarde de 17:00 a 20:00, visitas de 60 min
 que tienen que empezar y terminar dentro de la franja, de lunes a viernes y en el futuro.
@@ -108,7 +135,17 @@ que tienen que empezar y terminar dentro de la franja, de lunes a viernes y en e
 | `visita_cancelada_id` | La pedida que se canceló (`otra_hora`, `cliente_cancela`), o `null`. |
 | `creado` | `true` en el 201, `false` en el 200. |
 
-Nunca lleva importes.
+Nunca lleva importes. (D42) Tampoco la dirección de la obra: las claves de la respuesta no cambian.
+
+(Nota 2026-10-22, D42, limitaciones de N0.)
+- **Una dirección ya registrada no se puede corregir por la API; en N1 se editaría desde la ficha.** El resultado de
+  una llamada es definitivo: la repetición exacta (200) no mira `direccion_obra` (como el informe) ni la escribe, y
+  otro resultado da 409 `resultado_ya_registrado`.
+- **El 422 repite lo enviado.** FastAPI devuelve en el 422 lo que se envió (`"input"`), también la dirección. No se
+  guarda en ninguna tabla. El formulario publicado solo enseña "El sistema ha rechazado el formato de los datos" y
+  WF4 recibe el código y su título, nunca el cuerpo (leído por el tutor en `n8n/WF_formulario_llamadas.json`,
+  f1301af). El historial de ejecuciones de n8n guarda lo escrito en el formulario, como ya guarda el nombre y el
+  teléfono: es una limitación de n8n, no del backend.
 
 (Nota 2026-10-14, D33.) `POST /visits` lleva también `fecha_fin_visita` (la visita pedida desde el chat, que WF5 pone como
 PENDIENTE). Limitación: el fin se calcula con la duración VIGENTE; si administración cambia

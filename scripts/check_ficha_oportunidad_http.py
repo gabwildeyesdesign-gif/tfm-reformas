@@ -116,7 +116,10 @@ MADRID = ZoneInfo("Europe/Madrid")
 # 14, con resumen_solicitud.)
 CLAVES_RAIZ = {"oportunidad_id", "estado_oportunidad", "fecha_solicitud", "contacto", "reforma",
                "resumen_solicitud", "fotos", "presupuesto", "visitas", "llamadas", "llamada_registrable",
-               "historial", "historial_cuadra", "otras_oportunidades_mismo_email"}
+               "historial", "historial_cuadra", "otras_oportunidades_mismo_email",
+               # (Nota 2026-10-22, D42: 15, con direccion_obra; su contenido
+               # lo prueba check_direccion_obra_http.)
+               "direccion_obra"}
 # Los objetos compartidos con /gate-avisos: contacto y reforma.
 CLAVES_CONTACTO = {"nombre", "email", "telefono", "origen"}
 CLAVES_REFORMA = {"tipo_reforma", "m2", "nivel_acabados", "incluye_cambios_estructurales"}

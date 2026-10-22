@@ -1,0 +1,167 @@
+PLAN D42 — DIRECCIÓN DE LA OBRA COMO DATO PROPIO Y CONFIDENCIAL
+Rama feat/n0-direccion-obra (desde main = f1301af). Creado el 2026-10-22.
+
+======================================================================
+1. Contexto
+======================================================================
+Hallazgo H-D39-1: el sistema no guarda la dirección de la obra.
+Administración la pregunta por teléfono en la llamada que confirma la
+visita, y el email de visita confirmada dice "Irá a la dirección que nos
+indicaste". El técnico la necesita.
+
+Decisión D42 (Gabi y tutor, 2026-10-22), cerrada:
+  D42.1 Tabla PROPIA direcciones_obra, una fila por oportunidad (clave
+        foránea única): calle y número, código postal, municipio,
+        created_at, updated_at. Aislada: no sale en ninguna lectura
+        existente y se protege o borra por separado (RGPD).
+  D42.2 Se captura en el formulario de llamadas cuando queda una visita
+        confirmada (visita_acordada, confirmar_hora, otra_hora); en el
+        formulario es OBLIGATORIA.
+  D42.3 Textos recortados y no vacíos; calle <= 150 y municipio <= 100;
+        código postal ^(0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}$. Mismas reglas
+        en el esquema (422) y en CHECK (segunda barrera).
+  D42.4 Misma transacción que el registro de la visita (todo o nada);
+        upsert por oportunidad_id.
+  D42.5 CONFIDENCIAL: solo la devuelve la ficha. Nunca en gate-avisos,
+        lista diaria, sesión, tools MCP, respuestas de /resultados-llamada
+        ni de /visits, ni en logs (solo "direccion_obra_registrada").
+
+La parte de n8n (formulario y página de la ficha) la hacen el tutor y Gabi
+DESPUÉS del merge.
+
+======================================================================
+2. PASO 0 (solo lectura) y veredicto del tutor (2026-10-22, 17:55)
+======================================================================
+Hallazgos del PASO 0:
+  H1 El resultado de una llamada es definitivo (UNIQUE en decisiones_gate):
+     no existe una "segunda llamada" que sustituya la dirección. Corrige un
+     error de D42.4.
+  H2 El manejador global guarda str(exc) en logs; el error de un CHECK de
+     Postgres copia la fila entera ("Failing row contains (...)").
+  H3 Un 422 de FastAPI repite lo enviado ("input").
+  H4 La foto de datos reales pasa de 10 a 11 tablas.
+
+Veredicto:
+  P1 = A. direccion_obra OPCIONAL en la API, obligatoria solo en el
+     formulario. El log de todo resultado con visita lleva
+     "direccion_obra_registrada": true/false. B queda para N1. C
+     descartada (con un resultado por oportunidad, C equivale a B).
+  H1 aprobado: la repetición idéntica (200) no mira direccion_obra (no
+     entra en la comparación, como el informe); otra da 409. El upsert se
+     queda como protección; la sustitución se prueba en el servicio.
+     Limitación de N0 en el Contrato: "una dirección ya registrada no se
+     puede corregir por la API; en N1 se editaría desde la ficha".
+  H2 aprobado: try/except psycopg2.Error SOLO alrededor del upsert,
+     relanzado saneado con "from None"; solo pgcode y
+     diag.constraint_name. Todo se deshace. N8 y N9 lo demuestran; en N8
+     la marca 0 veces en logs.detalle (también error_no_controlado).
+  H3 limitación aceptada sin código (evidencia del tutor en
+     n8n/WF_formulario_llamadas.json, f1301af). Una nota en el Contrato y
+     otra en CLAUDE.md.
+  H4 aprobado: 11 tablas, solo SHA-256 y recuentos; nunca imprimir filas
+     de direcciones_obra, tampoco en el scratchpad que se pega en el chat.
+  Resultados sin visita: un objeto en CUALQUIER resultado que no crea
+     visita da 422; null = no enviarla, en todos.
+  Forma: cuerpo {"calle_numero", "codigo_postal", "municipio"},
+     extra="forbid"; codigo_postal texto (número -> 422, N15); ficha
+     "direccion_obra" con esas tres claves o null, sin fechas.
+  D42.5, regla: lectura PROPIA de la ficha; prohibido en COLUMNAS_CASO o
+     en un JOIN compartido (N5); la respuesta de /resultados-llamada no la
+     incluye (N6).
+  Suite: 60 scripts (tres nuevos).
+
+Resultados que existen (ResultadoLlamada, app/schemas/resultados_llamada.py):
+  visita_acordada, descartar, confirmar_hora, otra_hora, cliente_cancela.
+  Con visita (CON_FECHA): visita_acordada, confirmar_hora, otra_hora.
+  SIN visita: descartar y cliente_cancela. No hay más: los de seguimiento
+  son los mismos que los del Gate (visita_acordada, descartar; D25.10), así
+  que el seguimiento queda cubierto por descartar. Lo comprueba la S1 de
+  check_direccion_obra_service.
+
+======================================================================
+3. Diseño (PASO 1, fase 1)
+======================================================================
+Base de datos, paso16_direcciones_obra.py (solo expand; freno
+--confirmo-paso16; ensayo con check_migracion_direcciones_obra --ensayo):
+  direcciones_obra (id SERIAL PK, oportunidad_id INTEGER NOT NULL,
+  calle_numero TEXT, codigo_postal TEXT, municipio TEXT, created_at y
+  updated_at TIMESTAMPTZ DEFAULT now(), todas NOT NULL)
+  direcciones_obra_oportunidad_id_key UNIQUE (oportunidad_id)
+  direcciones_obra_oportunidad_id_fkey -> oportunidades(id) (sin ON DELETE)
+  chk_direcciones_obra_calle_numero  = btrim y 1..150
+  chk_direcciones_obra_municipio     = btrim y 1..100
+  chk_direcciones_obra_codigo_postal ~ el patrón de D42.3
+  ENABLE ROW LEVEL SECURITY, sin políticas.
+  Vuelta atrás escrita, sin ejecutar: paso16_vuelta_atras.py (se para si
+  hay filas, salvo --borrar-direcciones).
+
+Código:
+  app/schemas/resultados_llamada.py   DireccionObra (strict en el CP),
+      MAX_CALLE_NUMERO, MAX_MUNICIPIO, PATRON_CODIGO_POSTAL; el campo
+      opcional y el 422 sin visita en comprobar_combinacion.
+  app/services/resultados_llamada_service.py   _guardar_direccion (upsert
+      ON CONFLICT DO UPDATE, rowcount = 1, H2 con DireccionObraNoGuardada),
+      llamada en _escribir solo con CON_FECHA; la clave del log
+      (CLAVE_LOG_DIRECCION) solo con visita. La repetición no cambia (H1).
+  app/schemas/ficha_oportunidad.py y app/services/ficha_oportunidad_service.py
+      la consulta 6 PROPIA (SQL_DIRECCION) y direccion_obra en la raíz.
+
+Scripts:
+  check_migracion_direcciones_obra (nuevo; falla antes de migrar)
+  check_direccion_obra_service (nuevo; S0-S4)
+  check_direccion_obra_http (nuevo; puerto 8035; CASOS 1-6)
+  check_ficha_oportunidad_http: CLAVES_RAIZ + direccion_obra
+  fechas_prueba: dos bloques nuevos AL FINAL (no mueve los demás)
+
+======================================================================
+4. Pruebas en negativo (fase 2, sobre copias, de una en una)
+======================================================================
+Cada una con su previsto (qué script y qué caso la ve); el real se anota en
+la sección 6 con la salida literal.
+  N1  Esquema sin el patrón del CP. Previsto: S1 (CP 00123/53000/4
+      cifras/letra) y HTTP CASO 1 (500 por el CHECK en vez de 422).
+  N2  Esquema sin recorte ni límites de la calle. Previsto: S1 y HTTP
+      CASO 1.
+  N3  Copia de paso16 sin el CHECK del CP (--ensayo). Previsto:
+      check_migracion, catálogo y los rechazos del CP.
+  N4  La ficha no lee la dirección (direccion_obra siempre null).
+      Previsto: HTTP CASO 2 y control del CASO 5.
+  N5  La dirección en COLUMNAS_CASO y en ReformaAviso. Previsto: S2 (la
+      tabla nombrada en datos_oportunidad.py; campo en AvisoGateResponse)
+      y HTTP CASO 5 (gate-avisos con la marca).
+  N6  direccion_obra en ResultadoLlamadaResponse. Previsto: S2, S3
+      (respuesta con la marca) y HTTP CASO 2 (claves exactas, marca).
+  N7  El texto en logs.detalle. Previsto: S3 y HTTP CASOS 2 y 6.
+  N8  N1 + el upsert sin saneado (relanza el error original). Previsto:
+      S2 (from None), HTTP CASO 6 (marca en error_no_controlado) y 500.
+  N9  El upsert en otra conexión con su commit. Previsto: S4 N9 (queda la
+      dirección).
+  N10 INSERT sin ON CONFLICT. Previsto: S3 D42.4 (sustitución).
+  N11 Sin el 422 de los resultados sin visita. Previsto: S1 y HTTP CASO 1.
+  N12 La repetición escribe la dirección. Previsto: S3 H1 y HTTP CASO 4.
+  N13 Copia de paso16 sin ENABLE ROW LEVEL SECURITY (--ensayo). Previsto:
+      check_migracion, "RLS activada".
+  N14 (Redefinida por P1 = A: la del PASO 0 era "sin dirección aceptado"
+      con B.) La API EXIGE la dirección (B por error). Previsto: S1 (null
+      y ausente válidos) y HTTP CASO 3. Pendiente de confirmar por el
+      tutor.
+  N15 El esquema convierte un número en texto (sin strict o con str()).
+      Previsto: S1 y HTTP CASO 1 ("CP como NÚMERO").
+
+======================================================================
+5. Fase 2 (cuando Gabi lo diga)
+======================================================================
+Las 4 preguntas; memoria >= 1,5 GB, sin chrome, msedge, docker/vmmem ni
+WINWORD, ENCHUFADO; visitas reales activas de los próximos 14 días leídas
+y enseñadas (solo recuento y horas, sin datos personales); foto de las 11
+tablas (SHA-256 y recuentos); check_migracion antes (falla) y ensayo;
+[PARA] con "confirmo la migración paso16"; migración real; check_migracion
+después; dump_schema y check_schema_actual_ejecutable; verdes; N1-N15;
+regresión de todos los scripts que crean visitas; suite de 60 en UNA pasada
+válida (Kernel-Power 41, 506 y 507); foto de datos reales igual; commit
+con salidas reales y push. Sin merge.
+
+======================================================================
+6. Resultados
+======================================================================
+(Fase 1: SIN ejecutar. Se rellena en la fase 2.)
