@@ -41,6 +41,20 @@ Emails http-huecos-<8 caracteres>@example.com.
 antes y después con el mismo id_base. Limpieza: solo lo propio, en el orden
 de las claves foráneas.
 
+(Nota 2026-10-23, D45, plan docs/Plan_Antelacion_Visitas_D45.txt: GET
+/huecos-libres es de administración, con la primera fecha en el 1.er
+laborable después de hoy; POST /visits, del chat, con el 2.º. Cambios:
+HOY sale del reloj de Postgres (como el servidor); un oráculo propio
+calcula los dos primeros días con las reglas leídas; CASO 3 exige empezar
+en el primer día de administración (V8); CASO 4 "hoy" da [] y
+antelacion_insuficiente si aún queda alguna hora de la rejilla hoy, o
+fecha_pasada si no (precisión 2 del tutor: las dos ramas son deterministas;
+cuál toca sale como [INFO]), y el primer día de administración nunca da
+antelacion_insuficiente; CASO 5 espera 201 en los días desde el primer día
+del chat y 422 antelacion_insuficiente en los anteriores (H-D45-1: el plan
+no lo había medido); CASOS 7 y 8 eligen su día real desde el primer día del
+chat, porque piden por POST /visits.)
+
 (Nota 2026-10-14, H-D32-2 de la revisión del tutor: ningún acceso por índice
 a la lista de días ni a sus horas puede reventar; si el modo días viene vacío
 o un día sin horas, FALLO contado con su título y el script sigue hasta el
@@ -303,7 +317,25 @@ def cancelar_propias():
 REGLAS = {c: int(v) for c, v in [consultar("SELECT clave, valor FROM reglas_negocio WHERE clave = %s;", (c,))
                                  for c in ("visita_manana_inicio_min", "visita_manana_fin_min",
                                            "visita_tarde_inicio_min", "visita_tarde_fin_min",
-                                           "duracion_visita_min", "desplazamiento_min", "dias_oferta_visita")]}
+                                           "duracion_visita_min", "desplazamiento_min", "dias_oferta_visita",
+                                           # D45: las dos antelaciones.
+                                           "dias_antelacion_visita_chat", "dias_antelacion_visita_admin")]}
+
+
+# D45: el oráculo de la antelación, calculado aquí aparte (no se importa el
+# código probado).
+def primer_laborable_oraculo(hoy, n):
+    """El n-ésimo día de lunes a viernes después de hoy (n = 0: hoy)."""
+    # El día y los que faltan.
+    dia, faltan = hoy, n
+    # Hasta que no falte ninguno.
+    while faltan:
+        # Un día más.
+        dia += timedelta(days=1)
+        # Solo cuentan los laborables.
+        faltan -= dia.weekday() < 5
+    # El primero permitido.
+    return dia
 
 
 # El oráculo: la rejilla calculada por la prueba, sin el código probado.
@@ -351,8 +383,13 @@ def en_madrid(dia, hhmm):
 REJILLA = rejilla_oraculo()
 # Todas sus horas, en orden.
 TODAS = REJILLA["manana"] + REJILLA["tarde"]
-# Hoy, en Madrid.
-HOY = datetime.now(MADRID).date()
+# Hoy, en Madrid, según el reloj de Postgres (D45, precisión 6: el mismo
+# "hoy" que el servidor; antes, el del ordenador).
+HOY = consultar("SELECT now();")[0].astimezone(MADRID).date()
+# D45: el primer día que ofrece administración y el primero que acepta el chat.
+PRIMER_ADMIN = primer_laborable_oraculo(HOY, REGLAS["dias_antelacion_visita_admin"])
+# El del chat.
+PRIMER_CHAT = primer_laborable_oraculo(HOY, REGLAS["dias_antelacion_visita_chat"])
 # Los días del bloque propio (para T2 y T4 y los casos de un día).
 DIAS = fechas_prueba.Dias("check_huecos_libres_http", HOY)
 # El lunes del bloque.
@@ -369,6 +406,8 @@ FOTO = foto_ajena()
 print("=" * 78)
 # Lo que hay.
 print(f"  rejilla real: {REJILLA}; dias_oferta_visita: {REGLAS['dias_oferta_visita']}; hoy {HOY}; lunes del bloque {LUNES}")
+# D45: los dos primeros días.
+print(f"  D45: primer día de administración {PRIMER_ADMIN}; primer día del chat {PRIMER_CHAT}")
 # Separador.
 print("=" * 78)
 
@@ -455,9 +494,10 @@ try:
               f"({len(dias)})")
     # Las fechas.
     fechas = [date.fromisoformat(d.get("fecha", "2000-01-01")) for d in dias]
-    # Desde hoy, en orden estricto y todas laborables.
-    comprobar("fechas desde hoy, en orden estricto, todas de lunes a viernes",
-              all(f >= HOY and f.weekday() < 5 for f in fechas) and fechas == sorted(set(fechas)), f"({fechas})")
+    # D45 (V8): desde el primer día de administración (nunca hoy), en orden
+    # estricto y todas laborables.
+    comprobar(f"fechas desde el primer día de administración ({PRIMER_ADMIN}), en orden estricto, todas de lunes a viernes",
+              all(f >= PRIMER_ADMIN and f.weekday() < 5 for f in fechas) and fechas == sorted(set(fechas)), f"({fechas})")
     # Cada día, por separado.
     malos = []
     # Uno a uno.
@@ -526,13 +566,27 @@ try:
     comprobar(f"{D_LIBRE} (sin visitas): la rejilla entera, horas = mañana + tarde, sin motivo",
               j.get("manana") == REJILLA["manana"] and j.get("tarde") == REJILLA["tarde"] and j.get("horas") == TODAS
               and j.get("sin_horas_motivo") is None and j.get("fecha") == D_LIBRE.isoformat(), f"({j})")
-    # Hoy: solo las futuras (o el motivo si no queda ninguna).
+    # Hoy (D45, V9): nunca horas. El motivo depende de la hora de la pasada
+    # (precisión 2): si aún queda alguna hora de la rejilla hoy, la fecha no
+    # ha pasado y el motivo es la antelación; si no, fecha_pasada (va antes).
     j = cuerpo(huecos({"fecha": HOY.isoformat()}))
-    # El instante del cálculo.
+    # El instante del cálculo (el "ahora" del servidor).
     generado = datetime.fromisoformat(j.get("generado_en", "2000-01-01T00:00:00+00:00"))
-    # Todas sus horas son futuras.
-    comprobar("hoy: todas las horas devueltas son posteriores a generado_en (P4)",
-              all(en_madrid(HOY, h) > generado for h in j.get("horas", [])), f"({j.get('horas')})")
+    # ¿Queda alguna hora de la rejilla hoy, después de ese instante?
+    queda = any(en_madrid(HOY, h) > generado for h in TODAS)
+    # El motivo esperado, en las dos ramas.
+    esperado_hoy = "antelacion_insuficiente" if queda else "fecha_pasada"
+    # Cuál toca en esta pasada.
+    print(f"      [INFO] hoy {HOY} a las {generado.astimezone(MADRID):%H:%M}: "
+          f"{'queda alguna hora de la rejilla' if queda else 'ya no queda ninguna hora'} -> se espera {esperado_hoy}")
+    # Sin horas y con el motivo de su rama.
+    comprobar(f"hoy: sin horas y sin_horas_motivo '{esperado_hoy}' (D45, V9)",
+              j.get("horas") == [] and j.get("sin_horas_motivo") == esperado_hoy, f"({j})")
+    # El primer día de administración: nunca antelacion_insuficiente.
+    j = cuerpo(huecos({"fecha": PRIMER_ADMIN.isoformat()}))
+    # Con horas (motivo None) o completo.
+    comprobar(f"el primer día de administración ({PRIMER_ADMIN}): motivo null o dia_completo, nunca antelación",
+              j.get("sin_horas_motivo") in (None, "dia_completo"), f"({j.get('sin_horas_motivo')})")
     # El primer día del modo días: lo mismo en el modo un día.
     if dias:
         # El primer día (H-D32-2: con .get).
@@ -633,14 +687,25 @@ try:
     rechazos = []
     # Cuántas peticiones.
     n_peticiones = 0
+    # D45: las horas de los días ANTERIORES al primer día del chat (las ofrece
+    # administración, no el chat) y lo que respondió POST /visits en ellas.
+    antes_chat = []
     # Un día cada vez, con una oportunidad propia (sus horas, por sustitución).
     for d in dias_t1:
         # El lead del día.
         token, _ = lead_http()
+        # La fecha del día.
+        f = date.fromisoformat(d.get("fecha", "2000-01-01"))
         # Cada hora del día.
         for h in (d.get("manana") or []) + (d.get("tarde") or []):
             # La petición.
-            r = visita(token, date.fromisoformat(d.get("fecha", "2000-01-01")), h)
+            r = visita(token, f, h)
+            # D45: antes del primer día del chat se apunta aparte (no escribe nada).
+            if f < PRIMER_CHAT:
+                # El código y el motivo.
+                antes_chat.append((d.get("fecha"), h, r.status_code, motivo(r)))
+                # A la siguiente hora.
+                continue
             # Una más.
             n_peticiones += 1
             # Tiene que ser 201.
@@ -648,10 +713,16 @@ try:
                 # Se apunta.
                 rechazos.append((d.get("fecha"), h, r.status_code, motivo(r)))
     # Se enseña.
-    print(f"      {n_peticiones} peticiones en {len(dias_t1)} días; rechazos: {rechazos}")
+    print(f"      {n_peticiones} peticiones en días desde {PRIMER_CHAT}; rechazos: {rechazos}")
     # Ninguna rechazada.
-    comprobar(f"T1: las {n_peticiones} horas ofrecidas dan 201 (ningún 409 ni 422)", n_peticiones > 0 and rechazos == [],
-              f"({rechazos[:5]})")
+    comprobar(f"T1: las {n_peticiones} horas ofrecidas desde el primer día del chat dan 201 (ningún 409 ni 422)",
+              n_peticiones > 0 and rechazos == [], f"({rechazos[:5]})")
+    # D45: cuántas había antes del primer día del chat ([INFO]: depende de si
+    # el primer día de administración tiene horas libres hoy).
+    print(f"      [INFO] horas ofrecidas antes de {PRIMER_CHAT} (solo administración): {len(antes_chat)}")
+    # Todas, 422 antelacion_insuficiente (el chat no puede pedirlas).
+    comprobar("T1 (D45): las horas anteriores al primer día del chat dan 422 antelacion_insuficiente",
+              all(c == 422 and m == "antelacion_insuficiente" for _, _, c, m in antes_chat), f"({antes_chat[:5]})")
     # Las visitas propias dejan de ocupar (días reales).
     cancelar_propias()
 
@@ -700,7 +771,9 @@ try:
     dias_t3 = cuerpo(huecos()).get("dias") or []
     # H-D32-2: el primer día que tenga alguna hora (nunca un índice sobre una
     # lista que puede venir vacía).
-    primero = next((d for d in dias_t3 if (d.get("manana") or []) + (d.get("tarde") or [])), None)
+    # D45: desde el primer día del chat (la visita se pide por POST /visits).
+    primero = next((d for d in dias_t3 if (d.get("manana") or []) + (d.get("tarde") or [])
+                    and d.get("fecha", "") >= PRIMER_CHAT.isoformat()), None)
     # Sin ninguno: FALLO contado con su título, y el script sigue.
     if primero is None:
         # El fallo.
@@ -756,7 +829,9 @@ try:
     dias_t4 = cuerpo(huecos()).get("dias") or []
     # El primer día.
     # H-D32-2: el primer día con horas, o {} (sin índices).
-    G = next((d for d in dias_t4 if (d.get("manana") or []) + (d.get("tarde") or [])), {})
+    # D45: desde el primer día del chat (se llena por POST /visits).
+    G = next((d for d in dias_t4 if (d.get("manana") or []) + (d.get("tarde") or [])
+              and d.get("fecha", "") >= PRIMER_CHAT.isoformat()), {})
     # Una oportunidad por hora libre.
     for h in G.get("manana", []) + G.get("tarde", []):
         # Su lead.

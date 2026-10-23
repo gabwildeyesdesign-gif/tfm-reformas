@@ -315,6 +315,16 @@ la devuelve GET /oportunidades/{id}/ficha; ninguna otra ruta ni tool, ni las
 respuestas de POST /resultados-llamada, ni logs (solo
 "direccion_obra_registrada": true/false). Sin endpoints ni tools nuevos.
 Detalle: Adenda 5.13.)
+(Nota 2026-10-23, D45: feat/n0-direccion-obra ya está en main (c0db982). En
+la rama feat/n0-antelacion-visitas (pendiente de merge), antelación mínima
+de las visitas, sin endpoints ni tools nuevos: el chat (tool
+consultar_huecos_libres y POST /visits) desde el 2.º día laborable después
+de hoy, y administración (GET /huecos-libres y POST /resultados-llamada con
+visita_acordada u otra_hora) desde el 1.º; confirmar_hora, solo futura. 422
+antelacion_insuficiente y sin_horas_motivo nuevo. El canal lo fija el
+adaptador (parámetro obligatorio), nunca la petición. Reglas
+dias_antelacion_visita_chat y dias_antelacion_visita_admin (paso17).
+Detalle: Adenda 5.14 y docs/Plan_Antelacion_Visitas_D45.txt.)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -816,6 +826,22 @@ SOLO REST.
 > en esta rama (422, C1). El campo "informe" de POST /resultados-llamada
 > tiene probablemente el mismo hueco (un 500 en vez de un 422): es deuda
 > anterior y NO se toca aquí; lo mismo puede pasar en otros textos libres.)
+>
+> **(Nota 2026-10-23.)** `feat/n0-direccion-obra` (D42) ya está en `main`
+> (c0db982). **Bloque actual: D45, antelación mínima de las visitas**
+> (hallazgo H-129-1; decisión D45 y veredicto del tutor al PASO 0, APROBADO
+> con 6 precisiones), en la rama `feat/n0-antelacion-visitas`, **pendiente de
+> merge** (PASO 1, fase 1, SIN ejecutar; la fase 2 empieza cuando Gabi
+> escriba "fase 2"). Plan docs/Plan_Antelacion_Visitas_D45.txt (recuento
+> previsto en su sección 9); contrato en la Adenda 5.14 y en
+> docs/Contrato_Formulario_Llamadas.md. OJO: la migración paso17 (dos filas
+> de reglas_negocio) está PREPARADA SIN APLICAR: tiene modo --ensayo (deshace
+> todo) y la real solo tras "confirmo la migración paso17"; se aplica ANTES
+> del merge (expand). El formulario WF_formulario_llamadas (plan B, D43.3) NO
+> se cambia; prompts/agente2_asesor.md va en un commit aparte con el texto del
+> tutor. Misma regla de siempre: no hacer merge sin la confirmación explícita
+> de Gabi, después de la revisión del tutor, y siempre con `--ff-only`.
+> Después del merge: reiniciar el uvicorn del 8000 SIN --reload (app/ cambia).
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1243,6 +1269,10 @@ check_graceful_shutdown y check_mcp_connection desde copias en el 8030 y el
 los cinco de P4 revisada a mano: sin fallos. Datos reales de las 10 tablas
 anteriores iguales antes (18:28) y después (20:31); direcciones_obra, 0
 filas. Detalle: sección 6 de docs/Plan_Direccion_Obra_D42.txt.)
+(Nota 2026-10-23, rama feat/n0-antelacion-visitas, D45: la suite pasa a 61
+scripts, con check_migracion_d45, que FALLA a propósito (0/12) hasta que se
+aplique paso17. check_mcp_huecos_libres lee ahora la base de datos en una
+sesión de solo lectura. Todavía sin ninguna pasada: fase 1, SIN ejecutar.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1499,6 +1529,12 @@ diciendo "1..1000 caracteres".
 propia rama: check_migracion_agente2 (punto 3) exige la fila paso_huecos_min,
 que ya no existe (33/38 desde paso14b): que exija que NO exista, o que deje de
 mirarla, con su prueba antes y después.
+(Nota 2026-10-23, D45, P2 del veredicto del tutor.) Pendiente nuevo, en su
+propia rama: unificar el día laborable. Hoy hay cuatro comprobaciones
+sueltas "weekday() < 5" o ">= 5" (reglas_visita.py y huecos_libres_service.py),
+siguiente_laborable() en listado_llamadas_service.py y, desde D45,
+primer_dia_permitido() en reglas_visita.py. Que todas usen una sola función
+(tocaría la lista diaria: con su regresión).
 
 Pendiente hasta DESPUÉS de tener POST /calculate-estimate funcionando
 (decisión de Gabi, 2026-09-18): suite de pytest (unitarias mockeadas

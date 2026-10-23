@@ -30,8 +30,10 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from app.schemas.common import fecha_en_formato_exacto
 
 # Por qué un día no tiene horas (P7 de la sección 11): 200 con el motivo,
-# nunca un 422 (el 422 es solo para la FORMA de la fecha).
-MotivoSinHoras = Literal["fecha_pasada", "fin_de_semana", "dia_completo"]
+# nunca un 422 (el 422 es solo para la FORMA de la fecha). D45 (2026-10-23)
+# añade antelacion_insuficiente: el día es anterior al primer día permitido
+# del canal.
+MotivoSinHoras = Literal["fecha_pasada", "antelacion_insuficiente", "fin_de_semana", "dia_completo"]
 
 
 class ConsultaHuecos(BaseModel):

@@ -34,6 +34,10 @@ estable) y un "mensaje"; el adaptador app/api/resultados_llamada.py decide
 el código HTTP.
 """
 
+# D45: date (un día) y datetime (un instante), para los tipos de
+# primer_dia_de_resultado.
+from datetime import date, datetime
+
 # psycopg2: solo para reconocer sus errores (psycopg2.Error) al guardar la
 # dirección de la obra (D42, H2).
 import psycopg2
@@ -55,6 +59,8 @@ from app.schemas.resultados_llamada import (
 
 # Reglas de fecha y de configuración COMPARTIDAS con POST /visits.
 from app.services.reglas_visita import (
+    # D45: el canal de este endpoint (administración).
+    CANAL_ADMINISTRACION,
     ZONA_MADRID,
     ConfiguracionIncompleta,
     FechaNoValida,
@@ -64,6 +70,8 @@ from app.services.reglas_visita import (
     # D33: el fin de la visita para la respuesta (fecha_fin_visita).
     fin_de_visita,
     leer_reglas_visita,
+    # D45: la primera fecha posible de un canal.
+    primer_dia_del_canal,
     registrar_configuracion_incompleta,
     validar_fecha,
 )
@@ -165,6 +173,30 @@ class DireccionObraNoGuardada(RuntimeError):
     lo guardaría en logs. Solo lleva el código de Postgres (pgcode) y el
     nombre de la restricción: nunca pgerror, ni el detalle, ni un valor.
     """
+
+
+# ======================================================================
+# D45: qué antelación aplica cada resultado (función pura)
+# ======================================================================
+
+
+def primer_dia_de_resultado(resultado: ResultadoLlamada, ahora: datetime, reglas: dict[str, int]) -> date | None:
+    """
+    D45: la primera fecha posible para la visita de ESTE resultado, o None si
+    no se aplica antelación. Pura (sin base de datos), para probar el
+    reparto con fechas fijas (V2 y N3 del plan D45):
+      - visita_acordada y otra_hora: la regla de administración (1.er
+        laborable después de hoy).
+      - confirmar_hora: None, solo tiene que ser futura (la hora la pidió el
+        cliente y ya pasó la regla del chat; R4 del plan).
+    Los demás resultados no tienen visita: no se llama con ellos.
+    """
+    # confirmar_hora: sin antelación.
+    if resultado == ResultadoLlamada.CONFIRMAR_HORA:
+        # Solo la condición de futura (validar_fecha).
+        return None
+    # Los que fija administración: su regla.
+    return primer_dia_del_canal(ahora, reglas, CANAL_ADMINISTRACION)
 
 
 # ======================================================================
@@ -323,8 +355,9 @@ def registrar_resultado_con_cursor(cursor, data: ResultadoLlamadaCreate):
                 "La hora enviada es la misma que pidió el cliente: el resultado es confirmar_hora, no otra_hora.",
             )
         # Las reglas de la fecha (futura, laborable, dentro de una franja),
-        # también para la hora pedida (C12: puede haber pasado). 422.
-        validar_fecha(inicio, ahora, reglas)
+        # también para la hora pedida (C12: puede haber pasado). 422. D45:
+        # con la antelación de administración, salvo en confirmar_hora.
+        validar_fecha(inicio, ahora, reglas, primer_dia_de_resultado(data.resultado, ahora, reglas))
         # visita_acordada: ninguna visita activa (P1 de /gate-decisions).
         if data.resultado == ResultadoLlamada.VISITA_ACORDADA:
             # SQL: una visita activa ('solicitada' o 'confirmada') de la oportunidad.

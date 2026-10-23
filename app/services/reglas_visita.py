@@ -12,6 +12,8 @@ dos endpoints (plan de /gate-decisions, sección 2.3):
 Las dos tienen que cumplir EXACTAMENTE las mismas reglas (en el futuro, de
 lunes a viernes, visita completa dentro de una franja, con los valores de
 reglas_negocio). Por eso viven aquí una sola vez, en lugar de copiarse.
+(D45, 2026-10-23: más la antelación mínima por canal, que cada endpoint
+elige con primer_dia_del_canal; plan docs/Plan_Antelacion_Visitas_D45.txt.)
 
 Este código se MUDÓ de visits_service.py el 2026-09-30 sin cambiar la
 lógica de ninguna regla. Cambios solo de organización:
@@ -63,10 +65,26 @@ CLAVE_DIAS_OFERTA = "dias_oferta_visita"
 # El máximo de dias_oferta_visita y, a la vez, cuántos días laborables se
 # miran como mucho buscando días con hueco (unas 12 semanas; plan D32, 3.3).
 MAX_DIAS_BUSQUEDA = 60
-# Las siete claves que se leen y validan juntas (503 si falta alguna). Desde
-# D32: las cinco de paso9, el desplazamiento y los días de oferta.
+# D45 (paso17, 2026-10-23): la antelación mínima de una visita, por canal.
+# El valor es el n.º del día laborable DESPUÉS de hoy que es la primera
+# fecha posible (2: el chat, desde el 2.º laborable; 1: administración, desde
+# el 1.º; 0: hoy mismo, solo con la condición de ser futura).
+CLAVE_ANTELACION_CHAT = "dias_antelacion_visita_chat"
+CLAVE_ANTELACION_ADMIN = "dias_antelacion_visita_admin"
+# El máximo de las dos (P5 del plan D45): 0..10, como dias_oferta_visita.
+MAX_DIAS_ANTELACION = 10
+# Los dos canales. Los fija el ADAPTADOR (la tool MCP, "chat"; GET
+# /huecos-libres, "administracion"), nunca un dato de la petición: así el
+# chat no puede pedir la regla de administración (plan D45, sección 2).
+CANAL_CHAT = "chat"
+CANAL_ADMINISTRACION = "administracion"
+# Qué clave usa cada canal.
+CLAVE_ANTELACION_DE = {CANAL_CHAT: CLAVE_ANTELACION_CHAT, CANAL_ADMINISTRACION: CLAVE_ANTELACION_ADMIN}
+# Las nueve claves que se leen y validan juntas (503 si falta alguna). Desde
+# D32: las cinco de paso9, el desplazamiento y los días de oferta; desde
+# D45, las dos antelaciones.
 CLAVES_REGLAS = (CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN, CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN, CLAVE_DURACION,
-                 CLAVE_DESPLAZAMIENTO, CLAVE_DIAS_OFERTA)
+                 CLAVE_DESPLAZAMIENTO, CLAVE_DIAS_OFERTA, CLAVE_ANTELACION_CHAT, CLAVE_ANTELACION_ADMIN)
 # Las dos franjas, como pares (nombre, clave de inicio, clave de fin). El
 # nombre es el de la respuesta ("manana" sin eñe, como en get_business_rules).
 FRANJAS = (("manana", CLAVE_MANANA_INICIO, CLAVE_MANANA_FIN), ("tarde", CLAVE_TARDE_INICIO, CLAVE_TARDE_FIN))
@@ -83,6 +101,12 @@ CLAVE_BLOQUEO_VISITAS = 3101
 
 # 1440: el valor máximo que puede tener una de esas claves (medianoche).
 MINUTOS_POR_DIA = 24 * 60
+
+# Los días de la semana en español y en minúscula (weekday(): lunes = 0).
+# Una tabla propia: strftime("%A") depende del idioma del sistema. (D45: se
+# muda aquí desde huecos_libres_service.py, que la importa, porque ahora la
+# usa también el mensaje del 422 antelacion_insuficiente.)
+DIAS_SEMANA = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
 # Log de configuración incompleta. La acción no depende de quién lo
 # provoque: el problema es la configuración de las VISITAS. Quién lo
@@ -262,9 +286,88 @@ def mensaje_fuera_de_rejilla(validas: dict[str, list[str]], pedida: str) -> str:
             f"La hora {pedida} no es una de ellas.")
 
 
-def validar_fecha(inicio: datetime, ahora: datetime, reglas: dict[str, int]) -> None:
+# ======================================================================
+# D45: antelación mínima (funciones puras)
+# ======================================================================
+
+
+def primer_dia_permitido(hoy: date, n: int) -> date:
     """
-    Aplica las tres reglas de la fecha. No devuelve nada si todo está bien;
+    D45: el n-ésimo día laborable DESPUÉS de hoy (n = 0: hoy mismo).
+    Laborable = de lunes a viernes, el mismo criterio que el resto del
+    sistema (weekday() < 5); los festivos no se detectan (limitación
+    conocida). Ejemplos: viernes con n = 2 -> martes; lunes con n = 1 ->
+    martes; sábado con n = 1 -> lunes.
+    """
+    # El día por el que va la cuenta, y cuántos laborables faltan.
+    dia, faltan = hoy, n
+    # Mientras falte alguno, se avanza un día.
+    while faltan > 0:
+        # El día siguiente.
+        dia += timedelta(days=1)
+        # Solo cuenta si es de lunes (0) a viernes (4).
+        if dia.weekday() < 5:
+            # Uno menos.
+            faltan -= 1
+    # El primer día permitido.
+    return dia
+
+
+def primer_dia_del_canal(ahora: datetime, reglas: dict[str, int], canal: str) -> date:
+    """
+    D45: la primera fecha posible para ese canal. "Hoy" es la fecha EN
+    MADRID del now() de Postgres (precisión 6 del tutor): a las 23:59 y a
+    las 00:01 son días distintos. El número de laborables sale de
+    reglas_negocio (ninguno escrito en el código).
+
+    canal: CANAL_CHAT o CANAL_ADMINISTRACION, puesto por el adaptador.
+    Otro valor es un fallo de programación: ValueError, nunca un canal por
+    defecto elegido en silencio.
+    """
+    # Un canal desconocido: error, sin adivinar.
+    if canal not in CLAVE_ANTELACION_DE:
+        # Se nombra el canal recibido (no es un dato del cliente).
+        raise ValueError(f"canal desconocido: {canal!r}")
+    # Hoy en Madrid (el día del reloj de Postgres, no el del UTC).
+    hoy = ahora.astimezone(ZONA_MADRID).date()
+    # El laborable que toca, con la regla de ese canal.
+    return primer_dia_permitido(hoy, reglas[CLAVE_ANTELACION_DE[canal]])
+
+
+def mensaje_antelacion(primer_dia: date) -> str:
+    """El texto del 422 antelacion_insuficiente, neutro para los dos canales
+    (precisión 1 del tutor): "La primera fecha posible para la visita es el
+    martes 27/10."."""
+    # El día de la semana y la fecha dd/mm.
+    return f"La primera fecha posible para la visita es el {DIAS_SEMANA[primer_dia.weekday()]} {primer_dia:%d/%m}."
+
+
+def validar_antelacion(inicio: datetime, primer_dia: date | None) -> None:
+    """
+    D45: lanza FechaNoValida("antelacion_insuficiente") si el día de la
+    visita (en Madrid) es anterior a primer_dia. primer_dia None: sin
+    antelación (confirmar_hora, que solo exige que sea futura).
+
+    validar_fecha la llama justo después de fecha_pasada; POST /visits la
+    llama aparte, DESPUÉS de detectar la repetición exacta (P4 del plan D45:
+    un reenvío de n8n no cambia la respuesta, D7).
+    """
+    # Sin primer día: no hay nada que mirar.
+    if primer_dia is None:
+        # Nada.
+        return
+    # El día de la visita en Madrid (inicio ya lleva esa zona; se fuerza
+    # por si llega en otra).
+    dia = inicio.astimezone(ZONA_MADRID).date()
+    # Antes del primer día permitido: 422.
+    if dia < primer_dia:
+        # Con el mensaje neutro.
+        raise FechaNoValida("antelacion_insuficiente", mensaje_antelacion(primer_dia))
+
+
+def validar_fecha(inicio: datetime, ahora: datetime, reglas: dict[str, int], primer_dia: date | None) -> None:
+    """
+    Aplica las reglas de la fecha. No devuelve nada si todo está bien;
     si no, lanza FechaNoValida con el motivo y un mensaje que se le puede
     leer al cliente.
 
@@ -272,9 +375,14 @@ def validar_fecha(inicio: datetime, ahora: datetime, reglas: dict[str, int]) -> 
     ahora:  el now() de la base de datos (la referencia de tiempo es el
             reloj de Postgres, no el del ordenador que ejecuta el código).
     reglas: los valores de reglas_negocio, ya comprobados.
+    primer_dia: D45, la primera fecha posible (primer_dia_del_canal), o
+            None si no se aplica antelación (confirmar_hora, y POST /visits,
+            que la mira aparte). OBLIGATORIO: sin valor por defecto, para
+            que nadie se olvide de decidirlo.
 
     Las reglas se comprueban en orden y se informa de la PRIMERA que
-    falla: pasado, fin de semana, franja y (desde D32, 2026-10-13) rejilla.
+    falla: pasado, antelación (D45), fin de semana, franja y (desde D32,
+    2026-10-13) rejilla.
     """
     # Comparar dos datetime conscientes funciona aunque estén en zonas
     # distintas: Python compara el instante real, no el texto.
@@ -283,6 +391,9 @@ def validar_fecha(inicio: datetime, ahora: datetime, reglas: dict[str, int]) -> 
             "fecha_pasada",
             f"La visita tiene que ser en el futuro, y el {inicio:%d/%m/%Y} a las {inicio:%H:%M} ya ha pasado.",
         )
+
+    # D45: la antelación mínima, justo después del pasado (plan D45, 2).
+    validar_antelacion(inicio, primer_dia)
 
     # weekday(): lunes = 0 ... sábado = 5, domingo = 6. Se usa el día EN
     # MADRID (inicio ya lleva esa zona), no el día en UTC.
@@ -334,7 +445,7 @@ def validar_fecha(inicio: datetime, ahora: datetime, reglas: dict[str, int]) -> 
 
 def leer_reglas_visita(cursor) -> tuple[dict[str, int], list[str]]:
     """
-    Lee las claves de CLAVES_REGLAS (siete desde D32) de reglas_negocio y
+    Lee las claves de CLAVES_REGLAS (siete desde D32, nueve desde D45) de reglas_negocio y
     devuelve (reglas, problemas).
     (Antes se llamaba _leer_reglas y vivía en visits_service.py.)
 
@@ -396,6 +507,13 @@ def leer_reglas_visita(cursor) -> tuple[dict[str, int], list[str]]:
         # Se nombra el rango para que administración sepa qué poner.
         problemas.append(f"{CLAVE_DIAS_OFERTA}: debe estar entre 1 y {MAX_DIAS_BUSQUEDA} "
                          f"({reglas[CLAVE_DIAS_OFERTA]})")
+    # D45 (P5): las dos antelaciones, entre 0 y MAX_DIAS_ANTELACION (10). Los
+    # decimales y los negativos ya los rechazó el caso 2; aquí, el máximo.
+    for clave in (CLAVE_ANTELACION_CHAT, CLAVE_ANTELACION_ADMIN):
+        # Solo si se leyó bien y se pasa del máximo.
+        if clave in reglas and reglas[clave] > MAX_DIAS_ANTELACION:
+            # Se nombra el rango, como en los días de oferta.
+            problemas.append(f"{clave}: debe estar entre 0 y {MAX_DIAS_ANTELACION} ({reglas[clave]})")
 
     # Se devuelven los dos: quien llama decide qué hacer si hay problemas.
     return reglas, problemas
@@ -496,7 +614,8 @@ def fin_de_visita(inicio: datetime, reglas: dict[str, int]) -> datetime:
 
 
 def disponibilidad(cursor, dias: list[date], ahora: datetime, reglas: dict[str, int],
-                   excluir: list[int] | tuple[int, ...] = ()) -> dict[date, dict[str, list[str]]]:
+                   excluir: list[int] | tuple[int, ...] = (),
+                   primer_dia: date | None = None) -> dict[date, dict[str, list[str]]]:
     """
     D32: las horas de inicio LIBRES ("HH:MM", Madrid) de cada día de la
     lista, por franja: {date(2026, 10, 15): {"manana": ["09:45", "11:00"],
@@ -507,6 +626,12 @@ def disponibilidad(cursor, dias: list[date], ahora: datetime, reglas: dict[str, 
     ninguna visita activa ('solicitada' o 'confirmada'), salvo las de
     excluir (la propia visita que se sustituye o se confirma, C8 de D31).
     Un sábado, un domingo o un día ya pasado dan las dos listas vacías.
+
+    primer_dia (D45): si se da, los días ANTERIORES salen con las dos listas
+    vacías (antelación mínima al OFRECER, GET /huecos-libres y la tool).
+    comprobar_hueco_libre NO lo pasa: el 409 solo mira choques, y la
+    antelación de quien escribe ya la miró validar_fecha (así confirmar_hora
+    no cambia).
 
     Hace UNA sola consulta, sea cual sea el número de días (plan D32, 13):
     las visitas activas de toda la ventana, de la medianoche del primer día
@@ -550,8 +675,9 @@ def disponibilidad(cursor, dias: list[date], ahora: datetime, reglas: dict[str, 
     for dia in sorted(set(dias)):
         # Las dos franjas, vacías al principio.
         libres: dict[str, list[str]] = {nombre: [] for nombre, _, _ in FRANJAS}
-        # Sábado (5) o domingo (6): sin horas.
-        if dia.weekday() < 5:
+        # Sábado (5) o domingo (6), o (D45) antes del primer día permitido:
+        # sin horas.
+        if dia.weekday() < 5 and (primer_dia is None or dia >= primer_dia):
             # Cada franja con sus minutos de la rejilla.
             for nombre, minutos in horas_rejilla.items():
                 # Cada hora de la rejilla.

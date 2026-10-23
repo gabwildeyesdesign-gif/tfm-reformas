@@ -166,6 +166,7 @@ El `mensaje` lo escribe el backend para administración y se puede enseñar tal 
 | 409 | `visita_activa_existente` | "Ya tiene una visita activa." | No |
 | 409 | `hueco_ocupado` | "Esa hora ya está ocupada por otra visita." + las horas de `huecos_libres` (ver abajo), y volver a la página de la fecha. | No |
 | 422 | `fecha_pasada`, `fin_de_semana`, `fuera_de_franja` | El `mensaje` (dice las franjas) y volver a la página de la fecha. | No |
+| 422 | `antelacion_insuficiente` (D45, desde el 2026-10-23) | El `mensaje` ("La primera fecha posible para la visita es el <día> <dd/mm>.") y volver a la página "Día". Con `visita_acordada` y `otra_hora` la fecha tiene que ser, como pronto, el día laborable siguiente a hoy; no debería salir si el día viene de GET /huecos-libres, salvo una página abierta antes de medianoche y enviada después. `confirmar_hora` no la recibe nunca. OJO: el formulario del plan B (WF_formulario_llamadas, que no se cambia) la trataría como error técnico. | No |
 | 422 | `fuera_de_rejilla` (D32, desde el 2026-10-13) | No debería salir nunca si las horas vienen de GET /huecos-libres (sección 4b). Si sale: el `mensaje` (dice las horas válidas; también van aparte en `horas_validas`) y volver a la página "Día". | **Sí** (indica un fallo del formulario) |
 | 422 | `misma_hora_pedida` | "Es la hora que pidió: elige 'confirmar la hora pedida'." | No |
 | 422 | (lista de Pydantic, sin `motivo`) | Error del formulario (un campo mal enviado). | **Sí** |
@@ -231,8 +232,9 @@ cogido una hora, y no se le puede ofrecer a este.
    ...]}
 ```
 
-- Los próximos `dias_oferta_visita` (10) días de lunes a viernes, DESDE HOY (de hoy, solo las horas que aún no han
-  pasado), que tienen al menos una hora libre; los días completos no salen. Si no hay ninguno, `"dias": []`.
+- Los próximos `dias_oferta_visita` (10) días de lunes a viernes, DESDE EL DÍA LABORABLE SIGUIENTE A HOY (D45,
+  desde el 2026-10-23: `dias_antelacion_visita_admin` = 1; antes, desde hoy), que tienen al menos una hora libre;
+  los días completos no salen. Si no hay ninguno, `"dias": []`.
 - `manana` y `tarde`: siempre presentes; lista vacía si esa franja no tiene horas ese día.
 - `etiqueta`: el texto EXACTO de la opción. Una franja sin horas no se escribe ("Jueves 15/10 — tarde: 17:00 ·
   18:15"). Es única: lleva la fecha.
@@ -258,7 +260,10 @@ cogido una hora, y no se le puede ofrecer a este.
   textarea del informe.
 - Si `horas` viene vacía, la página SOLO ofrece "Ninguna le va bien → elegir otro día". `sin_horas_motivo` dice
   por qué (se puede enseñar en un campo `html`): `dia_completo` (alguien cogió la última durante la llamada),
-  `fin_de_semana` o `fecha_pasada` (fechas del calendario de "Otro día más adelante").
+  `fin_de_semana` o `fecha_pasada` (fechas del calendario de "Otro día más adelante"), y desde D45
+  `antelacion_insuficiente` (hoy, o una fecha anterior al día laborable siguiente; texto propuesto: "Las visitas
+  se acuerdan como pronto para el siguiente día laborable."). El formulario del plan B no conoce este valor y
+  enseñaría su texto genérico.
 - 422 solo si la fecha está mal escrita o no existe (por ejemplo `2026-02-30`): error del formulario (WF4 sí).
 
 ### El bucle "Ninguna le va bien" (opción (a), acordada el 2026-10-13)

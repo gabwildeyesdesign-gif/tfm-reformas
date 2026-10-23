@@ -76,8 +76,10 @@ from app.services import estimate_service
 # D32: el servicio de los huecos libres (el mismo que GET /huecos-libres).
 from app.services import huecos_libres_service
 
-# El rechazo por configuración (falta o no es válida una regla).
-from app.services.reglas_visita import ConfiguracionIncompleta
+# El rechazo por configuración (falta o no es válida una regla). Y D45: el
+# canal de la tool, el del chat (lo fija ESTA tool, no un parámetro: el
+# agente no puede pedir la antelación de administración).
+from app.services.reglas_visita import CANAL_CHAT, ConfiguracionIncompleta
 
 # ---------------------------------------------------------------------
 # Comprobación de arranque (fail fast)
@@ -340,11 +342,13 @@ def consultar_huecos_libres(
     Dice qué horas de visita técnica están LIBRES. Úsala SIEMPRE antes de
     ofrecer horas al cliente: ofrece solo las que devuelve, tal cual.
 
-    - Sin fecha: los próximos días laborables (desde hoy) con al menos una
-      hora libre, cada uno con sus horas de mañana y de tarde.
+    - Sin fecha: los próximos días laborables (desde la primera fecha
+      posible) con al menos una hora libre, cada uno con sus horas de
+      mañana y de tarde.
     - Con fecha (AAAA-MM-DD): las horas libres de ese día, por franja, y
       "horas" con todas juntas. Si no queda ninguna, sin_horas_motivo dice
-      por qué (fecha_pasada, fin_de_semana o dia_completo): propón otro día.
+      por qué (fecha_pasada, antelacion_insuficiente, fin_de_semana o
+      dia_completo): propón otro día.
 
     Las visitas empiezan a horas fijas; nunca propongas una hora que no
     esté en la respuesta. No contiene datos de otros clientes.
@@ -362,12 +366,12 @@ def consultar_huecos_libres(
         # Sin fecha: modo días, sin la etiqueta del formulario.
         if consulta.fecha is None:
             # La respuesta del servicio (con etiqueta).
-            dias = huecos_libres_service.consultar_dias()
+            dias = huecos_libres_service.consultar_dias(CANAL_CHAT)
             # La misma, sin la etiqueta en cada día.
             return HuecosDiasAgente(modo=dias.modo, generado_en=dias.generado_en,
                                     dias=[DiaConHuecos(**d.model_dump(exclude={"etiqueta"})) for d in dias.dias])
         # Con fecha: modo un día, tal cual.
-        return huecos_libres_service.consultar_dia(consulta.fecha)
+        return huecos_libres_service.consultar_dia(consulta.fecha, CANAL_CHAT)
     # Falta o no es válida una regla: [AVISO] en stderr y error genérico.
     except ConfiguracionIncompleta as error:
         # Nombra las claves, nunca un secreto.

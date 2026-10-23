@@ -40,6 +40,18 @@ paso_huecos_min retirada.
       comprobar_hueco_libre, después de validar_fecha; comprobar_hueco_libre
       usa disponibilidad(); fuera de reglas_visita.py, nadie llama a choca()
       ni lee CLAVE_DESPLAZAMIENTO (solo reglas_visita.py calcula horas).
+  S9  D45, antelación mínima (plan docs/Plan_Antelacion_Visitas_D45.txt,
+      sección 6), todo con fechas FIJAS (precisión 2 del tutor):
+      primer_dia_permitido (V1); validar_fecha con un "ahora" a las 09:00,
+      a las 20:00 y en sábado (V2, V3); el paso de medianoche en Madrid
+      (precisión 6); disponibilidad con primer_dia (V4); motivo_sin_horas
+      (V5); la regla sale de las reglas y no del código (V7); el reparto
+      por resultado (confirmar_hora sin antelación); un canal desconocido;
+      y la estructura (canal sin valor por defecto, cada adaptador con su
+      canal, /visits mira la antelación después de la repetición, el 409
+      sin primer_dia). El rango de las dos reglas (V6) va en S6.
+(2026-10-23, D45: S6 pasa de siete a nueve reglas, y las tres llamadas de
+S5 a validar_fecha llevan primer_dia=None, el nuevo parámetro obligatorio.)
 
 Las 4 preguntas: (1) escribe en tablas reales SOLO dentro de una
 transacción que se deshace siempre; (2) pasa su cursor al código, por eso
@@ -48,8 +60,10 @@ abierta; al final se comprueba que no queda el cliente de prueba; (4) no
 toca el 8000 ni ninguna fila real.
 """
 
-# ast: comprobaciones de estructura del código (S8).
+# ast: comprobaciones de estructura del código (S8 y S9).
 import ast
+# inspect: leer la firma de una función (S9: canal sin valor por defecto).
+import inspect
 # re: buscar las horas "HH:MM" en los mensajes (S5).
 import re
 # sys: consola en UTF-8 y código de salida.
@@ -78,6 +92,12 @@ from psycopg2.extras import Json
 
 # El módulo que se prueba, entero (sus constantes y funciones).
 import app.services.reglas_visita as rv
+# D45 (S9): las dos funciones puras de los servicios (motivo_sin_horas y
+# primer_dia_de_resultado) y el enumerado de los resultados. Importarlos no
+# abre ninguna conexión (el pool solo se crea con init_pool()).
+import app.services.huecos_libres_service as hs
+import app.services.resultados_llamada_service as rls
+from app.schemas.resultados_llamada import ResultadoLlamada
 # La cadena de conexión del .env (nunca se imprime).
 from app.config import DATABASE_URL
 
@@ -182,6 +202,8 @@ REGLAS = {
     rv.CLAVE_TARDE_INICIO: 1020, rv.CLAVE_TARDE_FIN: 1200,
     # 60 de visita, 15 de desplazamiento y 10 días de oferta.
     rv.CLAVE_DURACION: 60, rv.CLAVE_DESPLAZAMIENTO: 15, rv.CLAVE_DIAS_OFERTA: 10,
+    # D45: antelación del chat (2.º laborable) y de administración (1.º).
+    rv.CLAVE_ANTELACION_CHAT: 2, rv.CLAVE_ANTELACION_ADMIN: 1,
 }
 # Un lunes laborable de referencia, lejos (para que "ahora" quede antes).
 DIA_REF = date(2030, 1, 7)
@@ -350,7 +372,7 @@ print("\nS5. validar_fecha (fuera_de_rejilla) y los mensajes")
 # 10:00: dentro de la franja pero fuera de la rejilla -> 422 fuera_de_rejilla.
 try:
     # Debe lanzar FechaNoValida.
-    rv.validar_fecha(en_madrid(DIA_REF, 10, 0), AHORA_ANTES, REGLAS)
+    rv.validar_fecha(en_madrid(DIA_REF, 10, 0), AHORA_ANTES, REGLAS, None)
 # La esperada: se mira.
 except rv.FechaNoValida as error:
     # Se enseña.
@@ -369,7 +391,7 @@ else:
 # 12:45 (termina 13:45, fuera de la franja): sigue siendo fuera_de_franja (el orden).
 try:
     # Debe lanzar FechaNoValida.
-    rv.validar_fecha(en_madrid(DIA_REF, 12, 45), AHORA_ANTES, REGLAS)
+    rv.validar_fecha(en_madrid(DIA_REF, 12, 45), AHORA_ANTES, REGLAS, None)
 # La esperada.
 except rv.FechaNoValida as error:
     # fuera_de_franja, sin horas_validas.
@@ -384,7 +406,7 @@ for hora in D23_5["manana"] + D23_5["tarde"]:
     # try: no debe lanzar nada.
     try:
         # La hora "HH:MM" partida en dos números.
-        rv.validar_fecha(en_madrid(DIA_REF, int(hora[:2]), int(hora[3:])), AHORA_ANTES, REGLAS)
+        rv.validar_fecha(en_madrid(DIA_REF, int(hora[:2]), int(hora[3:])), AHORA_ANTES, REGLAS, None)
     # Si lanza, FALLO.
     except rv.FechaNoValida as error:
         # Con el motivo.
@@ -407,9 +429,10 @@ vacio = rv.mensaje_hueco_ocupado([])
 comprobar("409 con la lista vacía: sin cifras y pide otro día", not re.search(r"\d", vacio) and "otro día" in vacio)
 
 # ======================================================================
-print("\nS6. leer_reglas_visita: las siete reglas de D32")
+print("\nS6. leer_reglas_visita: las nueve reglas de D32 y D45")
 # ======================================================================
-# Las siete correctas, como filas de reglas_negocio (Decimal).
+# Las nueve correctas (siete de D32 y dos de D45), como filas de
+# reglas_negocio (Decimal). El nombre SIETE se queda (es de D32).
 SIETE = [(c, Decimal(v)) for c, v in REGLAS.items()]
 
 
@@ -419,10 +442,10 @@ def problemas_con(filas):
     return rv.leer_reglas_visita(CursorDeMentira(filas))[1]
 
 
-# Las siete: ningún problema.
+# Las nueve: ningún problema.
 reglas7, problemas = rv.leer_reglas_visita(CursorDeMentira(SIETE))
 # Ninguno, y los valores como enteros.
-comprobar("las siete bien: 0 problemas, desplazamiento 15 y días 10",
+comprobar("las nueve bien: 0 problemas, desplazamiento 15 y días 10",
           problemas == [] and reglas7[rv.CLAVE_DESPLAZAMIENTO] == 15 and reglas7[rv.CLAVE_DIAS_OFERTA] == 10,
           f"({problemas})")
 # Falta el desplazamiento.
@@ -433,7 +456,7 @@ comprobar("sin dias_oferta_visita: 'dias_oferta_visita: no existe'",
           problemas_con([f for f in SIETE if f[0] != rv.CLAVE_DIAS_OFERTA]) == ["dias_oferta_visita: no existe"])
 # Días 0 y 61: fuera de 1..60.
 for valor in (0, 61):
-    # Las siete con ese valor de días.
+    # Las nueve con ese valor de días.
     filas = [(c, Decimal(valor) if c == rv.CLAVE_DIAS_OFERTA else v) for c, v in SIETE]
     # Un problema que lo nombra.
     p = problemas_con(filas)
@@ -443,6 +466,18 @@ for valor in (0, 61):
 # Desplazamiento 0: válido (sin desplazamiento).
 comprobar("desplazamiento_min = 0: válido",
           problemas_con([(c, Decimal(0) if c == rv.CLAVE_DESPLAZAMIENTO else v) for c, v in SIETE]) == [])
+# D45 (V6): las dos antelaciones son obligatorias y van de 0 a 10.
+for clave in (rv.CLAVE_ANTELACION_CHAT, rv.CLAVE_ANTELACION_ADMIN):
+    # Sin esa fila: "no existe".
+    comprobar(f"sin {clave}: '{clave}: no existe'",
+              problemas_con([f for f in SIETE if f[0] != clave]) == [f"{clave}: no existe"])
+    # 0 y 10 valen (los extremos); 11, -1 y 1.5 no.
+    for valor, valido in ((0, True), (10, True), (11, False), (-1, False), (Decimal("1.5"), False)):
+        # Las nueve con ese valor en esa clave.
+        p = problemas_con([(c, Decimal(valor) if c == clave else v) for c, v in SIETE])
+        # Válido: ningún problema; no válido: uno que nombra la clave.
+        comprobar(f"{clave} = {valor}: {'válido' if valido else 'un problema que la nombra'}",
+                  p == [] if valido else (len(p) == 1 and p[0].startswith(f"{clave}:")), f"({p})")
 # paso_huecos_min ya no está entre las claves que se leen (expand/contract, 2.6).
 comprobar("paso_huecos_min ya NO es una de las claves que se leen", "paso_huecos_min" not in rv.CLAVES_REGLAS,
           f"({rv.CLAVES_REGLAS})")
@@ -462,7 +497,7 @@ try:
     # Las reglas REALES, leídas en esta transacción.
     reglas, problemas = rv.leer_reglas_visita(cur)
     # Sin problemas (con paso14 aplicada): si los hay, lo demás no tiene sentido.
-    comprobar("las reglas reales se leen sin problemas (las siete de D32)", problemas == [], f"({problemas})")
+    comprobar("las reglas reales se leen sin problemas (las nueve de D32 y D45)", problemas == [], f"({problemas})")
     # La rejilla con las reglas REALES: la de D23.5 (plan D32, 2.2).
     reales = rv.rejilla_texto(reglas) if not problemas else {}
     # Se enseña.
@@ -630,6 +665,8 @@ comprobar("visits_service: hueco_ocupado después de visita_confirmada", 0 < lin
 arbol_rv = ast.parse((RAIZ_REPO / "app/services/reglas_visita.py").read_text(encoding="utf-8"))
 # La definición de comprobar_hueco_libre.
 funcion = next(n for n in ast.walk(arbol_rv) if isinstance(n, ast.FunctionDef) and n.name == "comprobar_hueco_libre")
+# Con otro nombre para S9 (en S8 "funcion" se reutiliza después).
+funcion_409 = funcion
 # Llama a disponibilidad dentro.
 comprobar("comprobar_hueco_libre llama a disponibilidad()", bool(lineas_de_llamadas(funcion, "disponibilidad")))
 # Fuera de reglas_visita.py, nadie calcula horas: ni llama a choca() ni lee
@@ -652,6 +689,247 @@ for ruta in sorted((RAIZ_REPO / "app").rglob("*.py")):
         ajenos.append(f"{ruta.relative_to(RAIZ_REPO)}: {sorted(usados & {'choca', 'CLAVE_DESPLAZAMIENTO', 'rejilla'})}")
 # Ninguno.
 comprobar("fuera de reglas_visita.py nadie usa choca, rejilla ni CLAVE_DESPLAZAMIENTO", ajenos == [], f"({ajenos})")
+
+# ======================================================================
+print("\nS9. D45: antelación mínima (pruebas puras con fechas FIJAS)")
+# ======================================================================
+# Una semana fija de enero de 2030 (horario de invierno, +01:00): del lunes
+# 7 al domingo 13, y el lunes 14, el martes 15 y el sábado 19 siguientes.
+LUN, MAR, MIE, JUE, VIE, SAB, DOM = (date(2030, 1, 7) + timedelta(days=i) for i in range(7))
+# Los de la semana siguiente.
+LUN2, MAR2, SAB2 = date(2030, 1, 14), date(2030, 1, 15), date(2030, 1, 19)
+# Los nombres de los días (los del código, para los títulos).
+NOMBRE = rv.DIAS_SEMANA
+
+# V1: primer_dia_permitido, con fines de semana por medio.
+for hoy, n, esperado in ((LUN, 1, MAR), (LUN, 2, MIE), (VIE, 1, LUN2), (VIE, 2, MAR2), (SAB, 1, LUN2),
+                         (SAB, 2, MAR2), (DOM, 1, LUN2), (MIE, 0, MIE), (SAB, 0, SAB)):
+    # Lo que da el código.
+    obtenido = rv.primer_dia_permitido(hoy, n)
+    # Exacto.
+    comprobar(f"V1 primer_dia_permitido({NOMBRE[hoy.weekday()]} {hoy:%d/%m}, {n}) = {esperado:%d/%m}",
+              obtenido == esperado, f"({obtenido})")
+
+# Tres "ahora" fijos (precisión 2): jueves a las 09:00 (quedan horas hoy),
+# jueves a las 20:00 (ya no queda ninguna: la última es 18:15) y sábado.
+AHORA_9, AHORA_20, AHORA_SAB = en_madrid(JUE, 9, 0), en_madrid(JUE, 20, 0), en_madrid(SAB, 10, 0)
+
+
+def primero(ahora, canal):
+    """La primera fecha posible de ese canal con las reglas fijas; None si canal es None (confirmar_hora)."""
+    # Sin canal: sin antelación.
+    return None if canal is None else rv.primer_dia_del_canal(ahora, REGLAS, canal)
+
+
+def motivo_de(inicio, ahora, canal):
+    """El motivo del 422 de validar_fecha, o None si la fecha pasa (así una
+    excepción que no sale da un None distinto del motivo esperado: FALLO)."""
+    # try: puede lanzar FechaNoValida.
+    try:
+        # Con el primer día del canal.
+        rv.validar_fecha(inicio, ahora, REGLAS, primero(ahora, canal))
+    # El rechazo: su motivo.
+    except rv.FechaNoValida as error:
+        # El código estable.
+        return error.motivo
+    # Sin rechazo.
+    return None
+
+
+# Los atajos de los canales.
+CHAT, ADMIN = rv.CANAL_CHAT, rv.CANAL_ADMINISTRACION
+# V2 y V3: (título, inicio, ahora, canal, motivo esperado o None).
+CASOS_V2 = [
+    ("jueves 09:00, hoy 11:00, administración", en_madrid(JUE, 11, 0), AHORA_9, ADMIN, "antelacion_insuficiente"),
+    ("jueves 09:00, hoy 11:00, chat", en_madrid(JUE, 11, 0), AHORA_9, CHAT, "antelacion_insuficiente"),
+    ("jueves 09:00, hoy 11:00, confirmar_hora (sin antelación)", en_madrid(JUE, 11, 0), AHORA_9, None, None),
+    ("jueves 09:00, hoy 08:30, administración: el pasado va antes", en_madrid(JUE, 8, 30), AHORA_9, ADMIN,
+     "fecha_pasada"),
+    ("jueves 09:00, viernes 08:30, administración", en_madrid(VIE, 8, 30), AHORA_9, ADMIN, None),
+    ("jueves 09:00, viernes 08:30, chat", en_madrid(VIE, 8, 30), AHORA_9, CHAT, "antelacion_insuficiente"),
+    ("jueves 09:00, lunes 14 08:30, chat", en_madrid(LUN2, 8, 30), AHORA_9, CHAT, None),
+    ("jueves 20:00, hoy 18:15, administración: ya pasó", en_madrid(JUE, 18, 15), AHORA_20, ADMIN, "fecha_pasada"),
+    ("jueves 20:00, viernes 08:30, administración", en_madrid(VIE, 8, 30), AHORA_20, ADMIN, None),
+    ("V3 sábado 10:00, hoy 11:00: antelación, no fin_de_semana", en_madrid(SAB, 11, 0), AHORA_SAB, ADMIN,
+     "antelacion_insuficiente"),
+    ("V3 sábado 10:00, domingo 11:00, chat", en_madrid(DOM, 11, 0), AHORA_SAB, CHAT, "antelacion_insuficiente"),
+    ("sábado 10:00, lunes 14 08:30, administración", en_madrid(LUN2, 8, 30), AHORA_SAB, ADMIN, None),
+    ("sábado 10:00, lunes 14 08:30, chat", en_madrid(LUN2, 8, 30), AHORA_SAB, CHAT, "antelacion_insuficiente"),
+    ("sábado 10:00, martes 15 08:30, chat", en_madrid(MAR2, 8, 30), AHORA_SAB, CHAT, None),
+    ("V3 jueves 09:00, sábado 19 (después del primer día), chat: fin_de_semana", en_madrid(SAB2, 11, 0), AHORA_9,
+     CHAT, "fin_de_semana"),
+]
+# Cada caso.
+for titulo, inicio, ahora, canal, esperado in CASOS_V2:
+    # El motivo que da el código.
+    obtenido = motivo_de(inicio, ahora, canal)
+    # El esperado (None = pasa).
+    comprobar(f"V2 {titulo} -> {esperado or 'pasa'}", obtenido == esperado,
+              f"({obtenido}{': la excepción se ha tragado' if obtenido is None else ''})")
+# El mensaje del 422, neutro (precisión 1): texto exacto.
+try:
+    # Jueves 09:00, chat, hoy 11:00: primer día, el lunes 14.
+    rv.validar_fecha(en_madrid(JUE, 11, 0), AHORA_9, REGLAS, primero(AHORA_9, CHAT))
+# La esperada: su mensaje.
+except rv.FechaNoValida as error:
+    # Se enseña.
+    print(f"    mensaje: {error.mensaje}")
+    # Exacto.
+    comprobar("V2 mensaje neutro exacto: 'La primera fecha posible para la visita es el lunes 14/01.'",
+              error.mensaje == "La primera fecha posible para la visita es el lunes 14/01.", f"({error.mensaje})")
+# No salió: FALLO explícito.
+else:
+    # La excepción no ha salido.
+    comprobar("V2 mensaje neutro exacto", False, "(la excepción se ha tragado)")
+
+# Precisión 6: el paso de medianoche, en Madrid. 22:59 y 23:01 UTC del jueves
+# 10 son las 23:59 del jueves y las 00:01 del viernes en Madrid (+01:00): el
+# MISMO día en UTC y días distintos en Madrid (una versión que usara el día
+# UTC daría lo mismo en los dos y fallaría).
+ANTES_MEDIANOCHE = datetime(2030, 1, 10, 22, 59, tzinfo=timezone.utc)
+# Dos minutos después.
+DESPUES_MEDIANOCHE = datetime(2030, 1, 10, 23, 1, tzinfo=timezone.utc)
+# (canal, esperado a las 23:59, esperado a las 00:01).
+for canal, a_las_2359, a_las_0001 in ((ADMIN, VIE, LUN2), (CHAT, LUN2, MAR2)):
+    # A las 23:59 del jueves.
+    a = rv.primer_dia_del_canal(ANTES_MEDIANOCHE, REGLAS, canal)
+    # A las 00:01 del viernes.
+    b = rv.primer_dia_del_canal(DESPUES_MEDIANOCHE, REGLAS, canal)
+    # Los dos exactos.
+    comprobar(f"medianoche, {canal}: 23:59 del jueves -> {a_las_2359:%d/%m}", a == a_las_2359, f"({a})")
+    # Y distintos entre sí.
+    comprobar(f"medianoche, {canal}: 00:01 del viernes -> {a_las_0001:%d/%m} (otro día)", b == a_las_0001, f"({b})")
+
+# V4: disponibilidad con primer_dia: antes, vacío; desde él, la rejilla.
+disp = rv.disponibilidad(CursorDeMentira([]), [JUE, VIE], AHORA_ANTES, REGLAS, primer_dia=VIE)
+# El jueves, anterior al primer día: vacío.
+comprobar("V4 disponibilidad con primer_dia viernes: el jueves, vacío", disp[JUE] == {"manana": [], "tarde": []},
+          f"({disp[JUE]})")
+# El viernes: la rejilla entera.
+comprobar("V4 disponibilidad con primer_dia viernes: el viernes, la rejilla entera", disp[VIE] == D23_5, f"({disp[VIE]})")
+# Sin primer_dia (el 409): el jueves, la rejilla entera.
+comprobar("V4 disponibilidad sin primer_dia (el 409): el jueves, la rejilla entera",
+          rv.disponibilidad(CursorDeMentira([]), [JUE], AHORA_ANTES, REGLAS)[JUE] == D23_5)
+
+# V5: motivo_sin_horas, con el orden fecha_pasada -> antelación -> fin de
+# semana -> completo. (fecha, ahora, primer día, esperado).
+for fecha, ahora, primer, esperado in ((MIE, AHORA_9, VIE, "fecha_pasada"),
+                                        (JUE, AHORA_9, VIE, "antelacion_insuficiente"),
+                                        (JUE, AHORA_20, VIE, "fecha_pasada"),
+                                        (SAB, AHORA_SAB, LUN2, "antelacion_insuficiente"),
+                                        (SAB2, AHORA_SAB, LUN2, "fin_de_semana"),
+                                        (MAR2, AHORA_SAB, LUN2, "dia_completo")):
+    # Lo que da la función pura.
+    obtenido = hs.motivo_sin_horas(fecha, ahora, REGLAS, primer)
+    # Exacto.
+    comprobar(f"V5 motivo_sin_horas({NOMBRE[fecha.weekday()]} {fecha:%d/%m}, ahora "
+              f"{NOMBRE[ahora.weekday()]} {ahora:%H:%M}) = {esperado}", obtenido == esperado, f"({obtenido})")
+
+# V7: la regla sale de las reglas, no del código. Con el chat a 3 y
+# administración a 0, el primer día cambia.
+OTRAS = {**REGLAS, rv.CLAVE_ANTELACION_CHAT: 3, rv.CLAVE_ANTELACION_ADMIN: 0}
+# Chat a 3, desde el jueves: viernes, lunes, martes.
+comprobar("V7 chat = 3 desde el jueves 09:00 -> martes 15",
+          rv.primer_dia_del_canal(AHORA_9, OTRAS, CHAT) == MAR2, f"({rv.primer_dia_del_canal(AHORA_9, OTRAS, CHAT)})")
+# Administración a 0: hoy mismo.
+comprobar("V7 administración = 0 desde el jueves 09:00 -> el mismo jueves",
+          rv.primer_dia_del_canal(AHORA_9, OTRAS, ADMIN) == JUE, f"({rv.primer_dia_del_canal(AHORA_9, OTRAS, ADMIN)})")
+
+# Un canal desconocido: ValueError, nunca uno por defecto.
+try:
+    # "Chat" con mayúscula no es ningún canal.
+    rv.primer_dia_del_canal(AHORA_9, REGLAS, "Chat")
+# El esperado.
+except ValueError:
+    # Correcto.
+    comprobar("canal desconocido ('Chat') -> ValueError", True)
+# No salió: FALLO explícito.
+else:
+    # La excepción no ha salido.
+    comprobar("canal desconocido ('Chat') -> ValueError", False, "(la excepción se ha tragado)")
+
+# El reparto por resultado (N3): confirmar_hora sin antelación; los otros
+# dos, la de ADMINISTRACIÓN (viernes; la del chat sería el lunes 14).
+for resultado, esperado in ((ResultadoLlamada.CONFIRMAR_HORA, None), (ResultadoLlamada.VISITA_ACORDADA, VIE),
+                            (ResultadoLlamada.OTRA_HORA, VIE)):
+    # Lo que da la función pura.
+    obtenido = rls.primer_dia_de_resultado(resultado, AHORA_9, REGLAS)
+    # Exacto.
+    comprobar(f"primer_dia_de_resultado({resultado.value}) = {esperado}", obtenido == esperado, f"({obtenido})")
+
+# Estructura (N13): canal y primer_dia, sin valor por defecto.
+for funcion, parametro in ((hs.consultar_dias, "canal"), (hs.consultar_dia, "canal"), (rv.validar_fecha, "primer_dia")):
+    # El parámetro en la firma.
+    param = inspect.signature(funcion).parameters.get(parametro)
+    # Existe y no tiene valor por defecto.
+    comprobar(f"{funcion.__name__}: '{parametro}' es obligatorio (sin valor por defecto)",
+              param is not None and param.default is inspect.Parameter.empty, f"({param})")
+
+
+def canales_de(archivo):
+    """Los nombres pasados como argumento en cada llamada a consultar_dias o
+    consultar_dia del archivo (por nombre o como atributo)."""
+    # El árbol.
+    arbol = ast.parse((RAIZ_REPO / archivo).read_text(encoding="utf-8"))
+    # Una lista de nombres por llamada.
+    llamadas = []
+    # Cada llamada.
+    for n in ast.walk(arbol):
+        # Solo las de esas dos funciones.
+        if isinstance(n, ast.Call) and getattr(n.func, "id", getattr(n.func, "attr", None)) in {"consultar_dias",
+                                                                                                 "consultar_dia"}:
+            # Los nombres de sus argumentos.
+            llamadas.append({a.id for a in n.args if isinstance(a, ast.Name)})
+    # Todas.
+    return llamadas
+
+
+# Cada adaptador, con SU canal en las dos llamadas (N1, N4).
+for archivo, suyo, ajeno in (("app/api/huecos_libres.py", "CANAL_ADMINISTRACION", "CANAL_CHAT"),
+                             ("app/mcp_server/server.py", "CANAL_CHAT", "CANAL_ADMINISTRACION")):
+    # Las llamadas.
+    llamadas = canales_de(archivo)
+    # Dos, cada una con su canal y sin el otro.
+    comprobar(f"{archivo}: las dos llamadas pasan {suyo}",
+              len(llamadas) == 2 and all(suyo in c and ajeno not in c for c in llamadas), f"({llamadas})")
+
+# /visits (P4, N14): la antelación, DESPUÉS de la repetición y ANTES del hueco.
+arbol_v = ast.parse((RAIZ_REPO / "app/services/visits_service.py").read_text(encoding="utf-8"))
+# La función del endpoint.
+f_v = next(n for n in ast.walk(arbol_v) if isinstance(n, ast.FunctionDef) and n.name == "solicitar_visita")
+# La primera respuesta (la de la repetición, dentro del paso 5).
+rep = min(n.lineno for n in ast.walk(f_v) if isinstance(n, ast.Return))
+# Dónde se mira la antelación.
+ante = lineas_de_llamadas(f_v, "validar_antelacion")
+# Dónde se mira el hueco.
+hueco_v = lineas_de_llamadas(f_v, "comprobar_hueco_libre")
+# Una sola, entre las dos.
+comprobar("visits_service: una validar_antelacion, después de la repetición y antes del hueco",
+          len(ante) == 1 and len(hueco_v) == 1 and rep < ante[0] < hueco_v[0], f"(rep {rep}, ante {ante}, hueco {hueco_v})")
+# Con el canal del chat (primer_dia_del_canal(..., CANAL_CHAT)).
+con_chat = [n for n in ast.walk(f_v) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "primer_dia_del_canal"
+            and any(isinstance(a, ast.Name) and a.id == "CANAL_CHAT" for a in n.args)]
+# Exactamente una.
+comprobar("visits_service: la antelación es la del chat (CANAL_CHAT)", len(con_chat) == 1, f"({len(con_chat)})")
+# Su validar_fecha, con primer_dia None (la antelación va aparte).
+vf = [n for n in ast.walk(f_v) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "validar_fecha"]
+# Una, con cuatro argumentos y el último None.
+comprobar("visits_service: validar_fecha(..., None)",
+          len(vf) == 1 and len(vf[0].args) == 4 and isinstance(vf[0].args[3], ast.Constant) and vf[0].args[3].value is None)
+# resultados: validar_fecha con primer_dia_de_resultado (N3).
+arbol_r = ast.parse((RAIZ_REPO / "app/services/resultados_llamada_service.py").read_text(encoding="utf-8"))
+# Sus validar_fecha.
+vf_r = [n for n in ast.walk(arbol_r) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "validar_fecha"]
+# Una, cuyo cuarto argumento es la llamada a primer_dia_de_resultado.
+comprobar("resultados_llamada_service: validar_fecha(..., primer_dia_de_resultado(...))",
+          len(vf_r) == 1 and len(vf_r[0].args) == 4 and isinstance(vf_r[0].args[3], ast.Call)
+          and getattr(vf_r[0].args[3].func, "id", "") == "primer_dia_de_resultado")
+# El 409 no aplica antelación (N8): disponibilidad dentro de
+# comprobar_hueco_libre, sin primer_dia y con 5 argumentos como mucho.
+d_409 = [n for n in ast.walk(funcion_409) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "disponibilidad"]
+# Una, sin la palabra primer_dia y sin un sexto argumento.
+comprobar("comprobar_hueco_libre: disponibilidad sin primer_dia (el 409 solo mira choques)",
+          len(d_409) == 1 and len(d_409[0].args) <= 5 and not any(k.arg == "primer_dia" for k in d_409[0].keywords))
 
 # Resumen y código de salida (1 si hubo fallos).
 total = ok + len(fallos)

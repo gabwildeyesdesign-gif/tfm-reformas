@@ -36,6 +36,17 @@ respuesta lleva fecha_fin_visita = fecha_propuesta + la duración leída aquí
 de reglas_negocio, con el mismo texto y desfase. Se comprueba en los CASOS 8
 (201), 9 (200), 10 (sustitución) y 13 (200 de una confirmada), y el CASO 20
 la mira en TODAS las respuestas de éxito.
+
+(Nota 2026-10-23, D45, plan docs/Plan_Antelacion_Visitas_D45.txt.) CASO 21:
+POST /visits es del chat, que solo acepta visitas desde el 2.º día laborable
+después de hoy. V11: el próximo laborable da 422 antelacion_insuficiente con
+el mensaje neutro y no escribe nada. N14 (P4): una 'solicitada' para el
+próximo laborable puesta por SQL (como una pedida antes de D45, o un
+reenvío de n8n al día siguiente) se REPITE con 200 y creado=false, y
+sustituirla por otra hora de ese día da 422. Esa fila es de una oportunidad
+PROPIA (lead @example.com), la borra limpiar() con todo lo propio, y solo se
+lee por el id de esa oportunidad (precisión 3 del tutor). "Hoy" es el del
+reloj de Postgres; el oráculo de los laborables es propio de la prueba.
 """
 
 import sys
@@ -845,6 +856,70 @@ try:
         comprobar(f"ronda {ronda + 1}: un 201 y nueve 409 hueco_ocupado, ningún 500, una visita activa",
                   codigos == [201] + [409] * 9 and motivos_409 == {"hueco_ocupado"} and activas == 1,
                   f"({codigos}, {motivos_409}, {activas})")
+
+    # ------------------------------------------------------------------
+    print("\nCASO 21 - D45: antelación mínima del chat (V11 y N14)")
+
+    def primer_laborable_oraculo(hoy, n):
+        """El n-ésimo día de lunes a viernes después de hoy (oráculo propio)."""
+        # El día y los que faltan.
+        dia, faltan = hoy, n
+        # Hasta que no falte ninguno.
+        while faltan:
+            # Un día más.
+            dia += timedelta(days=1)
+            # Solo cuentan los laborables.
+            faltan -= dia.weekday() < 5
+        # El día.
+        return dia
+
+    # Hoy, según el reloj de Postgres (el del servidor), en Madrid.
+    HOY_PG = consultar("SELECT now();")[0].astimezone(MADRID).date()
+    # La regla del chat, leída aquí aparte.
+    ANT_CHAT = int(consultar("SELECT valor FROM reglas_negocio WHERE clave = 'dias_antelacion_visita_chat';")[0])
+    # El primer día del chat y el próximo laborable.
+    PRIMER_CHAT, PROXIMO = primer_laborable_oraculo(HOY_PG, ANT_CHAT), primer_laborable_oraculo(HOY_PG, 1)
+    # Los nombres de los días, propios de la prueba.
+    NOMBRES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+    # El mensaje esperado, escrito aquí (precisión 1).
+    MENSAJE_D45 = f"La primera fecha posible para la visita es el {NOMBRES[PRIMER_CHAT.weekday()]} {PRIMER_CHAT:%d/%m}."
+    # Se enseñan.
+    print(f"      [INFO] hoy {HOY_PG}; próximo laborable {PROXIMO}; primer día del chat {PRIMER_CHAT}")
+    # V11: un lead sin visita pide el próximo laborable a las 08:30.
+    token_d45a, op_d45a = lead_http()
+    # Su presupuesto.
+    calcular(op_d45a)
+    # La petición.
+    r = visita(token_d45a, PROXIMO, "08:30")
+    # 422 antelacion_insuficiente con el mensaje exacto.
+    comprobar(f"V11: {PROXIMO} 08:30 -> 422 antelacion_insuficiente con el mensaje neutro",
+              r.status_code == 422 and motivo(r) == "antelacion_insuficiente"
+              and cuerpo(r).get("detail", {}).get("mensaje") == MENSAJE_D45, f"({r.status_code} {r.text[:160]})")
+    # Nada escrito.
+    comprobar("V11: ninguna visita escrita", visitas_de(op_d45a) == [], f"({visitas_de(op_d45a)})")
+    # N14: otro lead, con una 'solicitada' para el próximo laborable puesta por SQL.
+    token_d45b, op_d45b = lead_http()
+    # Su presupuesto.
+    calcular(op_d45b)
+    # SQL: la oportunidad PROPIA pasa a 'visita_agendada', como tras pedir visita.
+    ejecutar("UPDATE oportunidades SET estado = 'visita_agendada' WHERE id = %s;", (op_d45b,))
+    # SQL: su visita 'solicitada' (fila propia; la borra limpiar()).
+    ejecutar("INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
+             "VALUES (%s, %s, 'solicitada', 'visita pedida antes de D45 (prueba N14)');",
+             (op_d45b, esperado_madrid(PROXIMO, "08:30")))
+    # El reenvío exacto.
+    r = visita(token_d45b, PROXIMO, "08:30")
+    # 200 y creado=false (la repetición va antes que la antelación, P4).
+    comprobar(f"N14: el reenvío de {PROXIMO} 08:30 -> 200 creado=false (no 422)",
+              r.status_code == 200 and cuerpo(r).get("creado") is False, f"({r.status_code} {r.text[:160]})")
+    # Una sustitución a otra hora de ese día: sí pasa la antelación.
+    r = visita(token_d45b, PROXIMO, "09:45")
+    # 422 antelacion_insuficiente.
+    comprobar(f"N14: sustituir por {PROXIMO} 09:45 -> 422 antelacion_insuficiente",
+              r.status_code == 422 and motivo(r) == "antelacion_insuficiente", f"({r.status_code} {r.text[:160]})")
+    # La visita sigue siendo la misma, 'solicitada'.
+    comprobar("N14: la visita sigue siendo una sola, 'solicitada'",
+              [e for _, e in visitas_de(op_d45b)] == ["solicitada"], f"({visitas_de(op_d45b)})")
 
     # ------------------------------------------------------------------
     # D33: el fin en TODAS las respuestas de éxito de la ejecución.

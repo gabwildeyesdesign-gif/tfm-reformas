@@ -43,7 +43,8 @@ router = APIRouter(tags=["resultados-llamada"])
 # Adenda 5.5, la misma que tenía el alias POST /gate-decisions, quitado):
 #   404 no existe la oportunidad; 409 la oportunidad no admite ese
 #   resultado; 422 la fecha incumple una regla de negocio (distinto del 422
-#   de Pydantic); 503 falta configuración de visitas.
+#   de Pydantic; desde D45 también antelacion_insuficiente, la misma familia
+#   FechaNoValida); 503 falta configuración de visitas.
 #   409 también, desde D31: el hueco lo ocupa otra visita (hueco_ocupado),
 #   (P16).
 CODIGO_HTTP = {

@@ -31,6 +31,15 @@ nunca el 8000), crea sus propios clientes por POST /leads y
           U12 5 distintas (motivo de los 409), U13 contacto reciente, U14 el
           409 visita_activa_existente sin escribir
   CASO 14 ningún 500, 201 <-> creado, claves exactas, 0 importes
+  (D45, 2026-10-23, plan docs/Plan_Antelacion_Visitas_D45.txt: CASO 7b,
+  visita_acordada para HOY -> 422 antelacion_insuficiente si aún queda
+  alguna hora de la rejilla hoy, o fecha_pasada si no (precisión 2; cuál
+  toca sale como [INFO]), sin escribir nada (V12). En el CASO 12, la visita
+  pedida para el próximo laborable (me) ya no se puede pedir por POST
+  /visits (el chat empieza en el 2.º laborable): se pone por SQL y se
+  confirma con confirmar_hora -> 201 (V13: confirmar_hora no mira la
+  antelación). visita_acordada y otra_hora al próximo laborable siguen
+  dando 201 (la regla de administración lo permite).)
   (D33, 2026-10-14, plan docs/Plan_Fecha_Fin_Visita_D33.txt: fecha_fin_visita
   en cada 201 de verificar_201 y en las repeticiones del CASO 9 (hasta el
   2026-10-22, también en el alias del CASO 10): fecha_visita + la duración leída aquí de reglas_negocio, con el
@@ -44,7 +53,9 @@ casos, cambia a mano el estado o el contacto de una oportunidad PROPIA;
 siguiente ejecución borra lo propio al empezar, y "no toca nada ajeno"
 (id_base) lo comprueba; los logs de un 500 se borran por id exacto tras
 comprobarlos; (4) puerto 8028, ningún dato real (nunca los 8 de D25.16 ni
-1522).
+1522). D45: además inserta por SQL UNA visita 'solicitada' de una
+oportunidad PROPIA (y le cambia el estado a 'visita_agendada'), con la misma
+guarda SQL_OPS; la borra limpiar() con todo lo propio (precisión 3).
 """
 
 # json: buscar importes en el texto. socket, threading, time, uuid: puerto,
@@ -256,6 +267,27 @@ def visita_pedida(token, dia, hora):
     # La visita pedida desde el chat, con su texto.
     return pedir("POST", "/visits", {"lead_token": token, "fecha": str(dia), "hora": hora,
                                      "texto_cliente": TEXTO_CLIENTE}, AUTH_WEBHOOK)
+
+
+def confirmacion_por_sql(dia, hora):
+    """D45: como confirmacion(), pero con la visita 'solicitada' puesta por SQL
+    (para el próximo laborable, que POST /visits ya no acepta: el chat empieza
+    en el 2.º). Solo sobre una oportunidad PROPIA. Devuelve (token, op)."""
+    # El lead propio, con su presupuesto.
+    token, op = lead()
+    # Su estado, como tras pedir visita.
+    forzar(op, "estado = 'visita_agendada'")
+    # SQL: la visita 'solicitada', solo si la oportunidad es propia (la guarda
+    # SQL_OPS: si no lo fuera, no se inserta nada). ::timestamptz: el texto
+    # ISO como instante (en un INSERT ... SELECT Postgres no lo convierte solo).
+    cur.execute(f"INSERT INTO visitas (oportunidad_id, fecha_propuesta, estado, texto_cliente) "
+                f"SELECT %(op)s, %(f)s::timestamptz, 'solicitada', %(t)s WHERE %(op)s IN ({SQL_OPS});",
+                {"op": op, "f": madrid(dia, int(hora[:2]), int(hora[3:])), "t": TEXTO_CLIENTE, "p": PATRON})
+    # Exactamente una fila (si no, el caso no existe: se para).
+    assert cur.rowcount == 1, cur.rowcount
+    # Se confirma, para que el servidor la vea.
+    cn.commit()
+    return token, op
 
 
 def seguimiento_abierto():
@@ -618,6 +650,31 @@ try:
               r.status_code == 422 and motivo(r) == "fecha_pasada", f"({r.status_code} {r.text[:120]})")
 
     # ------------------------------------------------------------------
+    print("\nCASO 7b - D45: visita_acordada para hoy (V12)")
+    # El "ahora" del servidor (reloj de Postgres) y hoy en Madrid.
+    ahora_pg = consultar("SELECT now();")[0][0]
+    # Hoy.
+    hoy_pg = ahora_pg.astimezone(MADRID).date()
+    # Las horas de la rejilla de D23.5 que aún no han pasado hoy.
+    quedan = [h for h in ("08:30", "09:45", "11:00", "12:15", "17:00", "18:15")
+              if datetime.fromisoformat(madrid(hoy_pg, int(h[:2]), int(h[3:]))) > ahora_pg]
+    # Con alguna: la ÚLTIMA (el mayor margen) y antelación; sin ninguna: la
+    # última del día, ya pasada, y fecha_pasada (va antes).
+    hora_hoy, esperado_hoy = (quedan[-1], "antelacion_insuficiente") if quedan else ("18:15", "fecha_pasada")
+    # Cuál toca en esta pasada.
+    print(f"      [INFO] hoy {hoy_pg} a las {ahora_pg.astimezone(MADRID):%H:%M}: se pide {hora_hoy} y se espera {esperado_hoy}")
+    # Un Gate propio.
+    _, g_hoy = lead(estructural=True)
+    # Lo que tiene antes.
+    antes_hoy = foto_op(g_hoy)
+    # El registro.
+    r = registrar(g_hoy, {"resultado": "visita_acordada", "fecha": str(hoy_pg), "hora": hora_hoy})
+    # 422 con su motivo, sin escribir nada.
+    comprobar(f"V12: visita_acordada hoy {hora_hoy} -> 422 {esperado_hoy}, sin escribir nada",
+              r.status_code == 422 and motivo(r) == esperado_hoy and foto_op(g_hoy) == antes_hoy,
+              f"({r.status_code} {r.text[:160]})")
+
+    # ------------------------------------------------------------------
     print("\nCASO 8 - resultado_no_admitido en los dos sentidos")
     # Un resultado del Gate en una confirmación...
     _, k5 = confirmacion(D_K5, "09:45")
@@ -788,7 +845,9 @@ try:
     # H-C-2: con las horas elegidas (mismos papeles que las fijas de antes).
     _, md = confirmacion(OTRO_DIA, O1)
     _, md2 = confirmacion(OTRO_DIA, O2)
-    _, me = confirmacion(DIA, H1)
+    # D45: la pedida para el próximo laborable, por SQL (POST /visits ya no
+    # la acepta); su confirmar_hora del REGISTRO de abajo es la V13 (201).
+    _, me = confirmacion_por_sql(DIA, H1)
     # e) confirmada: un Gate con visita acordada el próximo laborable.
     _, me_conf = lead(estructural=True)
     r = registrar(me_conf, {"resultado": "visita_acordada", "fecha": str(DIA), "hora": H2})

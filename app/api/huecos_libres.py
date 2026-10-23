@@ -35,8 +35,10 @@ from app.schemas.huecos_libres import ConsultaHuecos, HuecosDiaResponse, HuecosD
 # Las dos funciones del servicio.
 from app.services.huecos_libres_service import consultar_dia, consultar_dias
 
-# El único rechazo posible: falta o no es válida una regla (-> 503).
-from app.services.reglas_visita import ConfiguracionIncompleta
+# El único rechazo posible: falta o no es válida una regla (-> 503). Y D45:
+# el canal de esta ruta, la de administración (lo fija ESTE adaptador, no la
+# petición: solo entra quien tiene X-Gate-Secret).
+from app.services.reglas_visita import CANAL_ADMINISTRACION, ConfiguracionIncompleta
 
 # El router de este archivo, con la llave de administración para TODAS sus
 # rutas: se ejecuta antes de validar la query, así que sin la cabecera
@@ -56,19 +58,20 @@ def get_huecos_libres(
     consulta: Annotated[ConsultaHuecos, Query()],
 ) -> HuecosDiasResponse | HuecosDiaResponse:
     """
-    Sin fecha: los próximos días laborables (desde hoy) con al menos una
-    hora libre, cada uno con sus horas por franja y la etiqueta del
-    desplegable. Con fecha: las horas libres de ese día, por franja, y el
-    motivo si no tiene ninguna. Nunca datos de otras visitas. No escribe nada.
+    Sin fecha: los próximos días laborables (desde el siguiente laborable a
+    hoy, D45) con al menos una hora libre, cada uno con sus horas por franja
+    y la etiqueta del desplegable. Con fecha: las horas libres de ese día,
+    por franja, y el motivo si no tiene ninguna. Nunca datos de otras
+    visitas. No escribe nada.
     """
-    # Todo el trabajo lo hace services/.
+    # Todo el trabajo lo hace services/, con el canal de administración.
     try:
         # Sin fecha: modo días.
         if consulta.fecha is None:
             # Los días con hueco.
-            return consultar_dias()
+            return consultar_dias(CANAL_ADMINISTRACION)
         # Con fecha: modo un día.
-        return consultar_dia(consulta.fecha)
+        return consultar_dia(consulta.fecha, CANAL_ADMINISTRACION)
     # Falta o no es válida una regla de reglas_negocio.
     except ConfiguracionIncompleta as error:
         # La traza para administración: una línea en stderr (consola del

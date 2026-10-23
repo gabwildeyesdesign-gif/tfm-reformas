@@ -1,0 +1,553 @@
+PLAN D45 — ANTELACIÓN MÍNIMA DE LAS VISITAS (PASO 0: solo lectura y plan)
+=========================================================================
+
+Fecha: 2026-10-23. Base: main = c0db982, árbol limpio (comprobado con
+git log --oneline -3 y git status). Sin rama, sin commit, sin uvicorn y sin
+ninguna escritura en la base de datos. Lecturas de solo lectura hechas para
+medir: columnas y restricciones de reglas_negocio, sus filas de visita y
+plazos (21 filas en total) y now() de Postgres (2026-10-23 19:08 UTC).
+
+Hallazgo de partida: H-129-1 (prueba 129 del 23/10). Decisión: D45 (tutor y
+Gabi, 23/10; valores confirmados por Gabi a las 20:59):
+  - Chat (tool MCP consultar_huecos_libres y POST /visits): la primera
+    fecha posible es el 2.º día laborable después de hoy.
+  - Administración (GET /huecos-libres, los dos modos, y POST
+    /resultados-llamada con visita_acordada y otra_hora): el 1.er día
+    laborable después de hoy (nunca el mismo día).
+  - confirmar_hora: solo tiene que ser futura, como hoy.
+  - Laborable = de lunes a viernes; los festivos siguen sin detectarse.
+
+-------------------------------------------------------------------------
+0. CONTRADICCIONES ENCONTRADAS (dichas antes de seguir)
+-------------------------------------------------------------------------
+C1. "La misma función que ya usa el sistema" para el día laborable: NO hay
+    una sola. Hay cuatro comprobaciones sueltas "weekday() < 5" o ">= 5"
+    (reglas_visita.py:289 y 554; huecos_libres_service.py:125 y 182) y una
+    función siguiente_laborable() en listado_llamadas_service.py:174 (la
+    del apartado e) de la lista diaria). Todas usan el mismo criterio
+    (lunes = 0 ... viernes = 4), así que el criterio sí es único; la
+    función no. Ver P2.
+C2. "Patrón de paso14: freno, ensayo, vuelta atrás, idempotente": paso14
+    (scripts/migraciones_ejecutadas/paso14_desplazamiento_y_dias_oferta.py)
+    tiene freno (--confirmo-paso14, código 2 sin él), idempotencia (INSERT
+    ... ON CONFLICT (clave) DO NOTHING) y vuelta atrás en un archivo aparte
+    (paso14_vuelta_atras.py), pero NO tiene modo de ensayo. Propuesta en la
+    sección 4.
+C3. "Su CHECK de rango si las demás reglas lo tienen": reglas_negocio NO
+    tiene ningún CHECK (medido: solo reglas_negocio_pkey y
+    reglas_negocio_clave_key). Los rangos de las reglas de visita se
+    validan en Python, en leer_reglas_visita (por ejemplo
+    dias_oferta_visita entre 1 y 60), y un valor malo da 503. D45 sigue ese
+    patrón: sin CHECK.
+C4. "Formulario viejo" que usa GET /huecos-libres: el único formulario del
+    repositorio que lo llama es n8n/WF_formulario_llamadas.json.
+    WF_formulario_gate.json no lo llama (medido: ninguna referencia) y
+    está despublicado. La pantalla de llamadas (WF_pantalla_llamadas) no
+    está en el repositorio: no se puede comprobar qué modos usa.
+
+-------------------------------------------------------------------------
+1. DÓNDE SE DECIDE HOY QUÉ HORA SE PUEDE OFRECER Y ACEPTAR
+-------------------------------------------------------------------------
+Todo sale de app/services/reglas_visita.py:
+  - validar_fecha(inicio, ahora, reglas), línea 265: ACEPTAR. Orden:
+    fecha_pasada (inicio <= ahora) -> fin_de_semana -> fuera_de_franja ->
+    fuera_de_rejilla. 422 FechaNoValida.
+  - disponibilidad(cursor, dias, ahora, reglas, excluir), línea 498:
+    OFRECER y el 409. Una hora está libre si es de la rejilla, el día es
+    laborable, "candidato > ahora" (línea 562) y no choca.
+  - comprobar_hueco_libre(), línea 587: el 409 hueco_ocupado, que llama a
+    disponibilidad() con el día pedido.
+  - leer_reglas_visita(), línea 335: las 7 claves de CLAVES_REGLAS.
+
+Quién llama a qué:
+  - Tool MCP consultar_huecos_libres (app/mcp_server/server.py:334, solo
+    el Agente 2, Bearer MCP_SECRET): huecos_libres_service.consultar_dias()
+    o consultar_dia(fecha).
+  - GET /huecos-libres (app/api/huecos_libres.py, X-Gate-Secret en el
+    router): las MISMAS dos funciones. Sin fecha, modo días; con ?fecha=,
+    modo un día.
+  - consultar_dias() (huecos_libres_service.py:108): laborables desde HOY
+    (incluido), hasta 60; devuelve los 10 primeros con alguna hora.
+  - consultar_dia(fecha) (línea 152): horas de ese día y
+    sin_horas_motivo = fecha_pasada | fin_de_semana | dia_completo.
+  - POST /visits (visits_service.solicitar_visita, X-Webhook-Secret, lo
+    llama WF6 por la tool solicitar_visita del Agente 2): validar_fecha en
+    la línea 210 (ANTES de mirar la repetición) y comprobar_hueco_libre en
+    la 261.
+  - POST /resultados-llamada (resultados_llamada_service, X-Gate-Secret):
+    para visita_acordada, confirmar_hora y otra_hora, validar_fecha en la
+    línea 327 y comprobar_hueco_libre en la 347. La repetición exacta se
+    resuelve antes (_repeticion_o_rechazo) y no valida la fecha.
+
+Qué modo usa cada cliente de n8n:
+  - Formulario de llamadas (WF_formulario_llamadas.json): nodo leer_dias
+    -> GET /huecos-libres (modo días, página "Día"); nodo leer_horas ->
+    GET /huecos-libres?fecha= (modo un día, página "Hora", y también el
+    calendario "Otro día más adelante", contrato línea 261).
+  - Pantalla de llamadas: no está en el repositorio (C4). Gabi lo
+    comprueba en n8n.
+  - Agente 2 (chat_tipo_reforma.json): la tool consultar_huecos_libres en
+    los dos modos (sin fecha para los próximos días; con fecha si el
+    cliente nombra un día).
+
+-------------------------------------------------------------------------
+2. REGLA DE TRES DEL DISEÑO
+-------------------------------------------------------------------------
+(a) Dos reglas en reglas_negocio: dias_antelacion_visita_chat = 2 y
+    dias_antelacion_visita_admin = 1. Valor = el n.º del día laborable
+    después de hoy que es la primera fecha posible (0 = hoy mismo, solo
+    con la condición de futura).
+    + Cada canal se ajusta sin tocar código; nombres que se explican solos.
+    + Mismo patrón que las demás reglas de visita (leídas y validadas
+      juntas; 503 si faltan).
+    - Dos filas más que mantener; nadie impide que chat < admin (no es
+      dañino: ver P6).
+(b) Una sola regla (la de administración) y "chat = admin + 1" en el
+    código.
+    + Una fila menos.
+    - Es un número escrito en el código: va contra D45 ("sin números
+      escritos en el código"). Cambiar solo el chat obligaría a tocar
+      código. DESCARTADA.
+(c) Antelación en HORAS (48 y 24) en vez de días laborables, o una tabla
+    propia por canal (como umbrales_gate).
+    + Horas: cuenta más sencilla.
+    - Horas no cumple D45: viernes 18:16 + 48 h = domingo, y el primer
+      laborable sería el lunes, no el martes. La tabla propia es una
+      migración de tabla nueva (con RLS) para dos números. DESCARTADA.
+ELEGIDA: (a).
+
+Cómo sabe cada función qué canal la llama, sin que el canal lo falsee:
+  - El canal NO es un dato de la petición (ni de la query, ni del cuerpo,
+    ni un parámetro de la tool). Lo fija el ADAPTADOR, en el código:
+    app/api/huecos_libres.py pasa "administracion"; la tool MCP pasa
+    "chat"; visits_service usa siempre la regla del chat (POST /visits es
+    solo del chat); resultados_llamada_service usa la de administración
+    en visita_acordada y otra_hora, y ninguna en confirmar_hora.
+  - La llave decide la ruta: el Agente 2 tiene WEBHOOK_SECRET y
+    MCP_SECRET, NUNCA GATE_SECRET (security.py detiene el arranque si se
+    repiten). Así que el chat no puede llegar a GET /huecos-libres ni a
+    POST /resultados-llamada, que son las únicas que aplican la regla de
+    administración.
+  - Parámetro canal OBLIGATORIO (sin valor por defecto) en consultar_dias
+    y consultar_dia: si un adaptador se olvida de pasarlo, TypeError al
+    probar, no un canal elegido en silencio (N13).
+
+Forma propuesta del código (reglas_visita.py):
+  - Dos claves nuevas en CLAVES_REGLAS (pasa de 7 a 9), validadas como
+    enteros entre 0 y MAX_DIAS_ANTELACION (propuesta: 10; ver P5).
+  - Función pura primer_dia_permitido(hoy, n): el n-ésimo laborable
+    después de hoy (n = 0: hoy). Mismo criterio weekday() < 5.
+  - validar_fecha(inicio, ahora, reglas, primer_dia): primer_dia
+    OBLIGATORIO, None solo para confirmar_hora. Nueva regla, justo
+    después de fecha_pasada: si el día de inicio (en Madrid) es anterior
+    a primer_dia -> 422 antelacion_insuficiente.
+  - disponibilidad(..., primer_dia=None): los días anteriores a primer_dia
+    salen vacíos. comprobar_hueco_libre NO lo pasa: el 409 solo mira
+    choques (la antelación ya la miró validar_fecha), y así confirmar_hora
+    no cambia.
+  - Función pura motivo_sin_horas(...) para el modo un día (se puede
+    probar con fechas fijas, N10).
+
+-------------------------------------------------------------------------
+3. QUÉ RESPONDE CADA UNO CON UNA FECHA DEMASIADO PRÓXIMA
+-------------------------------------------------------------------------
+Motivo NUEVO "antelacion_insuficiente" (recomendado), no fecha_pasada:
+el mensaje de fecha_pasada ("ya ha pasado") sería falso para mañana, y el
+formulario enseña "Esa fecha ya ha pasado.".
+  - POST /visits: 422 {motivo: antelacion_insuficiente, mensaje: "Las
+    visitas se piden como pronto para el <día> <dd/mm>."}.
+  - POST /resultados-llamada (visita_acordada, otra_hora): el mismo 422.
+    confirmar_hora: sin cambio (solo fecha_pasada).
+  - GET /huecos-libres y la tool, modo un día: 200 con horas [] y
+    sin_horas_motivo = "antelacion_insuficiente". Orden del motivo:
+    fecha_pasada -> antelacion_insuficiente -> fin_de_semana ->
+    dia_completo (el mismo que validar_fecha).
+  - Modo días: simplemente empieza en el primer día permitido.
+  - MotivoSinHoras (app/schemas/huecos_libres.py:34) gana un valor.
+
+Cómo lo trataría n8n hoy (medido en los JSON):
+  - WF6_solicitar_visita, nodo evaluar: cualquier 4xx con detail.motivo
+    (salvo 503) pasa al agente como {resultado: error, motivo, mensaje} y
+    aviso = false. NO avisa a WF4. Sin cambios.
+  - Agente 2 (chat_tipo_reforma.json, system message; y
+    prompts/agente2_asesor.md:49): solo conoce fuera_de_rejilla,
+    fuera_de_franja, fin_de_semana y fecha_pasada ("call
+    consultar_huecos_libres again"). Con el motivo nuevo caería en "any
+    other motivo: explain the mensaje... the team will contact them":
+    no es grave, pero no vuelve a ofrecer horas. Hay que añadirlo.
+  - WF_formulario_llamadas, nodo traducir_resultado: un 422 con motivo
+    fuera de [fecha_pasada, fin_de_semana, fuera_de_franja,
+    fuera_de_rejilla, misma_hora_pedida] cae en "Error en los datos
+    enviados" con aviso técnico = true -> WF4 avisaría de un error
+    técnico que NO lo es. Hay que añadirlo.
+  - WF_formulario_llamadas, nodo preparar_pagina_hora: MOTIVOS_SIN_HORAS
+    no lo tiene; enseñaría el texto genérico "Ese día no hay ninguna hora
+    libre." (sin aviso técnico). Conviene añadir un texto propio.
+
+Textos de n8n que habría que cambiar (solo la lista):
+  1. chat_tipo_reforma.json, Agente2_asesor: añadir
+     antelacion_insuficiente a la lista de motivos que vuelven a llamar a
+     consultar_huecos_libres. Mismo cambio en prompts/agente2_asesor.md.
+  2. WF_formulario_llamadas.json, traducir_resultado: añadirlo a la lista
+     de 422 "Fecha u hora no válidas" (sin aviso técnico).
+  3. WF_formulario_llamadas.json, preparar_pagina_hora: texto en
+     MOTIVOS_SIN_HORAS, por ejemplo "Las visitas se acuerdan como pronto
+     para el siguiente día laborable."
+  4. WF_pantalla_llamadas (fuera del repositorio): lo mismo que 2 y 3 si
+     trata esos motivos (Gabi lo comprueba).
+  5. Documentación: docs/Contrato_Formulario_Llamadas.md (tabla de la
+     línea 168 y línea 261) y la Adenda (filas 4, 10 y 11, y 5.11).
+
+-------------------------------------------------------------------------
+4. MIGRACIÓN paso17
+-------------------------------------------------------------------------
+scripts/paso17_antelacion_visitas.py, copiado del patrón de paso14:
+  - Freno: sin --confirmo-paso17 no hace nada (código 2). Solo tras la
+    frase "confirmo la migración paso17".
+  - Dos INSERT ... ON CONFLICT (clave) DO NOTHING (idempotente):
+      dias_antelacion_visita_chat  = 2  "D45: n.º de laborable después
+                                         de hoy desde el que el chat
+                                         puede pedir visita"
+      dias_antelacion_visita_admin = 1  "D45: lo mismo para
+                                         administración"
+  - Ensayo (C2, NUEVO respecto a paso14): con --ensayo ejecuta los INSERT
+    y termina con ROLLBACK, enseñando el antes y el después. Ver P7.
+  - Foto antes y después; commit único; rollback ante error.
+  - scripts/paso17_vuelta_atras.py: DELETE de las dos claves, con su
+    propio freno. OJO: tras el merge, borrarlas da 503 en todas las rutas
+    de visita (son obligatorias); la vuelta atrás solo vale ANTES del
+    merge o junto con revertir el código.
+  - Orden (expand): se aplica ANTES del merge. main no lee esas claves,
+    así que sigue funcionando (se demuestra con su regresión).
+  - Sin CHECK (C3): el rango lo valida leer_reglas_visita.
+  - check_migracion_d45.py: las dos filas existen, son enteras, en rango
+    y con sus valores (2 y 1). Antes de aplicar: falla a propósito.
+  - Después: regenerar docs/schema_actual.sql no hace falta (no cambia
+    el esquema, solo filas); se dice así en el commit.
+
+-------------------------------------------------------------------------
+5. IMPACTO EN LOS SCRIPTS (MEDIDO)
+-------------------------------------------------------------------------
+Medición: grep de visitas, /visits, /resultados-llamada, /huecos-libres,
+consultar_dia(s), disponibilidad, validar_fecha y fechas cercanas en los
+check_*.py, y lectura de cada tramo. Los bloques de fechas_prueba.py
+empiezan en la semana +30: lo que va ahí no se ve afectado.
+
+CAMBIAN (6):
+  1. check_resultados_llamada_http: el CASO de la lista diaria crea con
+     confirmacion(DIA, H1) una visita PEDIDA POR POST /visits para el
+     próximo laborable (DIA = lista["dia_visitas"], línea 699). Con la
+     regla del chat (2) eso da 422. Cambio: insertar esa 'solicitada' por
+     SQL (como hace check_listado_llamadas_http, línea 414), y seguir
+     confirmándola por la API. Bonus: prueba que confirmar_hora no aplica
+     la antelación. horas_libres(DIA) usa GET /huecos-libres
+     (administración, 1): el próximo laborable sigue permitido.
+  2. check_mcp_huecos_libres, CASO 3: exige "los mismos días y horas que
+     GET /huecos-libres". Con D45 la tool empieza un laborable más tarde:
+     FALLARÍA. Cambio: los días de la tool = los de REST desde el primer
+     día del chat (comparación de prefijo). CASO 4 (días del bloque): sin
+     cambio.
+  3. check_huecos_libres_http: CASO 3 "fechas desde hoy" pasa a "desde
+     el primer día de administración"; CASO 4 "hoy" pasa a esperar horas
+     [] y antelacion_insuficiente. Más casos nuevos (sección 6).
+  4. check_huecos_libres_service: llama a consultar_dias() y
+     consultar_dia() sin canal (línea 245-246): con el canal obligatorio,
+     TypeError. Cambio: pasarlo.
+  5. check_disponibilidad_service, S6: construye las 7 filas de reglas
+     (SIETE) y exige 0 problemas; con 9 claves daría "no existe". Cambio:
+     9 filas y pruebas de rango de las nuevas.
+  6. check_visits_http y check_resultados_llamada_http: casos nuevos de
+     antelación (solo rechazos 422 que no escriben nada).
+
+NO CAMBIAN, pero dependen de D45 (comprobado):
+  - check_listado_llamadas_http: pide por POST /visits el primer lunes
+    tras cada cambio de hora (LUNES_1, LUNES_2), y si LUNES_1 es el
+    próximo laborable lo pasa a la semana siguiente (línea 551). Así
+    LUNES_1 es siempre > hoy, laborable y distinto del 1.er laborable, es
+    decir, al menos el 2.º: vale con chat = 2. Hoy: CAMBIO_1 = 25/10,
+    LUNES_1 = 26/10 = próximo laborable -> 02/11. OJO: con chat >= 3,
+    fallaría algunos días (riesgo R3). Sus visitas del apartado e) van
+    por SQL.
+  - check_aviso_gate_http: visita_acordada (administración) el tercer
+    lunes tras cada cambio de hora (+14 días): siempre permitido.
+  - check_visits_http: bloque +30 semanas; "ayer" sigue dando
+    fecha_pasada (va antes que la antelación).
+  - check_followup_tasks_http, check_ficha_oportunidad_http,
+    check_direccion_obra_http y _service, check_resultados_llamada_service,
+    check_visits_service: fechas del bloque (+30 semanas) o fechas fijas
+    puras de 2026/2027 que no pasan por la antelación.
+  - check_disponibilidad_service, pruebas puras con "ahora" el mismo día
+    (líneas 287-295): disponibilidad() sin primer_dia se comporta igual.
+  - check_migracion_*: solo leen la estructura o sus filas.
+REGRESIÓN obligatoria (CLAUDE.md, regla de visitas): los 19 scripts que
+crean visitas o leen huecos de la regresión de D42, más
+check_mcp_huecos_libres y check_huecos_libres_service, y la suite
+completa (60 -> 61 con check_migracion_d45).
+
+-------------------------------------------------------------------------
+6. PRUEBAS NUEVAS
+-------------------------------------------------------------------------
+Verdes (puras, con fechas FIJAS; check_disponibilidad_service):
+  V1  primer_dia_permitido: lun->n=1 mar, n=2 mié; vie->n=1 lun, n=2
+      mar; sáb y dom->n=1 lun, n=2 mar; n=0 -> hoy.
+  V2  validar_fecha con primer_dia: el día anterior -> 422
+      antelacion_insuficiente; el mismo primer_dia -> nada; primer_dia
+      None -> solo fecha_pasada (confirmar_hora).
+  V3  Orden: ayer -> fecha_pasada (no antelación); un sábado anterior al
+      primer día -> antelacion_insuficiente.
+  V4  disponibilidad con primer_dia: días anteriores vacíos, los demás
+      igual que sin él.
+  V5  motivo_sin_horas: los cuatro motivos con fechas fijas.
+  V6  leer_reglas_visita: 9 claves; falta cada una -> "no existe";
+      -1, 11 y 1.5 -> problema de rango.
+  V7  La regla del canal sale de las reglas (con 3 en vez de 2 cambia el
+      primer día): ningún número escrito.
+HTTP y MCP (solo lecturas o rechazos que no escriben):
+  V8  GET /huecos-libres modo días: el primer día >= 1.er laborable;
+      ninguno es hoy.
+  V9  GET /huecos-libres?fecha=hoy: [] y antelacion_insuficiente.
+  V10 Tool, modo días: primer día >= 2.º laborable; ?fecha=próximo
+      laborable: [] y antelacion_insuficiente.
+  V11 POST /visits para el próximo laborable (hora de la rejilla): 422
+      antelacion_insuficiente y 0 filas nuevas.
+  V12 POST /resultados-llamada visita_acordada hoy (hora de la rejilla):
+      422 antelacion_insuficiente y 0 filas nuevas.
+  V13 confirmar_hora de una 'solicitada' del próximo laborable (por SQL):
+      201 (el caso de la lista, sección 5, punto 1).
+  V14 La tool no admite ningún parámetro de canal (list_tools: solo
+      "fecha").
+  V15 check_migracion_d45: 2 filas, valores 2 y 1.
+
+Pruebas en negativo (mutantes, sobre copias, de una en una):
+  N1  La tool usa la regla de administración -> V10 rojo
+      (check_mcp_huecos_libres).
+  N2  POST /visits sin antelación -> V11 rojo (check_visits_http).
+  N3  confirmar_hora con la regla del chat -> V13 rojo (y V2).
+  N4  GET /huecos-libres con la regla del chat -> V8 (si el 1.er
+      laborable tiene horas) y check_resultados_llamada_http rojo.
+  N5  Antelación en días NATURALES (hoy + n) -> V1 rojo.
+  N6  El 2 escrito en el código -> V7 rojo.
+  N7  Se reutiliza fecha_pasada -> V2, V9-V12 rojos.
+  N8  disponibilidad aplica siempre la antelación del chat (también en
+      el 409) -> V13 rojo.
+  N9  Modo días empieza en hoy -> V8 y V10 rojos.
+  N10 fin_de_semana antes que antelacion_insuficiente -> V3 y V5 rojos.
+  N11 Sin validar el rango -> V6 rojo.
+  N12 Migración sin aplicar -> check_migracion_d45 rojo y 503 en las
+      rutas de visita (comprobado en la fase 2 con el script, no a mano).
+  N13 canal con valor por defecto "chat" y el adaptador REST sin pasarlo
+      -> V8/V9 rojos.
+  N14 (según P4) La repetición de POST /visits después de cambiar de día
+      da 422 en vez de 200.
+Equivalente conocido: "confirmar_hora con la regla de administración"
+solo se ve en HTTP con una pedida para HOY a una hora futura (depende de
+la hora de la pasada); se cubre en la prueba pura V2 (por eso el reparto
+de reglas por resultado va en una función pura).
+
+Predicción del recuento (PREVISIÓN, no medida):
+  check_disponibilidad_service 54 -> ~72; check_huecos_libres_http 39 ->
+  ~43; check_mcp_huecos_libres 15 -> ~18; check_visits_http 66 -> ~68;
+  check_resultados_llamada_http 69 -> ~72; check_huecos_libres_service
+  26 -> 26; check_migracion_d45 nuevo ~8 (2/8 antes de aplicar).
+
+-------------------------------------------------------------------------
+7. RIESGOS Y PREGUNTAS
+-------------------------------------------------------------------------
+R1. Festivos: un festivo cuenta como laborable (limitación conocida).
+R2. Medianoche: "hoy" es la fecha de Madrid de now() de Postgres. Una
+    página del formulario abierta a las 23:59 y enviada a las 00:01 puede
+    dar 422 antelacion_insuficiente (por eso n8n debe tratarlo como error
+    del operador, no técnico).
+R3. check_listado_llamadas_http solo es estable con chat <= 2 (sección
+    5). Si un día se sube, hay que tocarlo.
+R4. Visitas 'solicitada' anteriores a D45 para fechas ya demasiado
+    próximas: se confirman igual (confirmar_hora no mira la antelación).
+    otra_hora sí la mira.
+R5. (Precisión 2 del tutor, error de este plan.) V9 y V12 dependen de la
+    hora a la que se ejecuten: a partir de la última hora de la rejilla
+    (18:15), o en sábado o domingo después de las 18:15, "hoy" ya no tiene
+    ninguna hora futura, y por el orden fecha_pasada -> antelación, V9 da
+    fecha_pasada y V12 no se puede construir con una hora futura. La fase 2
+    va por la noche. Solución: el script calcula, con las reglas y el
+    now() del servidor, si hoy queda alguna hora de la rejilla, y espera
+    antelacion_insuficiente o fecha_pasada según el caso (las dos ramas
+    deterministas, cuál toca sale como [INFO]). La regla frente a "hoy" se
+    cubre SIEMPRE en las pruebas puras con fechas fijas (S9 de
+    check_disponibilidad_service: "ahora" a las 09:00 y a las 20:00 de un
+    jueves, y en sábado).
+R6. (Precisión 4 del tutor.) El formulario de llamadas del repositorio
+    (WF_formulario_llamadas) NO se toca: es el plan B y se despublica tras
+    la batería (D43.3). Limitación del plan B: trataría un 422
+    antelacion_insuficiente como error técnico (aviso a WF4) y enseñaría el
+    texto genérico con sin_horas_motivo = antelacion_insuficiente. El
+    system message del agente y la pantalla de llamadas los cambia el tutor
+    en n8n; prompts/agente2_asesor.md va en un commit aparte, con el texto
+    exacto que da el tutor.
+
+P1. ¿Motivo nuevo antelacion_insuficiente (recomendado) o reutilizar
+    fecha_pasada? Recomendación: nuevo (sección 3).
+P2. Día laborable: ¿función nueva primer_dia_permitido en reglas_visita
+    (recomendado) o mover siguiente_laborable del listado a
+    reglas_visita y usarla en los dos? Recomendación: la nueva ahora;
+    unificar con el listado en su propia rama (tocaría la lista diaria).
+P3. ¿Exponer la antelación del chat en get_business_rules? Hoy no hace
+    falta (la tool ya solo ofrece días válidos) y cambiaría las claves
+    exactas de check_mcp_business_rules. Recomendación: NO.
+P4. Repetición en POST /visits: hoy validar_fecha va ANTES de la
+    repetición. Si el cliente pide el viernes la visita del martes y el
+    lunes n8n o el agente reenvían lo mismo, daría 422
+    antelacion_insuficiente en vez de 200 "ya estaba registrada", y el
+    agente le ofrecería otras horas. Recomendación: en /visits, mirar la
+    antelación DESPUÉS de la repetición (la repetición no escribe nada).
+    Cambia el orden fijado por la precisión 2 del tutor: lo decide él.
+P5. Rango de las dos reglas: ¿0..10? Recomendación: 0..10 (0 = el
+    comportamiento de antes, útil para volver atrás sin tocar código).
+P6. ¿Exigir chat >= administración (503 si no)? Recomendación: no; no es
+    dañino y sería una regla más que mantener.
+P7. ¿Modo --ensayo en paso17 (paso14 no lo tiene, C2)? Recomendación: sí.
+P8. confirmar_hora solo futura (como pide D45): no veo problema. Solo
+    R4: una pedida antigua para mañana se confirma sin antelación, que es
+    lo deseado (ya se habló con el cliente).
+P9. ¿El 422 lleva además la primera fecha posible en un campo aparte
+    (como horas_validas)? Recomendación: no; va en el mensaje, y el
+    agente y el formulario vuelven a pedir los huecos.
+
+-------------------------------------------------------------------------
+8. TAMAÑO (MEDIDO sobre el código actual; las líneas nuevas, aproximadas)
+-------------------------------------------------------------------------
+Código de app/ (8 archivos):
+  reglas_visita.py (627 líneas) ~+60; huecos_libres_service.py (193)
+  ~+30; visits_service.py (335) ~+8; resultados_llamada_service.py (636)
+  ~+15; api/huecos_libres.py (82) ~+3; mcp_server/server.py (377) ~+6;
+  schemas/huecos_libres.py (135) ~+3; api/visits.py y
+  api/resultados_llamada.py, solo comentarios ~+2 cada uno.
+  Total app: ~+130 líneas.
+Migración (3 archivos nuevos, por paso14: 156, 83 y 151 líneas):
+  paso17 ~160, vuelta atrás ~85, check_migracion_d45 ~150.
+Scripts que cambian (6): ~+170 líneas en total.
+Documentación: este plan, la Adenda (filas 4, 10, 11 y 5.11),
+  Contrato_Formulario_Llamadas.md, prompts/agente2_asesor.md y la nota de
+  CLAUDE.md.
+Fuera del repositorio (n8n): 3 textos de la sección 3, más la pantalla.
+
+-------------------------------------------------------------------------
+9. RECUENTO PREVISTO (precisión 5; escrito en el PASO 1, ANTES de ejecutar
+   nada; el real se pone al lado en la fase 2)
+-------------------------------------------------------------------------
+Base: la última cifra medida de cada script, con su fuente. OJO: es la
+última conocida, no medida hoy; si en la fase 2 la base real (main, antes
+de D45) es otra, se dice y la previsión se corrige solo en esa base.
+  Bases: check_disponibilidad_service 60, check_huecos_libres_http 45,
+  check_huecos_libres_service 32 y check_visits_http 98 (regresión de
+  D28.1, Plan_Resumen_Solicitud_D28.txt, línea 888); check_mcp_huecos_libres
+  17 (plan D32, línea 752); check_resultados_llamada_http 210 (bloque 5,
+  Plan_Direccion_Obra_D42.txt, línea 257).
+
+Verdes (después de aplicar paso17):
+  script                          base   +nuevas  previsto   real
+  check_migracion_d45              -       12     12/12      ...
+    (antes de paso17: 0/12, las seis de cada regla fallan)
+  check_disponibilidad_service    60      +66    126/126     ...
+    (S6 +12: por regla, "no existe" y 5 valores; S9 +54: V1 9, V2 15 +
+    mensaje 1, medianoche 4, V4 3, V5 6, V7 2, canal 1, resultado 3,
+    firmas 3, adaptadores 2, /visits 3, resultados 1, el 409 1)
+  check_huecos_libres_http        45      +2      47/47      ...
+    (CASO 3 y "hoy" se reescriben sin cambiar el número; +1 primer día de
+    administración; +1 CASO 5 antes del primer día del chat)
+  check_huecos_libres_service     32       0      32/32      ...
+  check_mcp_huecos_libres         17      +4      21/21      ...
+    (CASO 3 +1, V10; CASO 4c +3)
+  check_visits_http               98      +5     103/103     ...
+    (V11 2, N14 3)
+  check_resultados_llamada_http  210      +1     211/211     ...
+    (CASO 7b; V13 es la confirmar_hora de "me", que ya se contaba)
+  Suite: 61 scripts (60 + check_migracion_d45), 61/61 con código 0.
+
+Mutantes (sobre copias, de una en una; rojo = algún FALLO):
+  N1  la tool con CANAL_ADMINISTRACION: disponibilidad 125/126 (adaptador);
+      mcp_huecos 18/21 (prefijo, V10, 4c tool) si el 1.er laborable tiene
+      horas libres.
+  N2  /visits sin validar_antelacion: disponibilidad 124/126 (orden, canal
+      chat); visits_http 99/103 (V11 x2, sustitución x2); huecos_http
+      46/47 (CASO 5 antes del chat, si el 1.er laborable tiene horas).
+  N3  confirmar_hora con la regla del chat: disponibilidad 125/126
+      (reparto); resultados_llamada_http 210/211 (V13, "me" da 422).
+  N4  GET /huecos-libres con CANAL_CHAT: disponibilidad 125/126;
+      huecos_http 46/47 (primer día de administración); mcp_huecos 20/21
+      (REST del 1.er laborable); resultados_llamada_http se para con
+      código 1 sin RESULTADO (el próximo laborable no tiene 3 horas libres).
+  N5  días naturales en primer_dia_permitido: disponibilidad ~116/126 (V1
+      x4, V2 x2, medianoche x3, V7 x1).
+  N6  la regla del chat escrita como 2 en el código: disponibilidad
+      125/126 (V7).
+  N7  motivo fecha_pasada en vez de antelacion_insuficiente (también en
+      motivo_sin_horas): disponibilidad ~118/126 (V2 x6, V5 x2);
+      visits_http 101/103; huecos_http, mcp_huecos y resultados_llamada_http
+      rojos en los casos de "hoy" solo si queda alguna hora (R5).
+  N8  comprobar_hueco_libre con la antelación del chat: disponibilidad
+      125/126 (el 409); resultados_llamada_http se para con código 1 (el
+      assert de me_conf: 409 en el próximo laborable).
+  N9  modo días desde hoy: por la noche, REST no lo ve (hoy no tiene
+      horas: equivalente, como R5); mcp_huecos 19/21 (prefijo y V10) si el
+      1.er laborable tiene horas libres.
+  N10 fin_de_semana antes que antelación en motivo_sin_horas:
+      disponibilidad 125/126 (V5, sábado).
+  N11 sin el máximo de 10: disponibilidad 124/126 (S6, el 11 de cada una).
+  N12 paso17 sin aplicar: check_migracion_d45 0/12, y las rutas de visita
+      503 (es la primera prueba de la fase 2).
+  N13 canal con valor por defecto "chat" y GET /huecos-libres sin pasarlo:
+      disponibilidad 123/126 (dos firmas y el adaptador); huecos_http,
+      mcp_huecos y resultados_llamada_http como N4.
+  N14 /visits con la antelación antes de la repetición:
+      disponibilidad 124/126 (orden y validar_fecha(..., None));
+      visits_http 102/103 (el reenvío da 422).
+Los "si el 1.er laborable tiene horas libres" dependen de visitas reales:
+la fase 2 lo dice como [INFO] y, si no se cumple, ese mutante se cuenta
+solo con el script puro.
+
+-------------------------------------------------------------------------
+10. VEREDICTO DEL TUTOR AL PASO 0 Y PASO 1 (2026-10-23)
+-------------------------------------------------------------------------
+Veredicto (21:25): APROBADO con 6 precisiones. C1-C4 aceptadas; diseño (a)
+con el canal fijado por el adaptador mediante un parámetro OBLIGATORIO.
+P1 motivo nuevo; P2 función nueva primer_dia_permitido (unificar con el
+listado, otra rama: anotado en CLAUDE.md); P3 no; P4 SÍ, solo en POST
+/visits (la sustitución sí la pasa); P5 0..10 con 503; P6 no; P7 sí; P8 de
+acuerdo; P9 no.
+Precisiones: (1) mensaje neutro "La primera fecha posible para la visita
+es el <día de la semana> <dd/mm>."; (2) R5; (3) lo que se inserta por SQL
+cumple la regla de borrados; (4) n8n: R6; (5) esta sección 9; (6) "hoy" en
+Madrid desde now() de Postgres, con prueba de medianoche (S9).
+
+PASO 1 (fase 1, SIN ejecutar; rama feat/n0-antelacion-visitas desde
+c0db982). Hecho:
+  - app/: reglas_visita.py (claves, canales, DIAS_SEMANA mudada,
+    primer_dia_permitido, primer_dia_del_canal, mensaje_antelacion,
+    validar_antelacion, validar_fecha con primer_dia obligatorio, rango
+    0..10, disponibilidad con primer_dia opcional que el 409 no pasa);
+    huecos_libres_service.py (canal obligatorio, motivo_sin_horas pura);
+    visits_service.py (antelación del chat tras la repetición);
+    resultados_llamada_service.py (primer_dia_de_resultado pura);
+    api/huecos_libres.py (CANAL_ADMINISTRACION); mcp_server/server.py
+    (CANAL_CHAT); schemas/huecos_libres.py (valor nuevo); comentarios de
+    api/visits.py y api/resultados_llamada.py.
+  - Migración: scripts/migraciones_ejecutadas/paso17_antelacion_visitas.py
+    (freno, --ensayo con ConexionSinCommit, idempotente) y
+    paso17_vuelta_atras.py; scripts/check_migracion_d45.py.
+  - Scripts: check_disponibilidad_service (S5, S6, S9),
+    check_huecos_libres_http, check_huecos_libres_service,
+    check_mcp_huecos_libres, check_visits_http (CASO 21),
+    check_resultados_llamada_http (CASO 7b y "me" por SQL).
+  - Documentación: este plan, la Adenda (filas 4, 10 y 11 y 5.14), el
+    Contrato del formulario y CLAUDE.md.
+
+H-D45-1 (hallazgo del PASO 1, error de medición del PASO 0): la sección 5
+dio por buenos los CASOS 5, 7 y 8 de check_huecos_libres_http, pero los
+tres piden por POST /visits (chat) días que salen del modo días de GET
+/huecos-libres (administración). El primer día de administración daría
+422. Corregido en la misma lista de scripts (no hay ningún script nuevo
+afectado): CASO 5 espera 422 antelacion_insuficiente antes del primer día
+del chat y 201 desde él; los CASOS 7 y 8 eligen su día desde el primer día
+del chat. Además, check_mcp_huecos_libres lee ahora, en una sesión de solo
+lectura, el now() de Postgres y las reglas (antes no se conectaba a la base
+de datos); sigue sin escribir nada.

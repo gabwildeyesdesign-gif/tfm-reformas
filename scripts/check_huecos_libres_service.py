@@ -13,7 +13,9 @@ app/services/huecos_libres_service.py y app/schemas/huecos_libres.py.
   S4  consultar_dias y consultar_dia con una conexión de prueba que CUENTA
       las órdenes: exactamente 4 en cada modo (el modo, now(), las reglas y
       UNA consulta de visitas), la primera es el modo de la transacción, y
-      ningún commit() (N10: una consulta por día daría más).
+      ningún commit() (N10: una consulta por día daría más). D45
+      (2026-10-23): las dos llamadas pasan el canal (parámetro
+      obligatorio); se usa el de administración, el de GET /huecos-libres.
   S5  estructura (ast): el servicio llama a disponibilidad() y no calcula
       horas por su cuenta (ni while, ni range con paso, ni choca/rejilla).
   S6  rendimiento (13): 300 visitas propias insertadas en UNA transacción
@@ -242,8 +244,10 @@ servicio.get_db_connection = conexion_de_prueba
 # try/finally: la real vuelve siempre.
 try:
     # Los dos modos: (nombre, llamada).
-    for nombre, llamada in (("días", servicio.consultar_dias),
-                            ("un día", lambda: servicio.consultar_dia(date.today() + timedelta(days=30)))):
+    # D45: con el canal de administración (sin él, TypeError).
+    for nombre, llamada in (("días", lambda: servicio.consultar_dias(rv.CANAL_ADMINISTRACION)),
+                            ("un día", lambda: servicio.consultar_dia(date.today() + timedelta(days=30),
+                                                                     rv.CANAL_ADMINISTRACION))):
         # Se vacía la lista de órdenes.
         ORDENES.clear()
         # try: un commit() se cuenta como FALLO.

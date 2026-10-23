@@ -23,6 +23,16 @@ Client de n8n, con fastmcp.Client. Solo lectura: no crea ninguna fila.
   CASO 7. Estructura (ast): la tool llama a consultar_dias y consultar_dia
           del servicio y no calcula horas (N11).
 
+(Nota 2026-10-23, D45, plan docs/Plan_Antelacion_Visitas_D45.txt: la tool
+es del CHAT (desde el 2.º laborable después de hoy) y GET /huecos-libres de
+ADMINISTRACIÓN (desde el 1.º). El CASO 3 ya no exige los mismos días: los de
+la tool son los de REST desde el primer día del chat, y la tool empieza en
+él (V10). CASO 4c nuevo: el primer día de administración en la tool da []
+y antelacion_insuficiente, y en REST nunca; hoy, en la tool, da
+antelacion_insuficiente o fecha_pasada según quede alguna hora (precisión
+2). Para el oráculo lee, en una sesión de SOLO LECTURA, el now() de
+Postgres y las dos reglas: sigue sin escribir ninguna fila.)
+
 Sale con código 1 si algo falla.
 """
 
@@ -54,6 +64,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 import requests
 # uvicorn: el servidor real.
 import uvicorn
+# psycopg2: D45, leer (solo leer) el reloj de Postgres y las dos reglas.
+import psycopg2
 # El cliente MCP de fastmcp.
 from fastmcp import Client
 # El transporte HTTP con el token Bearer.
@@ -61,8 +73,8 @@ from fastmcp.client.transports import StreamableHttpTransport
 # El error que lanza el cliente cuando la tool falla.
 from fastmcp.exceptions import ToolError
 
-# Los secretos (nunca se imprimen).
-from app.config import GATE_SECRET, MCP_SECRET
+# Los secretos y la cadena de conexión (nunca se imprimen).
+from app.config import DATABASE_URL, GATE_SECRET, MCP_SECRET
 # Los dos mensajes de error de la tool.
 from app.mcp_server.server import MENSAJE_FECHA_NO_VALIDA, MENSAJE_REGLAS_NO_DISPONIBLES
 # Las reglas de visita (CASO 6: la clave falsa en memoria).
@@ -95,6 +107,54 @@ MADRID = ZoneInfo("Europe/Madrid")
 HOY = datetime.now(MADRID).date()
 # El lunes del bloque.
 LUNES = fechas_prueba.lunes_de_prueba("check_huecos_libres_http", HOY)
+
+
+def primer_laborable_oraculo(hoy, n):
+    """D45: el n-ésimo día de lunes a viernes después de hoy (n = 0: hoy),
+    calculado aquí aparte (no se importa el código probado)."""
+    # El día y los que faltan.
+    dia, faltan = hoy, n
+    # Hasta que no falte ninguno.
+    while faltan:
+        # Un día más.
+        dia += timedelta(days=1)
+        # Solo cuentan los laborables.
+        faltan -= dia.weekday() < 5
+    # El primero permitido.
+    return dia
+
+
+# D45: el "hoy" del servidor (reloj de Postgres) y las dos reglas, en una
+# sesión de solo lectura que se cierra enseguida.
+_cn = psycopg2.connect(DATABASE_URL)
+# Solo lectura: Postgres rechazaría cualquier escritura.
+_cn.set_session(readonly=True)
+# El cursor.
+_cur = _cn.cursor()
+# SQL: el reloj.
+_cur.execute("SELECT now();")
+# Hoy en Madrid, según Postgres.
+HOY_PG = _cur.fetchone()[0].astimezone(MADRID).date()
+# SQL: las dos antelaciones y las reglas de la rejilla (para el oráculo).
+_cur.execute("SELECT clave, valor FROM reglas_negocio WHERE clave IN "
+             "('dias_antelacion_visita_chat', 'dias_antelacion_visita_admin', 'visita_manana_inicio_min', "
+             "'visita_manana_fin_min', 'visita_tarde_inicio_min', 'visita_tarde_fin_min', 'duracion_visita_min', "
+             "'desplazamiento_min');")
+# clave -> entero.
+ANTELACION = {c: int(v) for c, v in _cur.fetchall()}
+# Lo que ocupa una visita con el desplazamiento.
+_PASO = ANTELACION["duracion_visita_min"] + ANTELACION["desplazamiento_min"]
+# Los inicios de la rejilla en minutos (oráculo propio: cada franja, de su
+# inicio en pasos, mientras la visita entera quepa).
+REJILLA_MIN = [m for ini, fin in (("visita_manana_inicio_min", "visita_manana_fin_min"),
+                                  ("visita_tarde_inicio_min", "visita_tarde_fin_min"))
+               for m in range(ANTELACION[ini], ANTELACION[fin] - ANTELACION["duracion_visita_min"] + 1, _PASO)]
+# Se cierra la sesión.
+_cn.close()
+# El primer día de administración (REST) y el del chat (la tool).
+PRIMER_ADMIN = primer_laborable_oraculo(HOY_PG, ANTELACION["dias_antelacion_visita_admin"])
+# El del chat.
+PRIMER_CHAT = primer_laborable_oraculo(HOY_PG, ANTELACION["dias_antelacion_visita_chat"])
 
 # Contadores.
 ok = 0
@@ -168,10 +228,19 @@ async def pruebas_mcp():
         # Claves de cada día sin etiqueta.
         comprobar("cada día de la tool tiene las claves exactas (sin etiqueta)",
                   bool(sc.get("dias")) and all(set(d) == CLAVES_DIA_AGENTE for d in sc["dias"]), f"({sc.get('dias', [])[:1]})")
-        # Los mismos días que REST, sin etiqueta ni generado_en.
-        comprobar("los mismos días y horas que GET /huecos-libres",
-                  sc.get("modo") == "dias" and sc.get("dias") == [sin(d, "etiqueta") for d in ref.get("dias", [])],
-                  f"({len(sc.get('dias', []))} / {len(ref.get('dias', []))})")
+        # D45: los días de REST desde el primer día del chat, sin etiqueta.
+        ref_chat = [sin(d, "etiqueta") for d in ref.get("dias", []) if d.get("fecha", "") >= PRIMER_CHAT.isoformat()]
+        # Los de la tool.
+        tool_dias = sc.get("dias") or []
+        # La tool empieza igual que esos (REST trae como mucho un día antes,
+        # así que la tool puede tener alguno más al final).
+        comprobar(f"D45: los días de la tool = los de GET /huecos-libres desde {PRIMER_CHAT} (prefijo)",
+                  sc.get("modo") == "dias" and bool(ref_chat) and tool_dias[:len(ref_chat)] == ref_chat,
+                  f"({len(tool_dias)} / {len(ref_chat)})")
+        # V10: ningún día de la tool es anterior al primer día del chat.
+        comprobar(f"D45 (V10): todos los días de la tool desde el primer día del chat ({PRIMER_CHAT})",
+                  bool(tool_dias) and all(d.get("fecha", "") >= PRIMER_CHAT.isoformat() for d in tool_dias),
+                  f"({[d.get('fecha') for d in tool_dias[:2]]})")
 
         # ------------------------------------------------------------
         print("\nCASO 4 - Modo un día: igual que GET /huecos-libres?fecha=")
@@ -186,6 +255,37 @@ async def pruebas_mcp():
             # Iguales salvo generado_en.
             comprobar(f"{dia} ({ref.get('dia_semana')}): la misma respuesta que REST (salvo generado_en)",
                       sc.get("modo") == "dia" and sin(sc, "generado_en") == sin(ref, "generado_en"), f"({sc})")
+
+        # ------------------------------------------------------------
+        print(f"\nCASO 4c - D45: antelación del chat (hoy {HOY_PG}; administración {PRIMER_ADMIN}; chat {PRIMER_CHAT})")
+        # El primer día de administración en la tool (con 1 y 2, anterior al del chat).
+        r = await client.call_tool(TOOL, {"fecha": PRIMER_ADMIN.isoformat()})
+        # La salida estructurada.
+        sc = (r.structured_content or {}).get("result", {})
+        # Sin horas y antelacion_insuficiente.
+        comprobar(f"tool, {PRIMER_ADMIN}: horas [] y antelacion_insuficiente (V10)",
+                  sc.get("horas") == [] and sc.get("sin_horas_motivo") == "antelacion_insuficiente", f"({sc})")
+        # El mismo día por REST (administración): nunca antelación.
+        ref = rest({"fecha": PRIMER_ADMIN.isoformat()})
+        # Con horas o completo.
+        comprobar(f"REST, {PRIMER_ADMIN}: motivo null o dia_completo (el canal lo fija la ruta)",
+                  ref.get("sin_horas_motivo") in (None, "dia_completo"), f"({ref.get('sin_horas_motivo')})")
+        # Hoy en la tool: la rama según quede alguna hora (precisión 2).
+        r = await client.call_tool(TOOL, {"fecha": HOY_PG.isoformat()})
+        # La salida estructurada.
+        sc = (r.structured_content or {}).get("result", {})
+        # El "ahora" del servidor.
+        generado = datetime.fromisoformat(sc.get("generado_en", "2000-01-01T00:00:00+00:00"))
+        # ¿Queda alguna hora de la rejilla hoy? (minutos -> instante de hoy en Madrid).
+        queda = any(datetime.combine(HOY_PG, datetime.min.time(), tzinfo=MADRID).replace(hour=m // 60, minute=m % 60)
+                    > generado for m in REJILLA_MIN)
+        # El motivo esperado.
+        esperado = "antelacion_insuficiente" if queda else "fecha_pasada"
+        # Cuál toca.
+        print(f"      [INFO] hoy a las {generado.astimezone(MADRID):%H:%M}: se espera {esperado}")
+        # Sin horas y con ese motivo.
+        comprobar(f"tool, hoy: horas [] y {esperado}", sc.get("horas") == [] and sc.get("sin_horas_motivo") == esperado,
+                  f"({sc})")
 
         # ------------------------------------------------------------
         print("\nCASO 5 - Fechas mal escritas por el LLM (N13)")

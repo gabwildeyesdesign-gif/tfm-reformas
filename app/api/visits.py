@@ -40,7 +40,8 @@ router = APIRouter(tags=["visitas"])
 #   409: el estado del lead no lo permite (sin presupuesto, Gate, estado,
 #        visita ya confirmada).
 #   422: la fecha incumple una regla de negocio (pasada, fin de semana,
-#        fuera de franja). Distinto del 422 de Pydantic (formato), que
+#        fuera de franja, fuera de rejilla y, desde D45, antelacion_insuficiente:
+#        la familia FechaNoValida, sin cambio de código). Distinto del 422 de Pydantic (formato), que
 #        FastAPI genera por su cuenta con otra forma (ver la Adenda).
 #   503: falta configuración en reglas_negocio (decisión P2).
 #   409 también, desde D31: el hueco lo ocupa otra visita (hueco_ocupado).

@@ -4,13 +4,19 @@ docs/Plan_Horario_Visitas_D32.txt, secciones 3 y 11): GET /huecos-libres
 (formulario de n8n, con X-Gate-Secret) y la tool MCP consultar_huecos_libres
 (Agente 2) llaman a estas dos funciones:
 
-  - consultar_dias(): los próximos dias_oferta_visita (10) días laborables,
-    desde HOY (P4), que tengan al menos una hora libre, cada uno con sus
-    horas por franja. Si hay días completos, se busca más allá, hasta
+  - consultar_dias(canal): los próximos dias_oferta_visita (10) días
+    laborables, desde el PRIMER DÍA PERMITIDO del canal (D45; antes, desde
+    HOY, P4), que tengan al menos una hora libre, cada uno con sus horas
+    por franja. Si hay días completos, se busca más allá, hasta
     MAX_DIAS_BUSQUEDA (60) laborables (P6 = A). Los días completos no salen.
-  - consultar_dia(fecha): las horas libres de esa fecha, por franja, con el
-    motivo si no tiene ninguna (P7: fecha_pasada, fin_de_semana o
-    dia_completo; siempre 200).
+  - consultar_dia(fecha, canal): las horas libres de esa fecha, por franja,
+    con el motivo si no tiene ninguna (P7: fecha_pasada, fin_de_semana o
+    dia_completo; D45: antelacion_insuficiente; siempre 200).
+
+D45 (2026-10-23, plan docs/Plan_Antelacion_Visitas_D45.txt): canal es
+OBLIGATORIO y lo pone el ADAPTADOR, nunca la petición: GET /huecos-libres
+pasa CANAL_ADMINISTRACION (1.er laborable después de hoy) y la tool MCP,
+CANAL_CHAT (2.º laborable). Sin valor por defecto: olvidarlo es un TypeError.
 
 Las horas las calcula disponibilidad() de reglas_visita.py, la MISMA función
 que usa el 409 hueco_ocupado de POST /visits, POST /resultados-llamada y el
@@ -40,22 +46,23 @@ from app.schemas.huecos_libres import DiaConHuecosFormulario, HuecosDiaResponse,
 # disponibilidad y la excepción del 503.
 from app.services.reglas_visita import (
     CLAVE_DIAS_OFERTA,
+    # D45: los días de la semana (mudados a reglas_visita.py; el nombre
+    # sigue existiendo en este módulo por esta importación).
+    DIAS_SEMANA,
     FRANJAS,
     MAX_DIAS_BUSQUEDA,
     ZONA_MADRID,
     ConfiguracionIncompleta,
     disponibilidad,
     leer_reglas_visita,
+    # D45: la primera fecha posible de cada canal.
+    primer_dia_del_canal,
     rejilla_texto,
 )
 
 # El modo de la transacción: la PRIMERA orden (mismo texto que el listado y
 # get_business_rules).
 SQL_MODO_TRANSACCION = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;"
-
-# Los días de la semana en español y en minúscula (weekday(): lunes = 0).
-# Una tabla propia: strftime("%A") depende del idioma del sistema.
-DIAS_SEMANA = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
 # Mensaje del 503 (llega a quien mire el error en n8n, nunca al cliente).
 MENSAJE_CONFIGURACION = (
@@ -105,11 +112,12 @@ def etiqueta_dia(dia: date, por_franja: dict[str, list[str]]) -> str:
     return texto
 
 
-def consultar_dias() -> HuecosDiasResponse:
+def consultar_dias(canal: str) -> HuecosDiasResponse:
     """
-    Modo días: los próximos dias_oferta_visita días laborables, desde hoy,
-    con al menos una hora libre. UNA consulta de visitas para toda la
-    ventana de búsqueda (la hace disponibilidad()).
+    Modo días: los próximos dias_oferta_visita días laborables, desde el
+    primer día permitido del canal (D45), con al menos una hora libre. UNA
+    consulta de visitas para toda la ventana de búsqueda (la hace
+    disponibilidad()).
     """
     # Conexión de solo lectura: al salir del "with" hace rollback y vuelve al pool.
     with get_db_connection() as conn:
@@ -117,14 +125,17 @@ def consultar_dias() -> HuecosDiasResponse:
         with conn.cursor() as cursor:
             # El reloj y las reglas (503 si falta alguna).
             ahora, reglas = _leer_ahora_y_reglas(cursor)
-            # Hoy, en Madrid.
-            hoy = ahora.astimezone(ZONA_MADRID).date()
+            # D45: el primer día permitido del canal (hoy, en Madrid, más
+            # los laborables de su regla).
+            primero = primer_dia_del_canal(ahora, reglas, canal)
             # Los candidatos: los MAX_DIAS_BUSQUEDA primeros laborables desde
-            # hoy (incluido). Como mucho 7/5 de días naturales por laborable.
-            laborables = [d for d in (hoy + timedelta(days=i) for i in range(MAX_DIAS_BUSQUEDA * 7 // 5 + 7))
+            # ese día (incluido; antes de D45, desde hoy). Como mucho 7/5 de
+            # días naturales por laborable.
+            laborables = [d for d in (primero + timedelta(days=i) for i in range(MAX_DIAS_BUSQUEDA * 7 // 5 + 7))
                           if d.weekday() < 5][:MAX_DIAS_BUSQUEDA]
-            # Las horas libres de todos, con la función ÚNICA (una consulta).
-            libres = disponibilidad(cursor, laborables, ahora, reglas)
+            # Las horas libres de todos, con la función ÚNICA (una consulta);
+            # con el primer día también ahí, por si la regla es 0 (hoy).
+            libres = disponibilidad(cursor, laborables, ahora, reglas, primer_dia=primero)
     # Los días con alguna hora, en orden, hasta dias_oferta_visita.
     dias = []
     # Cada laborable, en orden.
@@ -149,10 +160,40 @@ def consultar_dias() -> HuecosDiasResponse:
     return HuecosDiasResponse(modo="dias", generado_en=ahora.astimezone(ZONA_MADRID), dias=dias)
 
 
-def consultar_dia(fecha: date) -> HuecosDiaResponse:
+def motivo_sin_horas(fecha: date, ahora: datetime, reglas: dict[str, int], primer_dia: date) -> str:
+    """
+    Por qué un día no tiene ninguna hora libre (solo se llama si no tiene
+    ninguna). Función PURA (sin base de datos): se prueba con fechas fijas
+    (V5 del plan D45). Orden, el mismo que validar_fecha: fecha_pasada ->
+    antelacion_insuficiente (D45) -> fin_de_semana -> dia_completo.
+    """
+    # Hoy, en Madrid.
+    hoy = ahora.astimezone(ZONA_MADRID).date()
+    # La última hora de la rejilla de ese día (para saber si ya pasaron todas).
+    ultima = max((h for lista in rejilla_texto(reglas).values() for h in lista), default="00:00")
+    # Ese instante en Madrid.
+    ultima_inicio = datetime.combine(fecha, time(int(ultima[:2]), int(ultima[3:])), tzinfo=ZONA_MADRID)
+    # Un día anterior a hoy, o un hoy en el que ya pasaron todas las horas.
+    if fecha < hoy or ultima_inicio <= ahora:
+        # Ya ha pasado.
+        return "fecha_pasada"
+    # D45: antes del primer día permitido del canal.
+    if fecha < primer_dia:
+        # Falta antelación.
+        return "antelacion_insuficiente"
+    # Sábado o domingo.
+    if fecha.weekday() >= 5:
+        # Fin de semana.
+        return "fin_de_semana"
+    # Un laborable permitido sin horas: alguien las ha cogido todas.
+    return "dia_completo"
+
+
+def consultar_dia(fecha: date, canal: str) -> HuecosDiaResponse:
     """
     Modo un día: las horas libres de esa fecha, recalculadas ahora, y si no
-    hay ninguna, por qué (fecha_pasada, fin_de_semana o dia_completo).
+    hay ninguna, por qué (fecha_pasada, antelacion_insuficiente,
+    fin_de_semana o dia_completo).
     """
     # Conexión de solo lectura.
     with get_db_connection() as conn:
@@ -160,32 +201,14 @@ def consultar_dia(fecha: date) -> HuecosDiaResponse:
         with conn.cursor() as cursor:
             # El reloj y las reglas (503 si falta alguna).
             ahora, reglas = _leer_ahora_y_reglas(cursor)
-            # Las horas libres de ese día, con la función ÚNICA.
-            por_franja = disponibilidad(cursor, [fecha], ahora, reglas)[fecha]
+            # D45: el primer día permitido del canal.
+            primero = primer_dia_del_canal(ahora, reglas, canal)
+            # Las horas libres de ese día, con la función ÚNICA y la antelación.
+            por_franja = disponibilidad(cursor, [fecha], ahora, reglas, primer_dia=primero)[fecha]
     # Las dos franjas juntas, en orden: las opciones de radio.
     horas = [hora for nombre, _, _ in FRANJAS for hora in por_franja[nombre]]
-    # Hoy, en Madrid.
-    hoy = ahora.astimezone(ZONA_MADRID).date()
-    # La última hora de la rejilla de ese día (para saber si ya pasaron todas).
-    ultima = max((h for lista in rejilla_texto(reglas).values() for h in lista), default="00:00")
-    # Ese instante en Madrid.
-    ultima_inicio = datetime.combine(fecha, time(int(ultima[:2]), int(ultima[3:])), tzinfo=ZONA_MADRID)
-    # Sin motivo si hay horas.
-    if horas:
-        # Hay horas: ningún motivo.
-        motivo = None
-    # Un día anterior a hoy, o un hoy en el que ya pasaron todas las horas.
-    elif fecha < hoy or ultima_inicio <= ahora:
-        # Ya ha pasado.
-        motivo = "fecha_pasada"
-    # Sábado o domingo.
-    elif fecha.weekday() >= 5:
-        # Fin de semana.
-        motivo = "fin_de_semana"
-    # Un laborable futuro sin horas: alguien las ha cogido todas.
-    else:
-        # Completo.
-        motivo = "dia_completo"
+    # Sin motivo si hay horas; si no, el de la función pura.
+    motivo = None if horas else motivo_sin_horas(fecha, ahora, reglas, primero)
     # La respuesta.
     return HuecosDiaResponse(
         modo="dia", generado_en=ahora.astimezone(ZONA_MADRID), fecha=fecha,

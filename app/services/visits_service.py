@@ -21,6 +21,8 @@ from app.schemas.visits import VisitaCreate, VisitaResponse
 # Hasta el 2026-09-30 vivían en este archivo; se mudaron a reglas_visita.py
 # sin cambiar su lógica (plan de /gate-decisions, sección 2.3).
 from app.services.reglas_visita import (
+    # D45: el canal de este endpoint (solo el chat lo llama).
+    CANAL_CHAT,
     ZONA_MADRID,
     ConfiguracionIncompleta,
     RechazoNegocio,
@@ -29,7 +31,10 @@ from app.services.reglas_visita import (
     # D33: el fin de la visita para la respuesta (fecha_fin_visita).
     fin_de_visita,
     leer_reglas_visita,
+    # D45: la primera fecha posible y su comprobación aparte (P4).
+    primer_dia_del_canal,
     registrar_configuracion_incompleta,
+    validar_antelacion,
     validar_fecha,
 )
 
@@ -100,7 +105,8 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
                                     estado_no_permitido, visita_confirmada
       ConfiguracionIncompleta  503  configuracion_incompleta
       FechaNoValida            422  fecha_pasada, fin_de_semana,
-                                    fuera_de_franja
+                                    fuera_de_franja, fuera_de_rejilla,
+                                    antelacion_insuficiente (D45)
       HuecoOcupado             409  hueco_ocupado (D31), con huecos_libres
     """
     inicio = combinar_fecha_hora_madrid(data.fecha, data.hora)
@@ -207,7 +213,9 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
             # ----------------------------------------------------------
             # 4. Reglas de la fecha (422)
             # ----------------------------------------------------------
-            validar_fecha(inicio, ahora, reglas)
+            # D45: SIN la antelación (None). En /visits se mira en el paso
+            # 5a, DESPUÉS de detectar la repetición exacta (P4 del plan D45).
+            validar_fecha(inicio, ahora, reglas, None)
 
             # ----------------------------------------------------------
             # 5. ¿Ya hay una visita activa para esta oportunidad?
@@ -250,6 +258,16 @@ def solicitar_visita(data: VisitaCreate) -> VisitaResponse:
                         "Ya tienes una visita confirmada con administración. Para cambiarla, "
                         "administración se pondrá en contacto contigo.",
                     )
+            # ----------------------------------------------------------
+            # 5a. D45: antelación mínima del chat (422 antelacion_insuficiente)
+            # ----------------------------------------------------------
+            # Va DESPUÉS de la repetición (P4 del plan D45, D7): un reenvío
+            # de n8n de la misma visita, ya registrada, sigue dando 200
+            # aunque su fecha esté ahora demasiado cerca. Una sustitución
+            # (otra fecha u hora) SÍ la pasa. Y después de visita_confirmada,
+            # el motivo más útil para el agente en ese caso.
+            validar_antelacion(inicio, primer_dia_del_canal(ahora, reglas, CANAL_CHAT))
+
             # ----------------------------------------------------------
             # 5b. D31: ¿el hueco está libre? (409 hueco_ocupado)
             # ----------------------------------------------------------
