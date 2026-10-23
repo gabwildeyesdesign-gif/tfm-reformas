@@ -200,9 +200,12 @@ reglas_ok, problemas_ok = reglas_visita.leer_reglas_visita(CursorDeMentira([
     (reglas_visita.CLAVE_DURACION, Decimal("60.00")), (reglas_visita.CLAVE_DESPLAZAMIENTO, Decimal("15.00")),
     # Los días de oferta.
     (reglas_visita.CLAVE_DIAS_OFERTA, Decimal("10.00")),
+    # D45 (2026-10-23, H-D45-2): las dos antelaciones, obligatorias desde
+    # paso17 (nueve reglas). Sin ellas, leer_reglas_visita da "no existe".
+    (reglas_visita.CLAVE_ANTELACION_CHAT, Decimal("2.00")), (reglas_visita.CLAVE_ANTELACION_ADMIN, Decimal("1.00")),
 ]))
-# Siete correctas: ningún problema.
-comprobar("con las 7 reglas correctas: 0 problemas y valores enteros",
+# Nueve correctas: ningún problema.
+comprobar("con las 9 reglas correctas: 0 problemas y valores enteros",
           problemas_ok == [] and reglas_ok[reglas_visita.CLAVE_DURACION] == 60, f"({reglas_ok})")
 
 print("\n" + "=" * 78)

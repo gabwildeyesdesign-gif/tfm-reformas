@@ -445,21 +445,21 @@ de D45) es otra, se dice y la previsión se corrige solo en esa base.
 
 Verdes (después de aplicar paso17):
   script                          base   +nuevas  previsto   real
-  check_migracion_d45              -       12     12/12      ...
+  check_migracion_d45              -       12     12/12      12/12
     (antes de paso17: 0/12, las seis de cada regla fallan)
-  check_disponibilidad_service    60      +66    126/126     ...
+  check_disponibilidad_service    60      +66    126/126     126/126
     (S6 +12: por regla, "no existe" y 5 valores; S9 +54: V1 9, V2 15 +
     mensaje 1, medianoche 4, V4 3, V5 6, V7 2, canal 1, resultado 3,
     firmas 3, adaptadores 2, /visits 3, resultados 1, el 409 1)
-  check_huecos_libres_http        45      +2      47/47      ...
+  check_huecos_libres_http        45      +2      47/47      47/47
     (CASO 3 y "hoy" se reescriben sin cambiar el número; +1 primer día de
     administración; +1 CASO 5 antes del primer día del chat)
-  check_huecos_libres_service     32       0      32/32      ...
-  check_mcp_huecos_libres         17      +4      21/21      ...
+  check_huecos_libres_service     32       0      32/32      32/32
+  check_mcp_huecos_libres         17      +4      21/21      21/21
     (CASO 3 +1, V10; CASO 4c +3)
-  check_visits_http               98      +5     103/103     ...
+  check_visits_http               98      +5     103/103     103/103
     (V11 2, N14 3)
-  check_resultados_llamada_http  210      +1     211/211     ...
+  check_resultados_llamada_http  210      +1     211/211     BLOQUEADO POR DATOS
     (CASO 7b; V13 es la confirmar_hora de "me", que ya se contaba)
   Suite: 61 scripts (60 + check_migracion_d45), 61/61 con código 0.
 
@@ -504,6 +504,86 @@ Mutantes (sobre copias, de una en una; rojo = algún FALLO):
 Los "si el 1.er laborable tiene horas libres" dependen de visitas reales:
 la fase 2 lo dice como [INFO] y, si no se cumple, ese mutante se cuenta
 solo con el script puro.
+
+RESULTADOS REALES DE LA FASE 2 (2026-10-23, enchufado, 1,90-2,23 GB libres,
+ningún chrome, msedge, docker/vmmem ni WINWORD; Kernel-Power 41, 506 y 507:
+NINGUNO en ninguna tanda; las bases de la tabla coinciden con lo medido en
+main antes de D45: los scripts sin cambios dan las mismas cifras).
+  Datos de partida (foto 21:59:49): 4 visitas reales confirmadas el lunes
+  26/10 (08:30, 09:45, 11:00, 17:00), datos de prueba de las pruebas
+  127-129; no se tocan (decisión del tutor).
+  Tanda 1 (22:00:03-22:00:07): check_migracion_d45 0/12 código 1; paso17
+  sin argumentos y con los dos: código 2; --ensayo: 2 insertadas,
+  ninguna cambiada, rollback, código 0; check después del ensayo, en rojo.
+  paso17 REAL tras "confirmo la migración paso17": 22:03:09-22:03:11, 2
+  insertadas, ninguna cambiada, reglas_negocio 21 -> 23;
+  check_migracion_d45 12/12.
+  Verdes (22:03:20-22:11:25): la tabla de arriba. check_resultados_llamada_http
+  hizo 138 [OK] (V12 incluida: a las 22:10 tomó la rama fecha_pasada,
+  [OK]) y se paró en la guarda H-C-2 con código 1.
+
+  Mutantes (22:11:58-22:33:40), real frente a previsto:
+  N1  disponibilidad 125/126 (=); mcp_huecos 18/21 (=).
+  N2  disponibilidad 124/126 (=); visits_http 101/103 (previsto 99/103:
+      sin la antelación, V11 y la sustitución chocan con las visitas
+      reales del 26/10 a las 08:30 y 09:45 y dan 409 hueco_ocupado sin
+      escribir nada, así que solo falla el motivo; rojo igualmente);
+      huecos_http 46/47 (=; 26/10 12:15 y 18:15 dieron 201).
+  N3  disponibilidad 125/126 (=). resultados_llamada_http: bloqueado.
+  N4  disponibilidad 125/126, huecos_http 46/47, mcp_huecos 20/21 (=).
+  N5  disponibilidad 116/126 (= ~116).
+  N6  disponibilidad 125/126 (=).
+  N7  disponibilidad 118/126 (= ~118); visits_http 101/103 (=).
+  N8  disponibilidad 125/126 (=). resultados_llamada_http: bloqueado.
+  N9  disponibilidad 126/126 y huecos_http 47/47 (equivalentes por la
+      noche, como se preveía); mcp_huecos 19/21 (=). Rojo.
+  N10 disponibilidad 125/126 (=). N11 124/126 (=).
+  N12 la tanda 1 (0/12 antes de paso17).
+  N13 disponibilidad 123/126, huecos_http 46/47, mcp_huecos 20/21 (=).
+  N14 disponibilidad 124/126, visits_http 102/103 (=).
+  Los 13 mutantes, en rojo.
+
+  H-D45-2 (hallazgo de la regresión, error de medición del PASO 0, como
+  H-D45-1): check_visits_service monta a mano "las reglas correctas" (7) y
+  exige 0 problemas; con las 9 obligatorias de D45 dio 22/23 (22:49:15).
+  Corregido en la fase 2 añadiendo las dos filas de D45 a esa lista (+5 -2
+  líneas, sin cambiar el número de comprobaciones): 23/23 (22:51:40). No
+  es un cambio de diseño: es el mismo cambio que la S6 de
+  check_disponibilidad_service. Ningún otro script monta las reglas a mano
+  (grep de CLAVE_DIAS_OFERTA, dias_oferta_visita, CursorDeMentira y
+  leer_reglas_visita en los check_*.py).
+
+  Regresión de los 19 que crean visitas + check_mcp_huecos_libres
+  (22:34:11-22:51:09, y check_visits_service repetido 22:51:40-22:51:47):
+  18 con código 0 a la primera, check_visits_service 23/23 tras H-D45-2, y
+  check_resultados_llamada_http BLOQUEADO POR DATOS. Cifras: aviso_gate_http
+  76, disponibilidad 126, ficha_http 70, ficha_service 40,
+  followup_tasks_http 125, huecos_http 47, huecos_service 32,
+  listado_http 109, listado_service 69, migracion_decisiones_gate 38,
+  migracion_paso13b 6, migracion_resultado_llamadas 50, migracion_visitas
+  28, resultados_llamada_service 57, visits_http 103, visits_service 23,
+  direccion_obra_service 88, direccion_obra_http 43, mcp_huecos 21.
+
+  Suite completa, 61 scripts en UNA pasada (22:52:06-23:14:21; Kernel-Power
+  22:51-23:16: ninguno): 60/61 + 1 BLOQUEADO POR DATOS (guarda H-C-2),
+  0 fallos. check_datos_d39_9_incluye_tipico con --esperado nuevo;
+  check_graceful_shutdown y check_mcp_connection desde copias en el 8030 y
+  el 8031; uvicorn del 8031 detenido por su PID 18284 (log = netstat;
+  lanzador 8796). Los cinco de P4 revisados a mano: sin fallos
+  (check_rls_estado: 11 tablas, todas con RLS, 0 políticas; el ERROR
+  42501 es el INSERT de anon rechazado, lo esperado).
+  check_resultados_llamada_http: código 1, línea literal de la guarda:
+    [FALLO] check_resultados_llamada_http: el próximo laborable (2026-10-26) no tiene 3 horas libres (['12:15', '18:15']); no se crea ni se borra nada.
+
+  Foto después (23:14:50): las 10 tablas que D45 no toca, IDÉNTICAS
+  (recuento y SHA-256); reglas_negocio 21 -> 23 (las dos de paso17) e
+  idéntica sin ellas; las 4 visitas reales del 26/10, intactas.
+
+P-D45-1 (pendiente, decisión del tutor): repetir SOLO
+check_resultados_llamada_http cuando D46 permita cancelar esas visitas desde
+la pantalla. Hasta entonces, V13 (confirmar_hora no mira la antelación) solo
+la cubre la prueba pura V2 (y el reparto por resultado de S9); N3 y N8 solo
+se ven con check_disponibilidad_service.
 
 -------------------------------------------------------------------------
 10. VEREDICTO DEL TUTOR AL PASO 0 Y PASO 1 (2026-10-23)

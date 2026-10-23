@@ -842,6 +842,12 @@ SOLO REST.
 > tutor. Misma regla de siempre: no hacer merge sin la confirmación explícita
 > de Gabi, después de la revisión del tutor, y siempre con `--ff-only`.
 > Después del merge: reiniciar el uvicorn del 8000 SIN --reload (app/ cambia).
+> (Nota 2026-10-23, noche: la fase 2 está HECHA y paso17 APLICADA; detalle en
+> la nota de la suite. Pendiente P-D45-1: repetir solo
+> check_resultados_llamada_http cuando D46 permita cancelar las visitas de
+> prueba del 26/10 desde la pantalla; hasta entonces V13 la cubre solo la
+> prueba pura. Pendiente solo el veredicto del tutor y el merge, que confirma
+> Gabi.)
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1273,6 +1279,16 @@ filas. Detalle: sección 6 de docs/Plan_Direccion_Obra_D42.txt.)
 scripts, con check_migracion_d45, que FALLA a propósito (0/12) hasta que se
 aplique paso17. check_mcp_huecos_libres lee ahora la base de datos en una
 sesión de solo lectura. Todavía sin ninguna pasada: fase 1, SIN ejecutar.)
+(Nota 2026-10-23, noche, fase 2 de D45: paso17 APLICADA a las 22:03:09-11
+tras "confirmo la migración paso17" (check_migracion_d45 0/12 antes, 12/12
+después). Suite de 61 en UNA pasada válida, de 22:52:06 a 23:14:21, sin
+Kernel-Power 41, 506 ni 507, enchufado y sin procesos ajenos: 60/61 con
+código 0 + 1 BLOQUEADO POR DATOS (check_resultados_llamada_http, guarda
+H-C-2: el próximo laborable, 26/10, tiene 4 visitas de prueba confirmadas
+de las pruebas 127-129 y no le quedan 3 horas libres; decisión del tutor:
+no se tocan, pendiente P-D45-1). Los 13 mutantes en rojo. H-D45-2:
+check_visits_service ajustado a las nueve reglas. Datos reales iguales
+salvo las dos filas de paso17. Detalle: sección 9 del plan D45.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
