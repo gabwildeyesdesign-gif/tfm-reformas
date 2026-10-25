@@ -17,6 +17,12 @@ para D26.5).
 consultas: la sexta, SQL_DIRECCION, lee la dirección de la obra. La ficha es
 la ÚNICA lectura que la devuelve, D42.5.)
 
+(Nota 2026-10-25, D46: son SIETE consultas: la séptima, SQL_CAMBIOS, lee los
+cambios y cancelaciones de visitas confirmadas (tabla cambios_visita,
+paso18). La ficha gana visita_modificable, calculada con la MISMA función que
+POST /cambios-visita (motivo_no_modificable), y el evento
+visita_confirmada_cancelada en el historial.)
+
 El contacto, la reforma, las fotos y el presupuesto se construyen con las
 MISMAS funciones que GET /gate-avisos (datos_oportunidad.py).
 
@@ -36,12 +42,16 @@ from app.schemas.ficha_oportunidad import (
     EventoEstado,
     EventoHistorial,
     FichaOportunidadResponse,
+    CambioVisitaFicha,
     LlamadaFicha,
     LlamadaRegistrable,
     OtraOportunidad,
     PresupuestoFicha,
     VisitaFicha,
+    VisitaModificable,
 )
+# D46: las dos acciones de un cambio de visita (para visita_modificable).
+from app.schemas.cambios_visita import AccionCambioVisita
 # D42: el objeto de la dirección de la obra (el mismo que la entrada).
 from app.schemas.resultados_llamada import DireccionObra
 
@@ -74,7 +84,11 @@ from app.services.resultados_llamada_service import ACCION_DECISION_REGISTRADA, 
 # La deducción del tipo de llamada, la MISMA que usa POST
 # /resultados-llamada (P9), y los resultados de cada tipo.
 from app.services.tipo_llamada import deducir_tipo_llamada, resultados_de
-from app.services.visits_service import ACCION_SOLICITADA
+from app.services.visits_service import ACCION_SOLICITADA, ESTADOS_VISITA_ACTIVA
+# D46: la acción de log de la cancelación (la escribe ese servicio) y la
+# condición "visita modificable", la MISMA que usa POST /cambios-visita
+# (precisión 3 del tutor).
+from app.services.cambios_visita_service import ACCION_VISITA_CANCELADA, motivo_no_modificable
 
 # El modo de la transacción, el MISMO texto que usa GET /llamadas-del-dia
 # (P9): importado, no copiado.
@@ -98,7 +112,8 @@ class OportunidadNoEncontrada(RechazoNegocio):
 # La tabla acción -> estado (plan, 5.1)
 # ======================================================================
 
-# Las CUATRO acciones de log que cambian el estado de una oportunidad. Es
+# Las acciones de log que cambian el estado de una oportunidad (cuatro al
+# principio; seis desde D46). Es
 # la lista cerrada de la consulta 4: los logs que no son cambio de estado
 # (visita_sustituida, presupuesto_requiere_revision,
 # visita_configuracion_incompleta, error_no_controlado) no entran.
@@ -109,6 +124,10 @@ ACCIONES_HISTORIAL = (
     ACCION_SEGUIMIENTO_ABIERTO,
     # Desde B2: seguimiento y confirmación de visita (L-b).
     ACCION_LLAMADA_REGISTRADA,
+    # Desde D46: la cancelación de una visita confirmada ('perdida'). El
+    # cambio de hora (visita_confirmada_cambiada) NO entra: no cambia el
+    # estado (P9), y se ve en cambios_visita.
+    ACCION_VISITA_CANCELADA,
 )
 
 # Acciones que dejan SIEMPRE el mismo estado.
@@ -134,6 +153,12 @@ ESTADO_POR_DECISION = {
 # vale uno de estos dos (los que escribe resultados_llamada_service).
 ESTADOS_TRAS_LLAMADA = {
     EstadoOportunidad.VISITA_AGENDADA.value: EstadoOportunidad.VISITA_AGENDADA,
+    EstadoOportunidad.PERDIDA.value: EstadoOportunidad.PERDIDA,
+}
+
+# visita_confirmada_cancelada (D46): el estado se lee de detalle ->> 'estado',
+# y solo vale 'perdida' (el que escribe cambios_visita_service).
+ESTADOS_TRAS_CANCELACION = {
     EstadoOportunidad.PERDIDA.value: EstadoOportunidad.PERDIDA,
 }
 
@@ -164,6 +189,9 @@ def estado_tras(accion: str, estado_detalle: str | None, decision_detalle: str |
     # llamada_registrada: lo dice su detalle ('estado'), como el cálculo.
     if accion == ACCION_LLAMADA_REGISTRADA:
         return ESTADOS_TRAS_LLAMADA.get(estado_detalle)
+    # visita_confirmada_cancelada (D46): lo dice su detalle ('estado').
+    if accion == ACCION_VISITA_CANCELADA:
+        return ESTADOS_TRAS_CANCELACION.get(estado_detalle)
     # Las de estado fijo; cualquier otra acción, None.
     return ESTADO_FIJO.get(accion)
 
@@ -296,9 +324,22 @@ SQL_DIRECCION = """
 """
 
 
+# Consulta 7 (D46, 2026-10-25), los cambios de visitas confirmadas: la
+# tabla cambios_visita, con la fecha de su visita anterior (JOIN: siempre
+# existe) y la de la nueva (LEFT JOIN: al cancelar no hay). No lee ningún id.
+SQL_CAMBIOS = """
+    SELECT c.accion, c.motivo, c.created_at, va.fecha_propuesta, vn.fecha_propuesta, c.informe
+    FROM cambios_visita c
+    JOIN visitas va      ON va.id = c.visita_anterior_id
+    LEFT JOIN visitas vn ON vn.id = c.visita_nueva_id
+    WHERE c.oportunidad_id = %(oportunidad_id)s
+    ORDER BY c.created_at, c.id;
+"""
+
+
 def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
     """
-    Las seis consultas, con el cursor de quien llama y DENTRO de su
+    Las siete consultas (seis hasta D46), con el cursor de quien llama y DENTRO de su
     transacción (no abre, no cierra y no fija el modo: eso lo hace
     obtener_ficha). Recibe el cursor, como leer_listado, para que las
     pruebas puedan ejecutarla dentro de una transacción suya.
@@ -325,10 +366,17 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
     n_caso = len(COLUMNAS_CASO)
     caso = caso_desde_fila(fila[:n_caso])
     presupuesto_id, requiere_aprobacion, fecha_alta, cliente_id = fila[n_caso:]
+    # SQL: el now() de esta transacción (D46: lo usan visita_modificable y el
+    # plazo del seguimiento de 3b; antes solo lo leía 3b). Es el mismo valor
+    # en toda la transacción.
+    cursor.execute("SELECT now();")
+    ahora = cursor.fetchone()[0]
 
     # 2. Las visitas.
     # SQL: consulta 2 (SQL_VISITAS).
     cursor.execute(SQL_VISITAS, parametros)
+    # Las filas, una vez (las usan las visitas y visita_modificable).
+    filas_visitas = cursor.fetchall()
     # Una VisitaFicha por fila, con las fechas en hora de Madrid.
     visitas = [
         VisitaFicha(
@@ -337,8 +385,19 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
             fecha_solicitud_visita=a_madrid(creada),
             texto_cliente=texto,
         )
-        for estado, fecha_visita, creada, texto in cursor.fetchall()
+        for estado, fecha_visita, creada, texto in filas_visitas
     ]
+
+    # 2b. D46: la visita que se puede cambiar o cancelar. La activa
+    # ('solicitada' o 'confirmada', como mucho una por el índice parcial), o
+    # (None, None); y la MISMA condición que POST /cambios-visita (precisión 3).
+    activa_estado, activa_fecha = next(((estado, fecha_visita) for estado, fecha_visita, _, _ in filas_visitas
+                                        if estado in ESTADOS_VISITA_ACTIVA), (None, None))
+    # Con motivo, no se puede (null); sin motivo, su fecha y las dos acciones.
+    visita_modificable = None
+    if motivo_no_modificable(caso["estado"], activa_estado, activa_fecha, ahora) is None:
+        # list(AccionCambioVisita): [cambiar, cancelar], en el orden del Enum.
+        visita_modificable = VisitaModificable(fecha_visita=a_madrid(activa_fecha), acciones=list(AccionCambioVisita))
 
     # 3. Las llamadas registradas.
     # SQL: consulta 3 (SQL_LLAMADAS).
@@ -363,10 +422,8 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
     # deducción que POST /resultados-llamada, en esta misma foto.
     llamada_registrable = None
     if not llamadas and presupuesto_id is not None:
-        # SQL: el now() de esta transacción (el plazo del seguimiento).
-        cursor.execute("SELECT now();")
-        ahora = cursor.fetchone()[0]
-        # Solo lee (nada de FOR UPDATE ni escrituras): vale en READ ONLY.
+        # El now() de esta transacción (el plazo del seguimiento) ya está
+        # leído: desde D46, una sola vez tras la cabecera. Solo lee (nada de FOR UPDATE ni escrituras): vale en READ ONLY.
         deducido = deducir_tipo_llamada(cursor, oportunidad_id, caso["estado"], ahora)
         # Con tipo: el tipo y sus resultados; sin tipo, se queda en null.
         if deducido.tipo is not None:
@@ -406,6 +463,23 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
         calle_numero, codigo_postal, municipio = fila_direccion
         direccion = DireccionObra(calle_numero=calle_numero, codigo_postal=codigo_postal, municipio=municipio)
 
+    # 7. Los cambios de visitas confirmadas (D46), en esta misma foto.
+    # SQL: consulta 7 (SQL_CAMBIOS).
+    cursor.execute(SQL_CAMBIOS, parametros)
+    # Uno por fila, con las fechas en hora de Madrid; el informe, entero. La
+    # columna accion sale como tipo_cambio (accion está prohibida en la ficha).
+    cambios = [
+        CambioVisitaFicha(
+            tipo_cambio=accion,
+            motivo=motivo,
+            fecha_registro=a_madrid(creado),
+            fecha_visita_anterior=a_madrid(fecha_anterior),
+            fecha_visita_nueva=a_madrid(fecha_nueva),
+            informe=informe,
+        )
+        for accion, motivo, creado, fecha_anterior, fecha_nueva, informe in cursor.fetchall()
+    ]
+
     # La respuesta completa. Pydantic comprueba cada campo con el esquema,
     # y extra="forbid" impide añadir ninguno que no esté declarado.
     return FichaOportunidadResponse(
@@ -433,6 +507,9 @@ def leer_ficha(cursor, oportunidad_id: int) -> FichaOportunidadResponse:
         otras_oportunidades_mismo_email=otras,
         # D42: la dirección de la obra, o None.
         direccion_obra=direccion,
+        # D46: la visita modificable (o None) y el historial de cambios.
+        visita_modificable=visita_modificable,
+        cambios_visita=cambios,
     )
 
 
@@ -455,9 +532,9 @@ def obtener_ficha(oportunidad_id: int) -> FichaOportunidadResponse:
         # El cursor se cierra SIEMPRE al salir de este bloque.
         with conn.cursor() as cursor:
             # PRIMERA orden de la transacción: REPEATABLE READ (una sola
-            # foto para las seis consultas) y READ ONLY (Postgres rechaza
+            # foto para las siete consultas) y READ ONLY (Postgres rechaza
             # cualquier escritura). Tiene que ir antes de cualquier otra.
             # SQL: SQL_MODO_TRANSACCION.
             cursor.execute(SQL_MODO_TRANSACCION)
-            # Las seis consultas, en esa misma transacción.
+            # Las siete consultas, en esa misma transacción.
             return leer_ficha(cursor, oportunidad_id)

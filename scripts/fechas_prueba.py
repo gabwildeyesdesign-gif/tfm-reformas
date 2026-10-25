@@ -68,6 +68,10 @@ SCRIPTS = (
     # POST /resultados-llamada y registrar_resultado).
     "check_direccion_obra_service",
     "check_direccion_obra_http",
+    # D46 (2026-10-25): los dos de POST /cambios-visita (crean y cambian
+    # visitas confirmadas).
+    "check_cambios_visita_service",
+    "check_cambios_visita_http",
 )
 
 # Los estados de visita que ocupan un hueco (D31).

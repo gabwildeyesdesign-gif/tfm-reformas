@@ -46,7 +46,9 @@ router = APIRouter(tags=["resultados-llamada"])
 #   de Pydantic; desde D45 también antelacion_insuficiente, la misma familia
 #   FechaNoValida); 503 falta configuración de visitas.
 #   409 también, desde D31: el hueco lo ocupa otra visita (hueco_ocupado),
-#   (P16).
+#   (P16). Y desde D46 (P5), en la misma familia EstadoNoPermiteResultado:
+#   visita_modificada_despues (repetición de una llamada cuya visita se
+#   cambió o se canceló después por POST /cambios-visita).
 CODIGO_HTTP = {
     OportunidadNoEncontrada: 404,
     EstadoNoPermiteResultado: 409,

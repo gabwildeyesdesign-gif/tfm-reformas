@@ -26,6 +26,9 @@ from psycopg2.extras import Json
 # Router de GET /gate-avisos/{oportunidad_id}: el aviso del Gate, solo
 # lectura (plan docs/Plan_Endpoint_Aviso_Gate.txt).
 from app.api import aviso_gate as aviso_gate_api
+# Router de POST /cambios-visita: cambiar o cancelar una visita YA confirmada
+# (desde el 2026-10-25, el undécimo; D46, plan docs/Plan_Cambio_Visita_D46.txt).
+from app.api import cambios_visita as cambios_visita_api
 from app.api import estimates as estimates_api
 # Router de GET /oportunidades/{oportunidad_id}/ficha: la ficha completa de
 # cualquier oportunidad, solo lectura (desde el 2026-10-10, el octavo; plan
@@ -174,6 +177,12 @@ app.include_router(resultados_llamada_api.router)
 # (X-Gate-Secret) en el propio router. El Agente 2 tiene la misma consulta
 # como tool MCP (consultar_huecos_libres), con las mismas funciones.
 app.include_router(huecos_libres_api.router)
+
+# Undécimo router: POST /cambios-visita (app/api/cambios_visita.py). Solo
+# REST, sin tool MCP: lo llama la pantalla de llamadas de n8n para cambiar o
+# cancelar una visita YA confirmada (D46). Llave de administración
+# (X-Gate-Secret): el Agente 2 no puede (D46.1).
+app.include_router(cambios_visita_api.router)
 
 
 # Valores con los que se registra un error que NO pertenece a ninguna

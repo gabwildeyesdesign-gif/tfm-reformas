@@ -31,6 +31,10 @@ nunca el 8000), crea sus propios clientes por POST /leads y
           U12 5 distintas (motivo de los 409), U13 contacto reciente, U14 el
           409 visita_activa_existente sin escribir
   CASO 14 ningún 500, 201 <-> creado, claves exactas, 0 importes
+  (D46, 2026-10-25, plan docs/Plan_Cambio_Visita_D46.txt, P5 y V13: CASO 9b,
+  la repetición de una llamada cuya visita se cambió (g1) o se canceló (k1)
+  después por POST /cambios-visita da 409 visita_modificada_despues, sin
+  escribir nada; antes daba 200 y WF5 resucitaba el evento viejo, H-D46-1.)
   (D45, 2026-10-23, plan docs/Plan_Antelacion_Visitas_D45.txt: CASO 7b,
   visita_acordada para HOY -> 422 antelacion_insuficiente si aún queda
   alguna hora de la rejilla hoy, o fecha_pasada si no (precisión 2; cuál
@@ -56,6 +60,9 @@ comprobarlos; (4) puerto 8028, ningún dato real (nunca los 8 de D25.16 ni
 1522). D45: además inserta por SQL UNA visita 'solicitada' de una
 oportunidad PROPIA (y le cambia el estado a 'visita_agendada'), con la misma
 guarda SQL_OPS; la borra limpiar() con todo lo propio (precisión 3).
+D46: el CASO 9b escribe, por POST /cambios-visita, un cambio y una
+cancelación de visitas PROPIAS (g1 y k1); limpiar() borra sus filas de
+cambios_visita antes que las visitas.
 """
 
 # json: buscar importes en el texto. socket, threading, time, uuid: puerto,
@@ -151,6 +158,9 @@ SQL_OPS = ("SELECT o.id FROM oportunidades o JOIN leads l ON l.id = o.lead_id "
 # Por tabla, la condición de sus filas propias, en el orden de borrado.
 PROPIO = {
     "logs": f"entity_type = 'oportunidad' AND entity_id IN ({SQL_OPS})",
+    # D46 (CASO 9b): los cambios de visita propios, antes que visitas (sus
+    # claves foráneas dobles apuntan a ellas).
+    "cambios_visita": f"oportunidad_id IN ({SQL_OPS})",
     "decisiones_gate": f"oportunidad_id IN ({SQL_OPS})",
     "visitas": f"oportunidad_id IN ({SQL_OPS})",
     "presupuestos": f"oportunidad_id IN ({SQL_OPS})",
@@ -750,6 +760,34 @@ try:
                   (f.get("llamada_registrable") or {}).get("tipo_llamada") == tipo, f"({f.get('llamada_registrable')})")
 
     # ------------------------------------------------------------------
+    print("\nCASO 9b - D46 (P5): repetición tras cambiar o cancelar la visita")
+    # El texto del 409, copiado del veredicto del tutor (no del código).
+    MENSAJE_P5 = "Esta visita se ha cambiado o cancelado después de registrar la llamada: vuelve a abrir la ficha."
+    # g1 (Gate, confirmada el día D_G1 a las 08:30): se cambia a las 11:00.
+    r = pedir("POST", "/cambios-visita", {"oportunidad_id": g1, "accion": "cambiar", "fecha_actual": str(D_G1),
+                                          "hora_actual": "08:30", "fecha": str(D_G1), "hora": "11:00",
+                                          "informe": "Cambio de prueba (P5)."})
+    comprobar("preparación: POST /cambios-visita cambia la visita de g1 -> 201", r.status_code == 201,
+              f"({r.status_code} {r.text[:150]})")
+    # k1 (confirmar_hora, el día D_K1 a las 09:45): se cancela.
+    r = pedir("POST", "/cambios-visita", {"oportunidad_id": k1, "accion": "cancelar", "fecha_actual": str(D_K1),
+                                          "hora_actual": "09:45", "motivo": "precio",
+                                          "informe": "Cancelación de prueba (P5)."})
+    comprobar("preparación: POST /cambios-visita cancela la visita de k1 -> 201", r.status_code == 201,
+              f"({r.status_code} {r.text[:150]})")
+    # La repetición EXACTA de cada llamada original (las del CASO 9): 409,
+    # su texto y nada escrito.
+    for op, cuerpo in ((g1, REPETIR[0][1]), (k1, REPETIR[2][1])):
+        # La foto antes; la misma petición que la registró.
+        antes = foto_op(op)
+        r = registrar(op, cuerpo)
+        # El detalle del 409 (motivo y mensaje).
+        detalle = cuerpo_de(r).get("detail")
+        comprobar(f"repetición {cuerpo['resultado']} tras D46 -> 409 visita_modificada_despues, su texto, nada escrito",
+                  r.status_code == 409 and motivo(r) == "visita_modificada_despues" and isinstance(detalle, dict)
+                  and detalle.get("mensaje") == MENSAJE_P5 and foto_op(op) == antes, f"({r.status_code} {r.text[:150]})")
+
+    # ------------------------------------------------------------------
     print("\nCASO 12 - La matriz lista <-> registro")
     # El próximo laborable lo dice la propia lista.
     lista = cuerpo_de(pedir("GET", "/llamadas-del-dia"))
@@ -1233,7 +1271,9 @@ finally:
     # rutas que pide el script; se borran por id exacto si cuadran.
     # (Sin /gate-decisions desde el 2026-10-22: la ruta ya no existe.)
     rutas = ["/resultados-llamada", "/leads", "/calculate-estimate", "/visits",
-             "/create-followup-task", "/llamadas-del-dia"]
+             "/create-followup-task", "/llamadas-del-dia",
+             # D46: la ruta del CASO 9b.
+             "/cambios-visita"]
     # SQL: los ids de esos logs (con /leads/session/<token> desde el
     # 2026-10-22: la pide el CASO 13c).
     ids_500 = [f[0] for f in consultar(

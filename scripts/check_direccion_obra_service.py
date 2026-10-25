@@ -85,6 +85,8 @@ from app.schemas.resultados_llamada import (
 # Los modelos de TODAS las respuestas (rutas y tools), para S2.
 from app.schemas.aviso_gate import AvisoGateResponse
 from app.schemas.business_rules import BusinessRulesResponse
+# D46 (precisión 4 del tutor): POST /cambios-visita, entrada y respuesta.
+from app.schemas.cambios_visita import CambioVisitaCreate, CambioVisitaResponse
 from app.schemas.estimates import EstimateResponse
 # La ficha: la ÚNICA que puede llevarla (control positivo).
 from app.schemas.ficha_oportunidad import FichaOportunidadResponse
@@ -320,11 +322,19 @@ def campos_recursivos(modelo, vistos=None):
 # Todas las respuestas que NO pueden llevarla (rutas y tools MCP, D42.5).
 PROHIBIDAS = (AvisoGateResponse, BusinessRulesResponse, EstimateResponse, FollowupTaskResponse, HuecosDiaResponse,
               HuecosDiasAgente, HuecosDiasResponse, LeadCreateResponse, LeadSessionResponse, ListadoLlamadasResponse,
-              ResultadoLlamadaResponse, VisitaResponse)
+              ResultadoLlamadaResponse, VisitaResponse,
+              # D46 (2026-10-25): la respuesta de POST /cambios-visita.
+              CambioVisitaResponse)
 for modelo in PROHIBIDAS:
     # La intersección con las cuatro claves tiene que estar vacía.
     cruce = campos_recursivos(modelo) & CLAVES_DIRECCION
     comprobar(f"{modelo.__name__}: ningún campo de dirección", cruce == set(), f"({sorted(cruce)})")
+# D46: la entrada de POST /cambios-visita no admite la dirección (es de la
+# oportunidad, no de la visita): ningún campo de dirección y extra="forbid"
+# (una clave direccion_obra da 422).
+cruce = campos_recursivos(CambioVisitaCreate) & CLAVES_DIRECCION
+comprobar("CambioVisitaCreate: ningún campo de dirección y extra='forbid'",
+          cruce == set() and CambioVisitaCreate.model_config.get("extra") == "forbid", f"({sorted(cruce)})")
 # Y la ficha SÍ (control positivo), como DireccionObra o null.
 comprobar("FichaOportunidadResponse.direccion_obra existe y es obligatoria (objeto o null)",
           "direccion_obra" in FichaOportunidadResponse.model_fields

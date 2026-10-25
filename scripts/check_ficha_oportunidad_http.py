@@ -119,7 +119,16 @@ CLAVES_RAIZ = {"oportunidad_id", "estado_oportunidad", "fecha_solicitud", "conta
                "historial", "historial_cuadra", "otras_oportunidades_mismo_email",
                # (Nota 2026-10-22, D42: 15, con direccion_obra; su contenido
                # lo prueba check_direccion_obra_http.)
-               "direccion_obra"}
+               "direccion_obra",
+               # (Nota 2026-10-25, D46; plan docs/Plan_Cambio_Visita_D46.txt,
+               # sección 5: 17, con visita_modificable y cambios_visita; su
+               # contenido lo prueba check_cambios_visita_http.)
+               "visita_modificable", "cambios_visita"}
+# D46: visita_modificable (si no es null) y cada elemento de cambios_visita.
+# tipo_cambio y no accion (corrección del tutor: accion está prohibida en la
+# ficha por ser el nombre de logs.accion; sigue en CLAVES_PROHIBIDAS).
+CLAVES_MODIFICABLE = {"fecha_visita", "acciones"}
+CLAVES_CAMBIO = {"tipo_cambio", "motivo", "fecha_registro", "fecha_visita_anterior", "fecha_visita_nueva", "informe"}
 # Los objetos compartidos con /gate-avisos: contacto y reforma.
 CLAVES_CONTACTO = {"nombre", "email", "telefono", "origen"}
 CLAVES_REFORMA = {"tipo_reforma", "m2", "nivel_acabados", "incluye_cambios_estructurales"}
@@ -837,6 +846,9 @@ try:
             niveles += [(set(v), CLAVES_VISITA) for v in c["visitas"]] + [(set(x), CLAVES_LLAMADA) for x in c["llamadas"]]
             niveles += [(set(e), CLAVES_EVENTO) for e in c["historial"]]
             niveles += [(set(o), CLAVES_OTRA) for o in c["otras_oportunidades_mismo_email"]]
+            # D46: visita_modificable (solo si no es null) y cada cambio.
+            niveles += [(set(c["visita_modificable"]), CLAVES_MODIFICABLE)] if c.get("visita_modificable") else []
+            niveles += [(set(x), CLAVES_CAMBIO) for x in c.get("cambios_visita", [])]
             # Si algún nivel no coincide, la ficha se apunta como mala.
             if any(tiene != esperadas for tiene, esperadas in niveles):
                 malas.append(c["oportunidad_id"])
@@ -846,6 +858,22 @@ try:
         # check_resumen_solicitud_http).
         comprobar(f"resumen_solicitud null en las {len(cuerpos_200)} fichas (sus leads no lo envían)",
                   all(c.get("resumen_solicitud", "falta") is None for c in cuerpos_200))
+        # D46: este script no cambia ni cancela visitas: cambios_visita es []
+        # en todas (los cambios los prueba check_cambios_visita_http).
+        comprobar(f"cambios_visita [] en las {len(cuerpos_200)} fichas (este script no cambia visitas)",
+                  all(c.get("cambios_visita", "falta") == [] for c in cuerpos_200))
+        # D46: visita_modificable no es null SOLO en 'visita_agendada' con una
+        # visita confirmada futura (la misma regla que POST /cambios-visita),
+        # comprobada con los datos de la propia ficha y la hora de este
+        # ordenador (las visitas de prueba están lejos de "ahora").
+        ahora_local = datetime.now(timezone.utc)
+        mal_modificable = [c["oportunidad_id"] for c in cuerpos_200
+                           if (c.get("visita_modificable") is not None) != (
+                               c["estado_oportunidad"] == "visita_agendada"
+                               and any(v["estado_visita"] == "confirmada"
+                                       and datetime.fromisoformat(v["fecha_visita"]) > ahora_local for v in c["visitas"]))]
+        comprobar(f"visita_modificable no null solo con una confirmada futura en 'visita_agendada' "
+                  f"({len(cuerpos_200)} fichas)", not mal_modificable, f"({mal_modificable})")
         # Todas las claves de todas las fichas, cruzadas ("&") con las prohibidas.
         prohibidas = set().union(*(claves_anidadas(c) for c in cuerpos_200)) & CLAVES_PROHIBIDAS
         comprobar("ninguna clave prohibida (2.6) en ningún nivel", not prohibidas, f"({sorted(prohibidas)})")

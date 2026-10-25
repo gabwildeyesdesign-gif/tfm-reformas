@@ -1,0 +1,716 @@
+PLAN D46 — CAMBIAR O CANCELAR UNA VISITA YA CONFIRMADA
+(PASO 0: solo lectura y plan)
+=========================================================================
+
+Fecha: 2026-10-23. Carpeta en la rama feat/n0-antelacion-visitas (D45),
+árbol limpio, último commit dfdcaff (comprobado con git branch,
+git status --porcelain y git log). main = c0db982 (D45 sin merge). Sin
+rama nueva, sin commit, sin git checkout, sin uvicorn, sin tocar el 8000
+y sin escribir en la base de datos. Este archivo NO está añadido a git.
+
+Lecturas hechas: CLAUDE.md, docs/Plan_Antelacion_Visitas_D45.txt,
+app/services/resultados_llamada_service.py, tipo_llamada.py,
+reglas_visita.py (hueco libre, disponibilidad), visits_service.py,
+ficha_oportunidad_service.py, listado_llamadas_service.py, los esquemas
+de resultados_llamada y ficha_oportunidad, docs/schema_actual.sql, la
+Adenda (5.10), docs/Contrato_Formulario_Llamadas.md y los JSON de
+n8n/ (WF5, WF7, WF3). Medición de solo lectura en la base de datos
+(sesión REPEATABLE READ, READ ONLY, terminada con rollback; script en el
+scratchpad, fuera del repositorio), now() = 2026-10-23 19:41:56 UTC:
+  - visitas: 14 confirmada, 5 cancelada (ninguna solicitada ni
+    completada).
+  - confirmadas: 4 futuras y 10 ya pasadas; las 14 con la oportunidad en
+    'visita_agendada'.
+  - confirmadas sin fila en decisiones_gate: 0; confirmadas cuya fila de
+    decisiones_gate apunta a OTRA visita: 0 (ver H-D46-2).
+  - decisiones_gate: 24 filas (gate 5 visita_acordada + 7 descartar;
+    seguimiento 4 + 1; confirmacion_visita 3 confirmar_hora + 2 otra_hora
+    + 2 cliente_cancela).
+  - 'visita_agendada' sin visita activa: 0.
+  - tablas de public: 11.
+Hallazgo de partida: H-129-2 (23/10). Decisión: D46 (Gabi, 23/10 21:10).
+
+-------------------------------------------------------------------------
+0. CONTRADICCIONES Y HALLAZGOS (dichos antes de seguir)
+-------------------------------------------------------------------------
+Sin contradicciones con CLAUDE.md, la Adenda o el código en lo que pide
+el prompt. Comprobado: la Adenda 5.10 dice literalmente "Tampoco se
+cambia una visita ya confirmada" (línea 1500), y el Contrato del
+formulario, línea 291, "No corrige un resultado ya registrado ni cambia
+una visita ya confirmada (a mano en N0)". D46 cambia esas dos frases.
+WF5 (n8n/WF5_calendario_visita.json, preparar_evento) dice en la
+descripción del evento "los cambios se hacen desde el formulario de
+llamadas, no a mano": hoy es falso, como dice el prompt.
+
+H-D46-1 (IMPORTANTE, no lo nombra el prompt). La repetición de POST
+  /resultados-llamada (_repeticion_o_rechazo, resultados_llamada_service
+  .py:389) lee la fecha de d.visita_id con un LEFT JOIN y, si coincide,
+  responde 200 con ESE visita_id y su fecha. Tras un cambio de D46,
+  d.visita_id apunta a la visita VIEJA, ya cancelada. Un reintento
+  tardío de n8n de la llamada original (o el formulario reenviado)
+  recibiría 200 con la visita cancelada, y el formulario llamaría a WF5
+  con accion 'guardar' para ella: decidir_paso de WF5 hace PATCH de un
+  evento borrado ("se borró -> actualizar, y vuelve a estar activo"), es
+  decir, RESUCITARÍA el evento viejo en el calendario. Lo mismo tras una
+  cancelación de D46. Ver P5.
+
+H-D46-2. Hoy se cumple, sin que nada lo obligue, que "toda visita
+  confirmada es la visita_id de la fila de decisiones_gate de su
+  oportunidad" (medido: 0 excepciones en 14). D46 lo rompe a propósito:
+  tras un cambio, la confirmada nueva cuelga de cambios_visita, no de
+  decisiones_gate. Ningún código de app/ depende de ello (grep de
+  visita_id en services/), pero la ficha enseña en llamadas[].fecha_visita
+  la fecha de la llamada ORIGINAL (correcto como registro histórico,
+  engañoso si la pantalla la usa como "la visita"). WF7 NO cae en esto:
+  busca la visita en visitas[] con estado 'confirmada'
+  (construir_email_cliente, línea 198). La pantalla de llamadas no está
+  en el repositorio: el tutor lo comprueba.
+
+H-D46-3. La ficha NO devuelve ids de visita: "visita_id" está en
+  CLAVES_PROHIBIDAS de check_ficha_oportunidad_http (línea 139). Por eso
+  la ruta nueva identifica la visita por oportunidad_id (como mucho una
+  activa, índice visitas_una_activa_por_oportunidad), no por su id, y la
+  protección contra una pantalla desfasada va por la FECHA que leyó el
+  operador (patrón de visita_cambiada, C11 de 4b). Ver P3.
+
+H-D46-4. Nadie escribe nunca 'completada' (grep: solo el Enum de
+  common.py). Una confirmada pasada sigue 'confirmada' y su oportunidad
+  en 'visita_agendada' para siempre (10 casos hoy). D46 no lo cambia:
+  "pasada" se mide con fecha_propuesta <= now(), no con el estado.
+
+-------------------------------------------------------------------------
+1. HOY: CÓMO SE GUARDA UNA VISITA CONFIRMADA Y SU LLAMADA
+-------------------------------------------------------------------------
+Tablas (docs/schema_actual.sql):
+  - visitas: id, oportunidad_id, fecha_propuesta (TIMESTAMPTZ, inicio),
+    estado (solicitada | confirmada | completada | cancelada),
+    texto_cliente (1..300), created_at, updated_at. UNIQUE (id,
+    oportunidad_id) para las claves foráneas dobles.
+  - Índice único parcial visitas_una_activa_por_oportunidad: como mucho
+    UNA visita 'solicitada' o 'confirmada' por oportunidad. Por eso
+    otra_hora cancela la vieja ANTES de insertar la nueva.
+  - decisiones_gate: UNA fila por oportunidad (UNIQUE (oportunidad_id),
+    P6 de 4b), con tipo_llamada, decision (5 resultados), motivo,
+    informe (1..2000), visita_id (la que quedó confirmada) y
+    visita_cancelada_id (otra_hora, cliente_cancela), las dos con clave
+    foránea doble (visita, oportunidad). CHECK de coherencia por
+    resultado. RLS activado, sin políticas.
+  - logs: un log por resultado: 'gate_decision_registrada' (Gate) o
+    'llamada_registrada' (los otros dos tipos), con detalle->>'estado';
+    el informe NUNCA se copia al log (P9 de /gate-decisions).
+Cómo nace una confirmada (solo por POST /resultados-llamada):
+  visita_acordada (INSERT confirmada), confirmar_hora (UPDATE
+  solicitada -> confirmada) u otra_hora (UPDATE solicitada -> cancelada
+  + INSERT confirmada). La oportunidad pasa a 'visita_agendada' y
+  fecha_ultimo_contacto = now(). Todo en una transacción con FOR UPDATE
+  de la oportunidad y pg_advisory_xact_lock del día (D31).
+Quién lee la confirmada:
+  - Ficha: visitas[] (todas, con estado y fecha, sin id), llamadas[]
+    (con fecha_visita y fecha_visita_cancelada) y llamada_registrable
+    (null en cuanto hay una llamada registrada).
+  - Lista diaria: e) visitas_proximo_laborable, 'solicitada' o
+    'confirmada' del próximo laborable. d) solo mira 'solicitada'.
+  - Recordatorio (email 3): WF3 manda a WF7 las e) confirmadas en la
+    ejecución automática de las 8:00 (D41.1); WF7 lee la ficha y usa la
+    visita 'confirmada' de visitas[].
+  - GET /huecos-libres, la tool y el 409: disponibilidad() cuenta toda
+    visita 'solicitada' o 'confirmada' como ocupada (ESTADOS_QUE_OCUPAN),
+    salvo las de excluir.
+  - POST /visits (chat): con una confirmada y otra fecha, 409
+    visita_confirmada ("administración se pondrá en contacto contigo").
+
+-------------------------------------------------------------------------
+2. DÓNDE SE REGISTRA CADA CAMBIO CON SU INFORME (Regla de Tres)
+-------------------------------------------------------------------------
+(a) Tabla nueva cambios_visita: una fila por cambio o cancelación.
+    + El informe vive en una columna con su CHECK, como en
+      decisiones_gate; la ficha lo lee con una consulta propia.
+    + decisiones_gate no se toca: su UNIQUE, su repetición, la
+      deducción del tipo y llamada_registrable siguen igual.
+    + Claves foráneas dobles (visita, oportunidad) y CHECK de coherencia:
+      defensa doble, como paso12.
+    - Una migración con tabla nueva (la 12.ª), con RLS, y sus scripts.
+(b) Solo en logs (detalle con informe, motivo y visitas).
+    - Rompe dos reglas vigentes: el informe no se copia a logs (P9 de
+      /gate-decisions) y la ficha nunca lee el detalle entero (C2 del
+      plan de la ficha). Sin CHECK: un log mal escrito no lo frena nadie.
+    DESCARTADA.
+(c) Ampliar tablas existentes: quitar el UNIQUE de decisiones_gate (varias
+    filas por oportunidad) o añadir a visitas columnas "informe_cambio" y
+    "motivo_cancelacion" en la visita cancelada.
+    - decisiones_gate con varias filas rompe P6, la repetición de 4b,
+      deducir_tipo_llamada y "llamadas no vacía = definitivo" de la ficha
+      y del formulario.
+    - Las columnas en visitas mezclan tres orígenes de cancelación (chat,
+      otra_hora y D46) con columnas vacías en dos; distinguir un cambio de
+      una cancelación obligaría a mirar si existe una visita posterior.
+    DESCARTADA.
+ELEGIDA: (a).
+
+Forma propuesta de cambios_visita (migración paso18):
+  id                  SERIAL PK
+  oportunidad_id      INTEGER NOT NULL, FK oportunidades
+  accion              VARCHAR(20) NOT NULL, CHECK IN ('cambiar',
+                      'cancelar') (los mismos textos que la petición,
+                      como decision = resultado en decisiones_gate)
+  visita_anterior_id  INTEGER NOT NULL, FK doble (visita_anterior_id,
+                      oportunidad_id) -> visitas(id, oportunidad_id)
+  visita_nueva_id     INTEGER NULL, FK doble igual
+  motivo              VARCHAR(30) NULL
+  informe             TEXT NOT NULL, CHECK informe = btrim(informe) y
+                      1..2000 (MAX_INFORME_GATE, el mismo que
+                      decisiones_gate)
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  CHECK coherencia:
+    cambiar  -> visita_nueva_id NOT NULL, motivo NULL y
+                visita_nueva_id <> visita_anterior_id
+    cancelar -> visita_nueva_id NULL y motivo IN ('precio', 'plazo',
+                'proyecto_no_viable', 'otro') (catálogo de
+                cliente_cancela, D46.3: sin no_contesta ni sin_decision)
+  UNIQUE (visita_anterior_id): una visita se cambia o cancela una vez.
+  UNIQUE (visita_nueva_id): NULL repetido permitido (cancelaciones).
+  Índice (oportunidad_id): la consulta de la ficha (ver P10).
+  RLS: ENABLE, sin políticas (Decision_RLS_N0.txt, como direcciones_obra).
+Además, UN log por operación (sin el informe): ver sección 6.
+
+-------------------------------------------------------------------------
+3. FORMA DEL ENDPOINT (Regla de Tres)
+-------------------------------------------------------------------------
+(A) Una ruta con acción: POST /cambios-visita, cuerpo con
+    "accion": "cambiar" | "cancelar".
+    + Mismo patrón que POST /resultados-llamada (oportunidad_id en el
+      cuerpo, un campo que elige, validador de modelo que exige o
+      prohíbe campos), y una sola respuesta para WF5.
+    + Un router, una dependencia X-Gate-Secret, una tabla.
+    - El cuerpo tiene campos que dependen de la acción (como hoy).
+(B) Dos rutas: POST /oportunidades/{id}/visita/cambio y .../cancelacion.
+    + Cuerpos más simples.
+    - Dos rutas, dos esquemas de entrada y un orden de comprobaciones
+      repetido; el proyecto no usa rutas de escritura con id en la ruta.
+(C) Ampliar POST /resultados-llamada con dos resultados más.
+    - Hoy "un resultado por oportunidad, definitivo" (UNIQUE, P6). Habría
+      que deshacer el UNIQUE, los CHECK chk_decisiones_gate_coherencia y
+      _tipo_resultado, la repetición, deducir_tipo_llamada y
+      llamada_registrable. Riesgo alto sobre lo ya integrado. DESCARTADA.
+RECOMENDADA: (A). Décimo primer include_router (los demás conservan su
+número), solo REST, sin tool MCP, X-Gate-Secret en la ruta (como
+/resultados-llamada).
+
+Cuerpo (CambioVisitaCreate, extra="forbid"):
+  oportunidad_id   int > 0
+  accion           "cambiar" | "cancelar"
+  fecha_actual,    la fecha y hora de la visita que el operador VE en la
+  hora_actual      ficha (YYYY-MM-DD, HH:MM, Madrid), obligatorias en las
+                   dos acciones (P3)
+  fecha, hora      la nueva; obligatorias con cambiar, prohibidas con
+                   cancelar
+  motivo           obligatorio con cancelar (precio | plazo |
+                   proyecto_no_viable | otro), prohibido con cambiar
+  informe          siempre, 1..2000 recortado (el de 4b)
+  direccion_obra   NO existe: extra="forbid" da 422 (D46: es de la
+                   oportunidad, no de la visita).
+Respuesta (CambioVisitaResponse, sin importes ni dirección):
+  cambio_id, oportunidad_id, accion, motivo, estado_oportunidad,
+  visita_id (la nueva, o null al cancelar), fecha_visita,
+  fecha_fin_visita (null al cancelar), visita_cancelada_id (la vieja,
+  siempre), creado. Los nombres de visita son los de
+  ResultadoLlamadaResponse, para que n8n reutilice el reparto a WF5.
+Códigos:
+  201 hecho; 200 repetición exacta (sin escribir); 401 sin X-Gate-Secret
+  (antes del 422); 404 oportunidad_no_encontrada; 409
+  sin_visita_confirmada, visita_cambiada, visita_pasada,
+  visita_ya_cancelada, hueco_ocupado (con huecos_libres); 422 de
+  Pydantic, y de negocio misma_hora_actual, fecha_pasada,
+  antelacion_insuficiente (D45, administración), fin_de_semana,
+  fuera_de_franja, fuera_de_rejilla (con horas_validas); 503
+  configuracion_incompleta (solo cambiar: con log y diferido, como 4b).
+Orden de las comprobaciones (en el servicio, tras 401 y 422 de forma):
+   1. FOR UPDATE de la oportunidad (404). now() en la misma consulta.
+   2. Leer la visita activa de la oportunidad y la última fila de
+      cambios_visita.
+   3. Repetición exacta (200; ver abajo). Va antes que el estado, como en
+      4b: tras el 201 el estado ya cambió.
+   4. 409 visita_ya_cancelada: la última fila es una cancelación (otro
+      motivo, u otra acción).
+   5. 409 sin_visita_confirmada: no hay visita 'confirmada' (sin visita,
+      solo 'solicitada', o la oportunidad no está en 'visita_agendada').
+   6. 409 visita_cambiada: su fecha no es fecha_actual + hora_actual (la
+      pantalla está desfasada: otro operador la cambió).
+   7. 409 visita_pasada: fecha_propuesta <= now() (D46.5).
+   8. cancelar: escritura.
+   9. cambiar: leer reglas (503 diferido con log, origen
+      "cambios_visita") -> 422 misma_hora_actual -> validar_fecha(inicio,
+      ahora, reglas, primer_dia del canal ADMINISTRACION) -> 409
+      hueco_ocupado con comprobar_hueco_libre(excluir=[la propia]) ->
+      escritura.
+Repetición (D7):
+  - cambiar: hay una fila 'cambiar' cuya visita_nueva es la confirmada
+    actual, su fecha es fecha + hora, y la fecha de su visita_anterior es
+    fecha_actual + hora_actual -> 200 con lo que ya estaba (el informe
+    nuevo se ignora). Lee las reglas para fecha_fin_visita (503 diferido
+    si faltan, como la repetición de 4b, P1 de D33).
+  - cancelar: la última fila es 'cancelar', con el mismo motivo y la
+    fecha de su visita_anterior = fecha_actual + hora_actual -> 200.
+  - Cualquier otra combinación no es repetición y sigue el orden.
+
+-------------------------------------------------------------------------
+4. CONCURRENCIA
+-------------------------------------------------------------------------
+  - FOR UPDATE OF o en la oportunidad (paso 1): POST /visits, POST
+    /resultados-llamada, create-followup-task y esta ruta se ponen en
+    fila por oportunidad. Dos cambios a la vez sobre la misma: el segundo
+    ve el estado nuevo y da 200 (si es idéntico) o 409 visita_cambiada.
+  - Hueco libre: comprobar_hueco_libre(cursor, inicio, ahora, reglas,
+    excluir=[id de la confirmada actual]). La propia visita NO cuenta,
+    porque se cancela en esta misma transacción (C8 de D31, como
+    otra_hora). Respuesta a la pregunta: SÍ se puede mover a una hora
+    pegada a la suya, incluso solapada con su intervalo viejo (09:45 ->
+    11:00 del mismo día): el técnico deja de ir a la vieja.
+  - Carrera con otra visita del mismo día (otra oportunidad):
+    pg_advisory_xact_lock del día NUEVO (dentro de comprobar_hueco_libre);
+    el segundo espera, relee con READ COMMITTED y da 409 hueco_ocupado.
+    Sin interbloqueo: cada transacción toma su fila de oportunidad y
+    como mucho UN bloqueo de día.
+  - Orden de escritura (índice parcial): UPDATE de la vieja a 'cancelada'
+    PRIMERO, después INSERT de la nueva 'confirmada'.
+  - Segunda barrera en cada UPDATE (rowcount = 1): la vieja solo si SIGUE
+    'confirmada'; la oportunidad (al cancelar) solo si SIGUE en
+    'visita_agendada'.
+  - Cancelar no toma bloqueo de día: liberar un hueco no choca con nadie.
+
+-------------------------------------------------------------------------
+5. LA FICHA
+-------------------------------------------------------------------------
+Campo nuevo 1, para la pantalla (como llamada_registrable):
+  visita_modificable: null | {fecha_visita, acciones: ["cambiar",
+  "cancelar"]}
+  No null solo si la oportunidad está en 'visita_agendada', tiene una
+  visita 'confirmada' y su fecha_propuesta > now() de la foto de la
+  ficha. fecha_visita es la que la pantalla debe reenviar como
+  fecha_actual + hora_actual. La condición vive en UNA función de
+  services/ (lectura pura, como deducir_tipo_llamada) que usan la ficha
+  y el endpoint (pasos 5 y 7), para que no se contradigan. Sin id (H-D46-3).
+  Alternativa descartada: un booleano suelto (la pantalla tendría que
+  buscar ella la visita en visitas[]).
+Campo nuevo 2, el historial de cambios:
+  cambios_visita: [{accion, motivo, fecha_registro,
+  fecha_visita_anterior, fecha_visita_nueva, informe}], lo más antiguo
+  primero, [] si no hay.
+  (Corrección del tutor, 2026-10-25, PASO 1: accion está prohibida en la
+  ficha por ser el nombre de logs.accion (CLAVES_PROHIBIDAS de
+  check_ficha_oportunidad_http, en todos los niveles). En la ficha, cada
+  elemento lleva tipo_cambio (cambiar | cancelar) en vez de accion;
+  CLAVES_PROHIBIDAS no se toca. POST /cambios-visita (petición y
+  respuesta) y la columna de la tabla siguen con accion.
+  visita_modificable.acciones se queda: comprobado con ast contra
+  CLAVES_PROHIBIDAS (18) y CLAVES_DETALLE (10), ninguna clave nueva de la
+  ficha está en ellas.) Fechas en Madrid, sin ids. visitas[] ya enseña
+  la cancelada y la nueva; llamadas[] no cambia (registro de la llamada
+  original, H-D46-2).
+La raíz pasa de 15 a 17 claves (CLAVES_RAIZ de check_ficha_oportunidad
+_http). Consulta 7 nueva (SQL_CAMBIOS), con LEFT JOIN a visitas dos
+veces, en la misma foto REPEATABLE READ, READ ONLY.
+
+-------------------------------------------------------------------------
+6. EFECTOS EN EL RESTO
+-------------------------------------------------------------------------
+  - Estados: cambiar NO cambia el estado ('visita_agendada'); cancelar
+    -> 'perdida'. Los dos ponen fecha_ultimo_contacto = now() y
+    updated_at (el cliente ha hablado con administración; P8).
+  - Log (sin informe): 'visita_confirmada_cambiada' {cambio_id,
+    visita_cancelada_id, visita_id, fecha_visita_anterior, fecha_visita,
+    estado: 'visita_agendada'} y 'visita_confirmada_cancelada'
+    {cambio_id, visita_cancelada_id, motivo, estado: 'perdida'}.
+  - historial_cuadra: SÍ dejaría de cuadrar al cancelar si no se toca la
+    ficha: el estado actual sería 'perdida' y el último evento
+    interpretable, 'visita_agendada'. Por eso
+    'visita_confirmada_cancelada' entra en ACCIONES_HISTORIAL, con
+    EventoEstado nuevo y su estado leído de detalle->>'estado' (solo
+    'perdida' vale). Cambiar no es un cambio de estado: su log NO entra en
+    el historial (se ve en cambios_visita) y el historial sigue cuadrando
+    porque el estado no se mueve (P9).
+  - Lista diaria: sin cambios de código. e) enseña la confirmada NUEVA si
+    cae en el próximo laborable, y deja de enseñar la vieja (cancelada) y
+    las canceladas por D46. d) no mira confirmadas. b) exige
+    'presupuesto_enviado': una cancelada por D46 ('perdida') no vuelve a
+    seguimiento.
+  - Recordatorio (email 3): sin cambios de código. R2: si el cambio se
+    hace después de las 8:00 de la víspera, el cliente ya recibió el
+    recordatorio de la fecha VIEJA; el email de "visita cambiada" (D46.4)
+    lo corrige. Si se mueve A mañana después de las 8:00, no sale
+    recordatorio por email y la lista dice "recordar por teléfono"
+    (D41.1, comportamiento de hoy).
+  - GET /huecos-libres y la tool: sin cambios; la vieja deja de ocupar al
+    pasar a 'cancelada'.
+  - POST /visits (chat): sin cambios. Tras un cambio, sigue el 409
+    visita_confirmada; tras una cancelación, el router de n8n trata
+    'perdida' con su mensaje fijo.
+  - POST /resultados-llamada: el cambio de H-D46-1 (P5).
+
+-------------------------------------------------------------------------
+7. MIGRACIÓN paso18 (patrón de paso17)
+-------------------------------------------------------------------------
+scripts/migraciones_ejecutadas/paso18_cambios_visita.py:
+  - Freno: sin --confirmo-paso18, código 2 y nada. La real solo tras
+    "confirmo la migración paso18".
+  - --ensayo: todo dentro de una transacción con ConexionSinCommit y
+    ROLLBACK (el DDL de Postgres es transaccional), con la foto antes y
+    después.
+  - CREATE TABLE cambios_visita (sección 2), sus CHECK, UNIQUE, claves
+    foráneas, índice y ALTER TABLE ... ENABLE ROW LEVEL SECURITY, en UNA
+    transacción. Idempotente: si la tabla ya existe con su estructura,
+    no hace nada y lo dice.
+  - Expand: se aplica ANTES del merge; main no lee la tabla.
+scripts/migraciones_ejecutadas/paso18_vuelta_atras.py: DROP TABLE con
+  su propio freno, y SOLO si la tabla está vacía (si tiene filas, para y
+  avisa: serían cambios reales). Tras el merge, borrarla da 500 en la
+  ruta y en la ficha: solo vale antes o junto con revertir el código.
+scripts/check_migracion_cambios_visita.py: estructura, cada CHECK en su
+  SAVEPOINT (patrón de check_migracion_calculate_estimate), RLS activado
+  y 0 políticas. Falla a propósito antes de aplicar.
+Después: regenerar docs/schema_actual.sql (12 tablas); lo verifica
+check_schema_actual_ejecutable.
+
+-------------------------------------------------------------------------
+8. SCRIPTS QUE CAMBIAN (MEDIDO) Y PRUEBAS NUEVAS
+-------------------------------------------------------------------------
+Medición: grep de llamada_registrable, claves exactas de la ficha,
+resultado_ya_registrado, número de tablas, RLS, acciones de log,
+historial_cuadra y model_fields en los check_*.py, y lectura de cada
+tramo.
+CAMBIAN (4):
+  1. check_ficha_oportunidad_http: CLAVES_RAIZ (15 -> 17) y dos
+     conjuntos nuevos (CLAVES_MODIFICABLE, CLAVES_CAMBIO). Sin esto, la
+     comprobación de claves exactas de todas las fichas FALLA.
+  2. check_direccion_obra_service: su lista PROHIBIDAS (respuestas que no
+     pueden llevar direccion_obra, D42.5) gana CambioVisitaResponse.
+     Sin esto no falla, pero dejaría la ruta nueva sin vigilar.
+  3. check_resultados_llamada_http: el caso de H-D46-1 (repetición tras
+     un cambio y tras una cancelación), según P5.
+  4. scripts/fechas_prueba.py: un bloque nuevo al final para cada script
+     nuevo que crea visitas (regla del 2026-10-12).
+SE REVISAN A MANO (P4 de CLAUDE.md, no dan código distinto de 0):
+  check_rls_estado (12 tablas, todas con RLS, 0 políticas) y
+  check_foreign_keys (cuenta por columnas: las dos claves dobles nuevas
+  y la simple suman filas).
+SIN CAMBIOS (comprobado): check_schema_actual_ejecutable compara el
+  esquema recreado con public (no tiene cifras escritas; pide el
+  schema_actual.sql regenerado); check_resumen_solicitud_service y
+  check_aviso_gate_http recorren sus propios modelos; la lista diaria y
+  sus scripts no cambian de contrato; check_resultados_llamada_http línea
+  886 (409 resultado_ya_registrado sobre una confirmada) sigue valiendo.
+NUEVOS (3): check_migracion_cambios_visita,
+  check_cambios_visita_service (servicio con ConexionSinCommit y
+  ROLLBACK, autoprueba S0) y check_cambios_visita_http (puerto propio,
+  propuesta 8036, nunca el 8000).
+Verdes previstos:
+  V1  cambiar 201: vieja 'cancelada', nueva 'confirmada' a la hora
+      pedida, oportunidad sigue 'visita_agendada', una fila en
+      cambios_visita con su informe, un log sin informe;
+      fecha_fin_visita = inicio + duración vigente; los ids de la
+      respuesta son los de la tabla.
+  V2  cambiar dos veces seguidas (sin límite, D46.2): dos filas, solo la
+      última confirmada.
+  V3  cancelar 201: vieja 'cancelada', oportunidad 'perdida', motivo e
+      informe guardados, visita_id null, fecha_fin_visita null.
+  V4  repetición exacta de V1 y de V3: 200 y 0 filas nuevas (recuento
+      con marca propia e id > id_base).
+  V5  409 sin_visita_confirmada (solo 'solicitada'; sin visita),
+      visita_cambiada (fecha_actual vieja), visita_pasada (insertada por
+      SQL con fecha pasada, marca propia), visita_ya_cancelada.
+  V6  422: misma_hora_actual, antelacion_insuficiente (hoy; con la rama
+      de R5 de D45 según la hora de la pasada), fin_de_semana,
+      fuera_de_rejilla, motivo no_contesta y sin_decision, falta informe,
+      direccion_obra (extra), fecha con cancelar, motivo con cambiar.
+  V7  409 hueco_ocupado con huecos_libres (otra visita propia del script
+      en esa hora) y cambio a una hora pegada a la propia: 201.
+  V8  5 cambios simultáneos distintos sobre la misma oportunidad: un 201,
+      el resto 409 visita_cambiada; 2 cambios a la misma hora en
+      oportunidades distintas: un 201 y un 409 hueco_ocupado.
+  V9  401 sin X-Gate-Secret y con WEBHOOK_SECRET; 404.
+  V10 ficha: visita_modificable con la fecha correcta antes, con la nueva
+      tras V1, null tras V3 y en una pasada; cambios_visita con los
+      informes; historial_cuadra true tras V1 y tras V3.
+  V11 503 configuracion_incompleta en cambiar con una regla rota (en el
+      servicio, con ConexionSinCommit), con su log; cancelar sin reglas:
+      201.
+  V12 0 claves de importe ni de dirección en todas las respuestas.
+  V13 (P5) repetición de la llamada original tras un cambio: 409, no 200.
+Pruebas en negativo (sobre copias, de una en una):
+  N1  dependencia de WEBHOOK_SECRET en vez de X-Gate-Secret -> V9 rojo.
+  N2  sin FOR UPDATE -> V8 rojo (dos 201 o un 500 por el índice).
+  N3  sin excluir la propia en el hueco -> V7 (hora pegada) rojo.
+  N4  INSERT antes del UPDATE -> 500 por el índice parcial (V1 rojo).
+  N5  cancelar sin pasar a 'perdida' -> V3 y V10 (historial) rojos.
+  N6  sin comprobar visita_pasada -> V5 rojo.
+  N7  sin la antelación de administración (primer_dia None) -> V6 rojo.
+  N8  con la antelación del CHAT -> V1 rojo si el 1.er laborable tiene
+      horas libres ([INFO] si no, y se cubre en el servicio).
+  N9  repetición que vuelve a escribir -> V4 rojo.
+  N10 repetición después del estado -> V4 (cancelar) rojo: da 409.
+  N11 sin comprobar fecha_actual -> V5 (visita_cambiada) y V8 rojos.
+  N12 informe copiado en el log -> V1 rojo.
+  N13 ficha sin 'visita_confirmada_cancelada' en ACCIONES_HISTORIAL ->
+      V10 (historial_cuadra false) rojo.
+  N14 sin el arreglo de H-D46-1 -> V13 rojo.
+  N15 la respuesta lleva direccion_obra -> V12 y
+      check_direccion_obra_service rojos.
+  N16 paso18 sin aplicar -> check_migracion_cambios_visita rojo y 500 en
+      la ruta y en la ficha (primera prueba de la fase 2).
+  N17 cambiar llama a commit() con el cursor de la prueba -> FALLO
+      contado por ConexionSinCommit (regla del 2026-10-08).
+Predicción del recuento (PREVISIÓN, no medida; bases: plan D42 y D45):
+  check_migracion_cambios_visita  nuevo  ~40 (falla antes de paso18)
+  check_cambios_visita_service    nuevo  ~45
+  check_cambios_visita_http       nuevo  ~90
+  check_ficha_oportunidad_http    69 -> ~73 (+ V10 en su script)
+  check_direccion_obra_service    base de D42 + 1
+  check_resultados_llamada_http   211 (D45) -> ~213 (P5)
+  Suite: 61 (D45) -> 64 scripts, 64/64 con código 0 en UNA pasada
+  válida.
+Regresión obligatoria (regla de visitas, 2026-10-12): los 19 scripts que
+crean visitas o leen huecos de D42 más los de D45 (check_mcp_huecos
+_libres, check_huecos_libres_service) y los 2 nuevos que crean visitas,
+y después la suite completa.
+
+-------------------------------------------------------------------------
+9. LO QUE TENDRÁ QUE CAMBIAR EN n8n (solo la lista)
+-------------------------------------------------------------------------
+  1. Pantalla de llamadas (el tutor; no está en el repositorio): con
+     visita_modificable no null, dos botones "Cambiar visita" y
+     "Cancelar visita"; reenviar su fecha_visita como fecha_actual +
+     hora_actual; para la hora nueva, GET /huecos-libres (canal de
+     administración); enseñar cambios_visita; tratar los 409 y 422
+     nuevos (visita_cambiada: "vuelve a abrir la ficha"; no avisar a WF4
+     de los errores del operador). Tras 201 de cambiar: WF5 borrar
+     (visita_cancelada_id), WF5 guardar (visita_id, fecha_visita,
+     fecha_fin_visita) y WF7. Tras 201 de cancelar: WF5 borrar.
+  2. WF5: el texto de la descripción ("los cambios se hacen desde la
+     pantalla de llamadas"); el disparador ya admite 'guardar' y 'borrar'
+     por visita_id (sin cambios de lógica).
+  3. WF7: el tipo 'visita_confirmada' ya sirve (lee la confirmada de la
+     ficha, que tras el cambio es la nueva). Opcional: un tipo
+     'visita_cambiada' con asunto "Tu visita técnica ha cambiado" (P7).
+  4. WF_ficha_oportunidad: enseñar cambios_visita y la etiqueta del
+     evento 'visita_confirmada_cancelada'.
+  5. Documentación: Adenda (fila nueva, 5.10 sin la frase de la línea
+     1500, sección 5.15), Contrato_Formulario_Llamadas.md (línea 291 y
+     sección nueva) y CLAUDE.md.
+
+-------------------------------------------------------------------------
+10. RIESGOS, PREGUNTAS Y TAMAÑO
+-------------------------------------------------------------------------
+R1. Festivos: siguen contando como laborables (como D45).
+R2. Recordatorio ya enviado con la fecha vieja (sección 6).
+R3. H-D46-2: cualquier lector futuro que tome llamadas[].fecha_visita
+    como "la visita actual" se equivoca tras un cambio.
+R4. Operador no identificado (llave compartida, como 5.5): la fila no
+    dice QUIÉN cambió.
+R5. Una visita en curso (empezó hace 10 minutos) ya es "pasada" y no se
+    puede tocar: es lo que dice D46.5 (futura = inicio > now()).
+R6. Las 10 confirmadas ya pasadas quedan como están (H-D46-4).
+
+P1. Forma de la ruta: ¿(A) POST /cambios-visita con accion (recomendado),
+    (B) dos rutas, o (C) ampliar /resultados-llamada (desaconsejado)?
+P2. ¿Tabla nueva cambios_visita (recomendado), solo logs o ampliar
+    tablas existentes?
+P3. ¿fecha_actual + hora_actual obligatorias en el cuerpo (recomendado:
+    protege de una pantalla desfasada y define bien la repetición) o solo
+    oportunidad_id?
+P4. Antelación al CANCELAR: D46.5 solo pide "futura". ¿Se puede cancelar
+    una visita de hoy dentro de una hora? Recomendación: sí (solo
+    futura); la antelación de administración solo para la hora NUEVA.
+P5. H-D46-1: ¿la repetición de POST /resultados-llamada responde 409
+    (motivo nuevo, propuesta visita_modificada_despues) cuando su visita
+    ya no está 'confirmada' por D46? Recomendación: sí, en esta rama
+    (si no, un reintento resucita el evento viejo en el calendario).
+P6. Texto de la visita nueva (texto_cliente es NOT NULL): ¿texto fijo
+    "Visita cambiada por teléfono por administración." (recomendado,
+    como otra_hora) o copiar el de la vieja?
+P7. WF7: ¿basta 'visita_confirmada' o un tipo 'visita_cambiada'? Es de
+    n8n; el backend no cambia en ningún caso.
+P8. ¿fecha_ultimo_contacto = now() en cambiar y cancelar? Recomendación:
+    sí, como todo resultado de 4b (pre-decisión 7).
+P9. ¿El cambio entra en el historial de la ficha como evento (con
+    estado 'visita_agendada')? Recomendación: no (no cambia el estado);
+    la cancelación sí (pasa a 'perdida').
+P10. ¿Índice en cambios_visita(oportunidad_id)? Tablas pequeñas; lo
+    propongo por coherencia con las consultas por oportunidad.
+    Recomendación: sí.
+P11. ¿Un cambio cuenta para "sin límite de veces" también tras cambios
+    del mismo día? Recomendación: sí, sin tope (D46.2); cada uno con su
+    fila e informe.
+
+TAMAÑO (MEDIDO sobre el código actual; las líneas nuevas, aproximadas):
+  app/ nuevo: services/cambios_visita_service.py ~330 (referencia:
+    resultados_llamada_service.py, 669), schemas/cambios_visita.py ~150
+    (resultados_llamada.py, 283), api/cambios_visita.py ~90
+    (api/resultados_llamada.py, 124).
+  app/ que cambia: main.py +2; ficha_oportunidad_service.py (463) ~+70;
+    schemas/ficha_oportunidad.py (220) ~+50;
+    resultados_llamada_service.py ~+20 (P5); api/resultados_llamada.py
+    solo comentarios. reglas_visita.py, huecos_libres_service.py y
+    listado_llamadas_service.py: sin cambios (se reutilizan
+    comprobar_hueco_libre, validar_fecha, primer_dia_del_canal,
+    fin_de_visita y leer_reglas_visita).
+  Migración: paso18 ~220 (paso17: 221), vuelta atrás ~90 (85),
+    check_migracion_cambios_visita ~200.
+  Scripts nuevos: service ~500 (check_resultados_llamada_service, 686),
+    http ~800 (check_resultados_llamada_http, 1272). Scripts que cambian
+    (4): ~+80 líneas.
+  Documentación: este plan, la Adenda, el Contrato, CLAUDE.md.
+  Fuera del repositorio (n8n): los 4 puntos de la sección 9.
+Orden de trabajo propuesto (después del merge de D45, rama
+feat/n0-cambio-visita desde main): A plan; B1 migración (fase 1, sin
+ejecutar); B2 servicio, esquema y ruta; B3 ficha; B4 P5; C pruebas; fase
+2 (memoria medida, paso18 tras la frase, verdes, N1-N17, regresión y
+suite); D documentación.
+
+=========================================================================
+11. PASO 1, FASE 1 (2026-10-25): CÓDIGO Y SCRIPTS, SIN EJECUTAR
+=========================================================================
+Veredicto del tutor al PASO 0 (23/10, 22:00): APROBADO con 5 precisiones.
+P1 = (A) POST /cambios-visita con accion, undécimo include_router, solo
+REST, sin tool MCP, X-Gate-Secret. P2 = tabla cambios_visita (paso18). P3 =
+fecha_actual + hora_actual obligatorias. P4 = cancelar solo exige futura; la
+antelación de administración (D45), solo para la hora nueva. P5 = en esta
+rama, 409 visita_modificada_despues con el texto "Esta visita se ha cambiado
+o cancelado después de registrar la llamada: vuelve a abrir la ficha." P6 =
+"Visita cambiada por teléfono por administración." P7 = sin cambios en el
+backend. P8 sí, P9 de acuerdo, P10 sí, P11 sí, sin tope.
+Precisiones: (1) rama desde main con D45, árbol limpio salvo este plan,
+copiado a la rama en el primer commit; (2) futura/pasada con el now() de
+Postgres y "hoy" en Madrid, R5 de D45; (3) UNA función pura para "visita
+modificable", usada por la ficha y la ruta, con una prueba de que dicen lo
+mismo (N18); (4) ni dirección ni informe en logs ni respuestas; los ids de
+visita SÍ en la respuesta de la ruta, NUNCA en la ficha; (5) predicción
+escrita antes de la primera prueba de la fase 2.
+
+11.1 Comprobaciones de partida (2026-10-25, solo lectura)
+  git: rama main = origin/main = abe22a6; 19310ce, dfdcaff y abe22a6 son
+  antecesores de main (merge-base --is-ancestor); git status --porcelain:
+  solo "?? docs/Plan_Cambio_Visita_D46.txt". Rama feat/n0-cambio-visita
+  creada desde abe22a6. Puerto 8036: ningún script ni app/ lo nombra.
+
+11.2 Hallazgos del PASO 1
+  H-D46-5 (dicho y PARADO antes de B3): la clave accion de la ficha
+    choca con CLAVES_PROHIBIDAS (ver la corrección en la sección 5).
+    Respuesta del tutor: tipo_cambio.
+  H-D46-6: el informe de la ruta nueva rechaza el carácter nulo U+0000
+    con 422 (como H-D42-1 en direccion_obra): sin eso, psycopg2 da
+    ValueError y un 500. Solo en la ruta nueva; la deuda del informe de
+    /resultados-llamada sigue sin tocar.
+  H-D46-7: check_direccion_obra_service tiene 4 tramos de más de 4
+    sentencias sin comentario (21 sentencias); los mismos 4 en main
+    (medido sobre git show HEAD): no son de esta rama y no se tocan.
+  H-D46-8: la regla "1.er laborable de administración aceptado" (N8) la
+    prueba el servicio (S8); el script HTTP no tiene ese caso (dependería
+    de las visitas reales de ese día).
+  H-D46-9: N16 (tabla sin crear) hace que check_cambios_visita_service
+    se pare con una traza en S3 (leer_ficha, fuera de su SAVEPOINT) y
+    código 1, sin RESULTADO. Sigue siendo rojo; se anota para no
+    confundirlo con un fallo del script.
+
+11.3 Lo escrito (B1 -> B2 -> B3 -> B4 -> C)
+  B1  scripts/migraciones_ejecutadas/paso18_cambios_visita.py (SENTENCIAS
+      fuera de main; --ensayo con ConexionSinCommit o --confirmo-paso18,
+      exactamente uno; idempotente; 10 restricciones, índice y RLS),
+      paso18_vuelta_atras.py (solo con la tabla vacía) y
+      scripts/check_migracion_cambios_visita.py (S0, catálogo, cada
+      restricción en su SAVEPOINT, --ensayo <ruta>).
+  B2  app/schemas/cambios_visita.py, app/services/cambios_visita_service.py
+      (motivo_no_modificable, la función pura compartida), app/api/
+      cambios_visita.py y el undécimo include_router en app/main.py.
+  B3  app/schemas/ficha_oportunidad.py (VisitaModificable,
+      CambioVisitaFicha con tipo_cambio, evento visita_confirmada_cancelada,
+      raíz 17) y app/services/ficha_oportunidad_service.py (consulta 7,
+      visita_modificable con motivo_no_modificable, now() leído una vez tras
+      la cabecera).
+  B4  app/services/resultados_llamada_service.py (P5: EXISTS sobre
+      cambios_visita en la repetición) y un comentario en
+      app/api/resultados_llamada.py.
+  C   check_cambios_visita_service (nuevo), check_cambios_visita_http
+      (nuevo, puerto 8036), check_ficha_oportunidad_http (raíz 17,
+      CLAVES_MODIFICABLE, CLAVES_CAMBIO y dos comprobaciones),
+      check_direccion_obra_service (CambioVisitaResponse en PROHIBIDAS y
+      CambioVisitaCreate sin dirección), check_resultados_llamada_http
+      (CASO 9b, V13; cambios_visita en PROPIO; /cambios-visita en las rutas
+      de los 500) y fechas_prueba.py (dos bloques al final).
+  Medido antes del commit (ast.parse y tokenize, script del scratchpad):
+  los 17 .py tocados parsean, 0 bytes CR, y 0 tramos de más de 4
+  sentencias sin comentario en todo lo escrito en esta rama.
+
+11.4 PREDICCIÓN (escrita ANTES de la primera prueba de la fase 2; el real
+     se añade al lado después)
+  Verdes (después de aplicar paso18):
+  script                            base  +nuevas  previsto  real
+  check_migracion_cambios_visita     -      42     42/42
+    (antes de paso18: 2/42, solo S0 y "no queda nada"; con --ensayo
+    paso18 antes de aplicar: 43/43, una más, "el ensayo no deja nada")
+  check_cambios_visita_service       -      55     55/55
+    (S0 1, S1 7, S2 5, S3 6, S4 6, S5 4, S6 5, S7 2, S8 6, S9 2, S10 3,
+    S11 2, S12 5, final 1)
+  check_cambios_visita_http          -      62     62/62
+    (CASO 1 5, 2 16, 3 1, 4 6, 5 2, 6 5, 7 4, 8 5, 9 2, 10 2, 11 6, 12 5,
+    cierre 3)
+  check_ficha_oportunidad_http      70      +2     72/72
+  check_direccion_obra_service      88      +2     90/90
+  check_resultados_llamada_http    211      +4    215/215
+    (CASO 9b: 2 preparaciones y 2 repeticiones; sigue la guarda H-C-2 de
+    D45: si el próximo laborable no tiene 3 horas libres, BLOQUEADO POR
+    DATOS, P-D45-1, que D46 permite resolver cancelando desde la pantalla)
+  Suite: 61 -> 64 scripts, 64/64 con código 0 en UNA pasada válida.
+  check_rls_estado (12 tablas, todas con RLS, 0 políticas) y
+  check_foreign_keys (sube por las tres claves nuevas; cuenta por columnas
+  y una clave doble sale como 4 filas, nota de CLAUDE.md del 2026-10-03:
+  1 + 4 + 4 = 9 más): revisión a mano.
+
+  Mutantes (sobre copias, de una en una; rojo = algún FALLO):
+  N1  dependencia de WEBHOOK_SECRET: http en cascada (la llave del Agente
+      2 abre y la de administración no: casi todo en rojo).
+  N2  sin FOR UPDATE: http 60-61/62 (CASO 10: dos 201 o un 500; con 500,
+      también "ningún 500").
+  N3  sin excluir la propia en el hueco: service 54/55 (S9); http 61/62
+      (CASO 9).
+  N4  INSERT antes del UPDATE: todo cambio da UniqueViolation (500):
+      service ~40/55; http en cascada.
+  N5  cancelar sin pasar a 'perdida': service <= 52/55 (S6, S12); http
+      <= 59/62 (CASO 6, CASO 11).
+  N6  sin comprobar visita_pasada: service 54/55 (S3b, N18 lo ve: la
+      ficha dice null y la ruta acepta); http 61/62 (CASO 7).
+  N7  primer_dia None (sin antelación): service 53/55 (S2 y, si las 18:15
+      de hoy no han pasado, S8; si han pasado, 54/55); http 61/62 o
+      62/62 según la misma rama.
+  N8  antelación del CHAT: service 53/55 (S2, S8 1.er laborable); http
+      62/62 (H-D46-8).
+  N9  la repetición vuelve a escribir: service <= 53/55 (S5, S6); http
+      <= 60/62 (CASO 5, CASO 6).
+  N10 repetición después del estado: service 54/55 (S6: 409 en vez de
+      200); http 61/62 (CASO 6).
+  N11 sin comprobar fecha_actual: service <= 53/55 (S5 último, S7); http
+      <= 60/62 (CASO 7 y CASO 10, varios 201).
+  N12 informe copiado en el log: service 53/55 (S2 y S4); http 60/62
+      (CASO 4 y CASO 6).
+  N13 ficha sin visita_confirmada_cancelada en ACCIONES_HISTORIAL:
+      service 54/55 (S12); http 61/62 (CASO 11).
+  N14 sin el arreglo de P5: resultados_llamada_http 213/215 (CASO 9b);
+      service 54/55 (S11).
+  N15 la respuesta lleva direccion_obra: direccion_obra_service 89/90;
+      http <= 59/62 (claves exactas en CASO 4 y 6, y CASO 12).
+  N16 paso18 sin aplicar: migracion 2/42; service se para con traza y
+      código 1 (H-D46-9); http en cascada (500 en la ruta y en la ficha).
+  N17 cambiar llama a commit() con el cursor de la prueba: service
+      ~40/55 (cada cambio sale como CommitProhibido).
+  N18 la ficha con su propia condición en vez de motivo_no_modificable
+      (por ejemplo, sin mirar el estado de la oportunidad): service 54/55
+      (S3d: ficha con visita_modificable y ruta que rechaza) y S2 si deja
+      de llamar a la función (53/55).
+
+11.5 Fase 2 (cuando Gabi escriba "fase 2"): las condiciones de D45
+  (memoria >= 1,5 GB libres; sin chrome, msedge, docker/vmmem ni WINWORD;
+  enchufado; Kernel-Power 41/506/507 en cada tanda). Orden:
+  check_migracion_cambios_visita en rojo (2/42) -> paso18 --ensayo ->
+  "confirmo la migración paso18" -> paso18 --confirmo-paso18 -> regenerar
+  docs/schema_actual.sql (12 tablas) -> verdes -> N1-N18 -> regresión de
+  todos los scripts que crean visitas -> suite completa en UNA pasada ->
+  foto de datos reales antes y después (12 tablas).

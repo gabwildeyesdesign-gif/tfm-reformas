@@ -45,6 +45,9 @@ from app.schemas.resultados_llamada import MotivoResultado, ResultadoLlamada, Ti
 # D42: la dirección de la obra, con la MISMA clase que la entrada de POST
 # /resultados-llamada (tres claves, extra="forbid").
 from app.schemas.resultados_llamada import DireccionObra
+# D46: las dos acciones de POST /cambios-visita (cambiar, cancelar), las
+# mismas que el CHECK chk_cambios_visita_accion.
+from app.schemas.cambios_visita import AccionCambioVisita
 
 
 class EventoEstado(str, Enum):
@@ -67,6 +70,9 @@ class EventoEstado(str, Enum):
     # POST /resultados-llamada, seguimiento o confirmación de visita (B2,
     # L-b): 'visita_agendada' o 'perdida', según detalle->>'estado'.
     LLAMADA_REGISTRADA = "llamada_registrada"
+    # D46: POST /cambios-visita con accion=cancelar: 'perdida' (detalle->>'estado').
+    # El cambio de hora NO es un evento: no cambia el estado (P9).
+    VISITA_CONFIRMADA_CANCELADA = "visita_confirmada_cancelada"
 
 
 class PresupuestoFicha(PresupuestoAviso):
@@ -139,6 +145,48 @@ class LlamadaRegistrable(BaseModel):
     tipo_llamada: TipoLlamada
     # Los resultados de ese tipo, en su orden.
     resultados: list[ResultadoLlamada]
+
+
+class VisitaModificable(BaseModel):
+    """
+    D46: la visita confirmada que se puede cambiar o cancelar AHORA, para la
+    pantalla de llamadas (como llamada_registrable). Solo existe si la
+    oportunidad está en 'visita_agendada' y su visita confirmada es futura
+    (la MISMA condición que POST /cambios-visita: motivo_no_modificable de
+    app/services/cambios_visita_service.py). Sin id de visita (H-D46-3).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Inicio de la visita, en hora de Madrid: la pantalla lo reenvía como
+    # fecha_actual + hora_actual en POST /cambios-visita.
+    fecha_visita: datetime
+    # Lo que se puede hacer con ella: cambiar y cancelar, en ese orden.
+    acciones: list[AccionCambioVisita]
+
+
+class CambioVisitaFicha(BaseModel):
+    """
+    D46: un cambio o una cancelación de una visita confirmada, CON su informe
+    (como las llamadas). Sin ids. La clave es tipo_cambio y no accion
+    (corrección del tutor: accion está prohibida en la ficha por ser el
+    nombre de logs.accion).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # cambios_visita.accion: cambiar o cancelar.
+    tipo_cambio: AccionCambioVisita
+    # cambios_visita.motivo: solo al cancelar; si no, null.
+    motivo: MotivoResultado | None
+    # cambios_visita.created_at, en hora de Madrid.
+    fecha_registro: datetime
+    # Inicio de la visita que se cambió o se canceló, en hora de Madrid.
+    fecha_visita_anterior: datetime
+    # Inicio de la visita nueva (al cambiar), en hora de Madrid; null al cancelar.
+    fecha_visita_nueva: datetime | None
+    # cambios_visita.informe, entero.
+    informe: str
 
 
 class EventoHistorial(BaseModel):
@@ -218,3 +266,10 @@ class FichaOportunidadResponse(BaseModel):
     # es la ÚNICA respuesta que la devuelve (D42.5). Sin fechas (veredicto
     # del tutor al PASO 0).
     direccion_obra: DireccionObra | None
+    # D46 (2026-10-25): la visita confirmada que se puede cambiar o cancelar
+    # ahora, o null (sin visita confirmada, o ya pasada).
+    visita_modificable: VisitaModificable | None
+    # D46: los cambios y cancelaciones de visitas confirmadas, lo más antiguo
+    # primero; [] si no hay. Las visitas cancelada y nueva salen también en
+    # "visitas"; "llamadas" no cambia (registro de la llamada original).
+    cambios_visita: list[CambioVisitaFicha]

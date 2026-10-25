@@ -126,6 +126,10 @@ MENSAJE_SIN_PRESUPUESTO = "La oportunidad todavía no tiene presupuesto: no hay 
 # El 503 de las visitas (el mismo texto de siempre).
 MENSAJE_CONFIG_VISITAS = ("No se puede registrar la visita por un problema de configuración de las visitas "
                           "(reglas_negocio). Revisa las claves indicadas en 'faltan'.")
+# D46 (P5, H-D46-1): la repetición de una llamada cuya visita se cambió o se
+# canceló después por POST /cambios-visita (texto del veredicto del tutor).
+MENSAJE_VISITA_MODIFICADA = ("Esta visita se ha cambiado o cancelado después de registrar la llamada: "
+                             "vuelve a abrir la ficha.")
 # El 503 de la regla de 48 h (como create-followup-task: sin log).
 MENSAJE_CONFIG_SEGUIMIENTO = ("No se puede saber si la oportunidad está en el seguimiento: falta o no es válida "
                               "la regla de plazo de reglas_negocio (ver 'faltan'). No se ha escrito nada.")
@@ -161,7 +165,8 @@ class EstadoNoPermiteResultado(ResultadoRechazado):
     La oportunidad no admite ESTE resultado (-> 409). Motivos:
     sin_presupuesto, resultado_ya_registrado, estado_no_permitido,
     con_gate, contacto_registrado, visita_existente, plazo_no_cumplido,
-    resultado_no_admitido, visita_cambiada y visita_activa_existente.
+    resultado_no_admitido, visita_cambiada, visita_activa_existente y (D46,
+    P5) visita_modificada_despues.
     """
 
 
@@ -396,12 +401,20 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio):
     que en este camino todavía no se han leído: se leen aquí (UNA consulta,
     solo en este caso) y, si faltan, 503 con su log, como el 201 y como la
     repetición de /visits (P1 del plan D33).
+
+    D46 (P5, H-D46-1): si es la MISMA petición pero su visita se cambió o se
+    canceló después por POST /cambios-visita, 409 visita_modificada_despues
+    en vez de 200: con el 200, un reintento tardío de n8n mandaría a WF5
+    guardar la visita vieja y resucitaría su evento en el calendario.
     """
-    # SQL: el resultado previo (como mucho uno: UNIQUE (oportunidad_id)) y la
-    # fecha de su visita confirmada (LEFT JOIN: puede no tener).
+    # SQL: el resultado previo (como mucho uno: UNIQUE (oportunidad_id)), la
+    # fecha de su visita confirmada (LEFT JOIN: puede no tener) y (D46) si esa
+    # visita es la ANTERIOR de alguna fila de cambios_visita (EXISTS da false
+    # sin visita: d.visita_id NULL no es igual a nada).
     cursor.execute(
         """
-        SELECT d.id, d.tipo_llamada, d.decision, d.motivo, d.visita_id, v.fecha_propuesta, d.visita_cancelada_id
+        SELECT d.id, d.tipo_llamada, d.decision, d.motivo, d.visita_id, v.fecha_propuesta, d.visita_cancelada_id,
+               EXISTS (SELECT 1 FROM cambios_visita c WHERE c.visita_anterior_id = d.visita_id)
         FROM decisiones_gate d
         LEFT JOIN visitas v ON v.id = d.visita_id
         WHERE d.oportunidad_id = %s;
@@ -413,7 +426,8 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio):
     if previa is None:
         return None
     # Una variable por columna.
-    previa_id, previa_tipo, previa_resultado, previa_motivo, previa_visita, previa_fecha, previa_cancelada = previa
+    (previa_id, previa_tipo, previa_resultado, previa_motivo, previa_visita, previa_fecha, previa_cancelada,
+     previa_modificada) = previa
     # ¿La MISMA petición? Mismo resultado y, con visita, la misma fecha y
     # hora (dos datetime con zona se comparan por el instante); sin visita,
     # el mismo motivo.
@@ -432,6 +446,10 @@ def _repeticion_o_rechazo(cursor, oportunidad_id, estado, data, inicio):
     # entra en la comparación ni se escribe; una ya registrada no se puede
     # corregir por la API (limitación de N0; en N1, desde la ficha).
     if es_repeticion:
+        # D46 (P5): la visita de la llamada ya no es la confirmada (se cambió
+        # o se canceló después): 409, sin escribir ni leer nada más.
+        if previa_modificada:
+            raise EstadoNoPermiteResultado("visita_modificada_despues", MENSAJE_VISITA_MODIFICADA)
         # D33: sin visita, no hay fin (ni lectura de reglas).
         fin = None
         # Con visita: las reglas de visita, para su fin.
