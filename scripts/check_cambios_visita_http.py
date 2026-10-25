@@ -135,6 +135,24 @@ def consultar(sql, params=()):
     return filas
 
 
+# C1 (veredicto al PASO 1): la hora de referencia de las pruebas.
+def ahora_postgres():
+    """
+    El now() de Postgres, leído en una transacción de SOLO LECTURA (C1 del
+    veredicto al PASO 1: la referencia de tiempo es el reloj de la base de
+    datos, precisión 2, nunca el del PC). Cada llamada abre una transacción
+    nueva, así que da la hora de ESE momento.
+    """
+    # SQL: la primera orden de la transacción la hace READ ONLY.
+    cur.execute("SET TRANSACTION READ ONLY;")
+    # SQL: la hora de la base de datos.
+    cur.execute("SELECT now();")
+    ahora = cur.fetchone()[0]
+    # Se cierra la transacción de lectura.
+    cn.commit()
+    return ahora
+
+
 # Qué es propio: lo que cuelga de los clientes con la marca.
 SQL_OPS = ("SELECT o.id FROM oportunidades o JOIN leads l ON l.id = o.lead_id "
            "JOIN clientes c ON c.id = l.cliente_id WHERE c.email LIKE %(p)s")
@@ -326,7 +344,8 @@ def puerto_ocupado(puerto):
 
 # Fechas: los días laborables del bloque propio, uno por oportunidad con visita.
 MADRID = ZoneInfo("Europe/Madrid")
-HOY = datetime.now(MADRID).date()
+# C1 (veredicto al PASO 1): "hoy" en Madrid sale del now() de Postgres.
+HOY = ahora_postgres().astimezone(MADRID).date()
 DIAS = fechas_prueba.Dias("check_cambios_visita_http", HOY)
 (D_FORMA, D_CAMBIO, D_CANCEL, D_409, D_SOL, D_HUECO, D_CONC1, D_CONC2) = (DIAS.siguiente() for _ in range(8))
 # El sábado de la semana de D_409 (fin_de_semana).
@@ -538,7 +557,7 @@ try:
     # visita_pasada: una confirmada de hace dos horas, puesta por SQL (a minuto entero).
     _, op_pas = lead()
     # Hace dos horas, a minuto entero (si no, daría visita_cambiada antes).
-    pasada = (datetime.now(MADRID) - timedelta(hours=2)).replace(second=0, microsecond=0)
+    pasada = (ahora_postgres().astimezone(MADRID) - timedelta(hours=2)).replace(second=0, microsecond=0)
     por_sql_confirmada(op_pas, pasada)
     # La foto antes, y la cancelación de la pasada.
     antes = foto_op(op_pas)
@@ -566,7 +585,9 @@ try:
     # insuficiente (administración empieza el 1.er laborable después de
     # hoy); si ya pasaron, fecha_pasada. La regla la prueba el servicio.
     hoy_tarde = madrid(HOY, 18, 15)
-    esperado = "antelacion_insuficiente" if hoy_tarde > datetime.now(MADRID) + timedelta(minutes=1) else "fecha_pasada"
+    # C1: con el now() de Postgres de este momento (un minuto de margen por
+    # el tiempo que tarda la petición en llegar).
+    esperado = "antelacion_insuficiente" if hoy_tarde > ahora_postgres() + timedelta(minutes=1) else "fecha_pasada"
     print(f"  [INFO] hoy a las 18:15: se espera {esperado}")
     # El cambio a hoy, que no escribe nada.
     r = cambio(op_409, "cambiar", madrid(D_409, 8, 30), hoy_tarde)

@@ -647,6 +647,11 @@ escrita antes de la primera prueba de la fase 2.
   check_migracion_cambios_visita     -      42     42/42
     (antes de paso18: 2/42, solo S0 y "no queda nada"; con --ensayo
     paso18 antes de aplicar: 43/43, una más, "el ensayo no deja nada")
+    (Nota 2026-10-25, fase 2, tanda 1 (20:53:25-20:53:44, sin Kernel-Power
+    41/506/507): REAL antes de paso18 2/41 y con --ensayo 42/42. La
+    predicción tenía un ERROR DE SUMA: el catálogo son 15 comprobaciones
+    (1+1+1+1+2+2+4+1+1+1), no 16. Lo previsto bien sumado: 2/41, 42/42
+    con ensayo y 41/41 tras paso18. Se deja escrito el error, no se borra.)
   check_cambios_visita_service       -      55     55/55
     (S0 1, S1 7, S2 5, S3 6, S4 6, S5 4, S6 5, S7 2, S8 6, S9 2, S10 3,
     S11 2, S12 5, final 1)
@@ -660,6 +665,20 @@ escrita antes de la primera prueba de la fase 2.
     D45: si el próximo laborable no tiene 3 horas libres, BLOQUEADO POR
     DATOS, P-D45-1, que D46 permite resolver cancelando desde la pantalla)
   Suite: 61 -> 64 scripts, 64/64 con código 0 en UNA pasada válida.
+  (Nota 2026-10-25, veredicto del tutor al PASO 1, escrita ANTES de la
+  primera prueba de la fase 2:
+   C1: check_cambios_visita_http lee "hoy", la visita pasada y la rama de
+   la antelación de hoy del now() de Postgres (ahora_postgres(), una
+   transacción READ ONLY por llamada), nunca del reloj del PC. Además de
+   las líneas 541 y 569 que nombra el tutor, también HOY (línea 329), de
+   la que sale hoy_tarde. No añade ni quita comprobaciones: sigue 62/62.
+   C2: base de check_ficha_oportunidad_http MEDIDA = 70, fuente: el log de
+   la suite de D45 (scratchpad de la sesión 98325625, suite/
+   check_ficha_oportunidad_http.txt, escrito el 2026-10-23 a las 22:58:07,
+   dentro de la pasada válida de 22:52:06 a 23:14:21): "RESULTADO: 70/70
+   correctas". El script no ha cambiado en main desde 7bf7989
+   (2026-10-22 18:13), anterior a esa pasada (git log). El 69 del PASO 0
+   era la cifra de D26 sin medir. La predicción 72/72 no cambia.)
   check_rls_estado (12 tablas, todas con RLS, 0 políticas) y
   check_foreign_keys (sube por las tres claves nuevas; cuenta por columnas
   y una clave doble sale como 4 filas, nota de CLAUDE.md del 2026-10-03:
@@ -714,3 +733,82 @@ escrita antes de la primera prueba de la fase 2.
   docs/schema_actual.sql (12 tablas) -> verdes -> N1-N18 -> regresión de
   todos los scripts que crean visitas -> suite completa en UNA pasada ->
   foto de datos reales antes y después (12 tablas).
+
+11.6 FASE 2, RESULTADOS REALES (2026-10-25; salidas en el scratchpad de
+     la sesión 61ea7c59, carpeta fase2/)
+  Condiciones, medidas por Claude antes de cada tanda: 2,35-2,42 GB
+  libres; ningún chrome, msedge, docker/vmmem ni WINWORD; enchufado
+  (BatteryStatus 2). Kernel-Power 41/506/507: NINGUNO en ninguna tanda
+  (20:52-20:55, 20:54-21:01, 21:01-21:16, 21:15-21:27, 21:26-21:42,
+  21:40-22:03). Todas valen.
+  Tanda 1 (20:53:25-20:53:44): foto antes (11 tablas);
+    check_migracion_cambios_visita 2/41 (rojo, N16 real); paso18 --ensayo
+    código 0 (FOTO FINAL: NO EXISTE); el check con --ensayo 42/42.
+  paso18 APLICADA el 2026-10-25 a las 20:54:49 tras "confirmo la migración
+    paso18": 10 restricciones, índice, RLS, 0 filas, commit. Después:
+    check 41/41; docs/schema_actual.sql regenerado (32 PK/UNIQUE/FK, 25
+    CHECK, 3 índices sueltos); check_schema_actual_ejecutable 10/10.
+  Verdes (20:55:15-21:00:23), previsto -> real:
+    check_migracion_cambios_visita   41/41 (bien sumado) -> 41/41
+    check_cambios_visita_service     55/55 -> 55/55
+    check_cambios_visita_http        62/62 -> 62/62
+    check_ficha_oportunidad_http     72/72 -> 72/72
+    check_direccion_obra_service     90/90 -> 90/90
+    check_resultados_llamada_http   215/215 -> BLOQUEADO POR DATOS (guarda
+      H-C-2: el 26/10 solo tiene libre las 18:15; P-D45-1, declarado así
+      por el tutor). V13 queda cubierta por la S11 del servicio.
+    Ramas de la hora (precisión 2): las 18:15 de hoy ya habían pasado ->
+    fecha_pasada en los dos scripts; el 1.er laborable de administración
+    (26/10) pasó la antelación y dio hueco_ocupado.
+  Mutantes, de uno en uno sobre copias (tandas 21:01:58-21:15:25 y
+  21:15:49-21:25:28), previsto -> real (todos en ROJO):
+    N1  http cascada -> 15/62
+    N2  http 60-61/62 -> 60/62 (dos 500 en el CASO 10 y "ningún 500")
+    N3  service 54/55, http 61/62 -> 53/55 (también huecos_libres sin
+        las 09:45) y 60/62
+    N4  service ~40/55, http cascada -> 40/55 y 49/62 (UniqueViolation)
+    N5  service <=52/55, http <=59/62 -> 53/55 y 60/62
+    N6  service 54/55, http 61/62 -> 54/55 (S3b, N18 lo ve) y 61/62
+    N7  rama "18:15 pasadas": service 54/55, http 62/62 -> 54/55 (S2) y
+        62/62 (la regla la cubre S2; H-D46-8)
+    N8  service 53/55, http 62/62 -> 53/55 y 62/62
+    N9  service <=53/55, http <=60/62 -> 52/55 y 58/62
+    N10 service 54/55, http 61/62 -> 54/55 y 61/62
+    N11 service <=53/55, http <=60/62 -> 47/55 y 56/62 (cinco 201 a la vez)
+    N12 service 53/55, http 60/62 -> 52/55 y 60/62
+    N13 service 54/55, http 61/62 -> 54/55 y 61/62
+    N14 service 54/55 -> 54/55 (resultados_llamada_http bloqueado por
+        datos: no se puede ver allí esta noche)
+    N15 direccion_obra_service 89/90, http <=59/62 -> 89/90 y 59/62
+    N16 (simulado: el código apunta a una tabla inexistente; el rojo REAL
+        de la migración es el 2/41 de la tanda 1) service traza y código 1
+        (H-D46-9) -> igual; http -> código 1 en un assert de la
+        preparación (500 de /resultados-llamada); su finally borró el log
+        del 500 por id (22516), "no toca nada ajeno" y "no quedan datos
+        propios" OK.
+    N17 service ~40/55 -> 40/55 (CommitProhibido)
+    N18 service 54/55 (o 53/55 si deja de llamar a la función) -> 53/55
+        (S2 y S3d)
+    Después: 0 clientes de prueba, 0 logs error_no_controlado nuevos desde
+    la foto, 0 filas en cambios_visita (lectura de solo lectura).
+  Regresión de los 22 que crean visitas (los 20 de D45 + los 2 nuevos),
+    21:26:19-21:41:10: 21 con código 0 + check_resultados_llamada_http
+    BLOQUEADO POR DATOS.
+  Suite de 64 en UNA pasada válida, 21:41:49-22:01:10: 63/64 con código 0,
+    1 BLOQUEADO POR DATOS (check_resultados_llamada_http), 0 fallos.
+    check_graceful_shutdown y check_mcp_connection desde copias en el 8030
+    y el 8031; uvicorn del 8031 detenido por su PID 3348 (log = netstat).
+    Los cinco de P4 revisados a mano: check_foreign_keys 14 -> 23 (+9,
+    lo previsto), sin fallos; check_rls_estado 12 tablas, todas con RLS,
+    0 políticas (el "ERROR" es el INSERT de anon rechazado, esperado);
+    check_mcp_connection, check_pool_connections y
+    check_pool_transaction_state sin ningún fallo.
+  Foto de datos reales (solo recuentos y SHA-256): antes 20:53:26 (11
+    tablas), después 22:02:18 (12): las 11 anteriores IGUALES (recuento y
+    SHA-256), max(id) de logs 21606 en las dos; cambios_visita nueva, 0
+    filas.
+  Pendiente: P-D45-1 sigue (check_resultados_llamada_http, y con él V13
+    por HTTP y N14 por HTTP, cuando el próximo laborable tenga 3 horas
+    libres; D46 ya permite cancelar las visitas de prueba del 26/10 desde
+    la pantalla). Bloque D (Adenda, Contrato, CLAUDE.md) después del
+    veredicto.
