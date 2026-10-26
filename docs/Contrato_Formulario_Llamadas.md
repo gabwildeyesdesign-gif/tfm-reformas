@@ -158,6 +158,7 @@ El `mensaje` lo escribe el backend para administración y se puede enseñar tal 
 | Código | `motivo` | Qué enseñar | ¿Aviso técnico (WF4)? |
 |---|---|---|---|
 | 409 | `resultado_ya_registrado` | "Esta llamada ya tiene un resultado registrado (es definitivo)." | No |
+| 409 | `visita_modificada_despues` (D46, desde el 2026-10-26) | El `mensaje`: "Esta visita se ha cambiado o cancelado después de registrar la llamada: vuelve a abrir la ficha." Sale al REPETIR una llamada cuya visita ya se cambió o canceló (sección 4c). No llamar a WF5: el evento ya está al día. | No |
 | 409 | `resultado_no_admitido` | "La situación del cliente ha cambiado desde que abriste la ficha: vuelve a abrirla." | No |
 | 409 | `visita_cambiada` | "El cliente ha cambiado la hora pedida: vuelve a abrir la ficha y confírmale la nueva." | No |
 | 409 | `estado_no_permitido` | "Esta oportunidad no tiene ninguna llamada pendiente." | No |
@@ -281,6 +282,70 @@ a una página anterior: el bucle se comprueba al construirlo en n8n; el backend 
 alguien la cogió entre la página "Hora" y el envío: 409 `hueco_ocupado` (sección 4) y vuelta a "Día". Un 422
 `fuera_de_rejilla` no debería salir nunca: si sale, el formulario está enviando una hora que no vino de la consulta.
 
+## 4c. Cambiar o cancelar una visita YA confirmada: POST /cambios-visita (D46, desde el 2026-10-26)
+
+Para la pantalla de llamadas, cuando el cliente llama para cambiar la hora de una visita confirmada o para anularla.
+Misma llave (`X-Gate-Secret`). Contrato completo: Adenda 5.15; plan `docs/Plan_Cambio_Visita_D46.txt`.
+
+### En la ficha
+
+| Campo | Contenido |
+|---|---|
+| `visita_modificable` | `null`, o `{"fecha_visita": "2026-11-03T09:45:00+01:00", "acciones": ["cambiar", "cancelar"]}`. Solo existe si la oportunidad está en `visita_agendada` y su visita confirmada es futura (la misma regla que la ruta). Con `null`, no enseñar los botones. |
+| `cambios_visita` | Lista (lo más antiguo primero; `[]` si no hay): `{tipo_cambio ("cambiar" o "cancelar"), motivo (solo al cancelar), fecha_registro, fecha_visita_anterior, fecha_visita_nueva (null al cancelar), informe}`. La clave es `tipo_cambio`, no `accion`. Sin ids. |
+
+Con `visita_modificable` no `null`, dos botones: **"Cambiar visita"** y **"Cancelar visita"**. `llamadas[]` no cambia:
+es el registro de la llamada original, y tras un cambio su `fecha_visita` ya NO es la visita actual (la actual es
+`visita_modificable.fecha_visita`).
+
+### Qué se envía
+
+- `oportunidad_id`, `accion` (`"cambiar"` o `"cancelar"`), `informe` (siempre, 1 a 2000 caracteres).
+- `fecha_actual` y `hora_actual`: `visita_modificable.fecha_visita` partida en `AAAA-MM-DD` y `HH:MM` (hora de
+  Madrid). Obligatorias en las dos acciones: protegen de una pantalla desfasada.
+- Al cambiar: `fecha` y `hora` nuevas, elegidas con GET /huecos-libres (sección 4b; canal de administración). La
+  hora de la propia visita cuenta como libre para ella.
+- Al cancelar: `motivo` (`precio`, `plazo`, `proyecto_no_viable` u `otro`; nunca `no_contesta` ni `sin_decision`).
+- NUNCA `direccion_obra` (es de la oportunidad, no cambia) ni `visita_id`: dan 422.
+
+### Qué responde
+
+**201** (hecho) o **200** (repetición exacta: no se ha escrito nada). Cuerpo: `cambio_id`, `oportunidad_id`,
+`accion`, `motivo`, `estado_oportunidad` (`visita_agendada` al cambiar, `perdida` al cancelar), `visita_id` y
+`fecha_visita` (la visita NUEVA; `null` al cancelar), `fecha_fin_visita` (su fin; `null` al cancelar),
+`visita_cancelada_id` (la vieja, siempre) y `creado`. Los nombres son los de POST /resultados-llamada. Nunca
+importes ni la dirección.
+
+### Secuencia con WF5 (Google Calendar) y WF7 (email al cliente)
+
+| Respuesta | Qué hacer |
+|---|---|
+| 201 de `cambiar` | WF5 `borrar` con `visita_cancelada_id`; WF5 `guardar` con `visita_id`, `fecha_visita` y `fecha_fin_visita`; WF7 con el tipo `visita_confirmada` (lee la ficha, que ya tiene la nueva). |
+| 201 de `cancelar` | Solo WF5 `borrar` con `visita_cancelada_id`. Sin email (D46.4). |
+| 200 (repetición) | Lo mismo que el 201 de esa acción: borrar y guardar en WF5 son repetibles, y es normal tras un reintento. |
+| 4xx | Nada en WF5 ni en WF7. |
+
+### Errores
+
+| Código | `motivo` | Qué enseñar | ¿Aviso técnico (WF4)? |
+|---|---|---|---|
+| 409 | `visita_cambiada` | "La visita ya no es la que ves: alguien la ha cambiado. Vuelve a abrir la ficha." | No |
+| 409 | `sin_visita_confirmada` | "Esta oportunidad no tiene ninguna visita confirmada que cambiar o cancelar. Vuelve a abrir la ficha." | No |
+| 409 | `visita_pasada` | "La visita ya ha empezado o ha pasado: no se puede cambiar ni cancelar." | No |
+| 409 | `visita_ya_cancelada` | "Esta visita ya se canceló (la oportunidad está perdida)." | No |
+| 409 | `hueco_ocupado` | "Esa hora ya está ocupada por otra visita." + `huecos_libres`, y volver a la página "Hora". | No |
+| 422 | `misma_hora_actual` | "Es la misma hora que ya tiene: elige otra." | No |
+| 422 | `fecha_pasada`, `antelacion_insuficiente`, `fin_de_semana`, `fuera_de_franja` | El `mensaje` y volver a la página "Día". | No |
+| 422 | `fuera_de_rejilla` | No debería salir si la hora viene de GET /huecos-libres; el `mensaje` y volver a "Día". | **Sí** |
+| 422 | (lista de Pydantic, sin `motivo`) | Error de la pantalla (un campo mal enviado). | **Sí** |
+| 401 | — | "Error de configuración" (la credencial). | **Sí** |
+| 404 | `oportunidad_no_encontrada` | "Oportunidad no encontrada." | No |
+| 503 | `configuracion_incompleta` | "Sistema no disponible: avisa al responsable técnico." | **Sí** |
+| 500 / sin conexión | — | "Sistema no disponible." | **Sí** |
+
+Los errores del operador (los 409 y los 422 de negocio) NO se avisan a WF4. Reintentos: solo ante 500 o sin
+conexión.
+
 ## 5. Lo que este formulario NO hace (N0)
 
 - "Me lo pienso" no se registra: el caso sigue en la lista diaria al día siguiente (D25.14). La salida prevista es
@@ -288,5 +353,7 @@ alguien la cogió entre la página "Hora" y el envío: 409 `hueco_ocupado` (secc
   registro de intentos de llamada quedan para N1 (D29.1, D24.4).
   *(Nota 2026-10-12: D30 revisa D29.2: el aviso de "última llamada" no se hace en el backend (no hay bloque 4c),
   sino en n8n. El documento de D30 lo tiene el tutor en el Proyecto de claude.ai.)*
-- No corrige un resultado ya registrado ni cambia una visita ya confirmada (a mano en N0).
+- No corrige un resultado ya registrado (a mano en N0). *(Cambio 2026-10-26, D46: aquí decía también "ni cambia
+  una visita ya confirmada (a mano en N0)". Desde D46, una visita confirmada y futura se cambia o se cancela desde
+  la pantalla con POST /cambios-visita: sección 4c.)*
 - No identifica al operador (la llave es compartida).

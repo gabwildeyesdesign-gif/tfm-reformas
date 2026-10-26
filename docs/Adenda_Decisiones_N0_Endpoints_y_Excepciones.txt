@@ -19,8 +19,9 @@ endpoints y revisión técnica final.
 | 7 | GET /gate-avisos/{oportunidad_id} | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret (ver 5.6) | 200 SOLO para oportunidades con Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto {nombre, email, telefono, origen}, reforma {tipo_reforma, m2, nivel_acabados, incluye_cambios_estructurales}, fotos, presupuesto {fecha_presupuesto, motivo_gate, iva_pct_aplicado, importes con y sin IVA, umbral_gate_vigente}, decision (null o {decision, fecha_decision, motivo, fecha_visita}). SÍ importes; nunca el informe ni datos técnicos (ver 5.6). 404 / 409 sin_presupuesto / 409 sin_gate | **[Añadido 2026-10-03]** WF2 (aviso a administración por email) (hasta el 2026-10-22, también el formulario del alias POST /gate-decisions, quitado; ver 5.5). Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 |
 | 8 | GET /llamadas-del-dia | Ninguna (ni cuerpo ni parámetros). Cabecera X-Gate-Secret (ver 5.7) | 200: generado_en, dia_visitas, reglas {horas_recordatorio_gate, horas_seguimiento_presupuesto} y cinco listas: gates_sin_decision, seguimientos_por_abrir, seguimientos_abiertos, visitas_sin_confirmar, visitas_proximo_laborable. Cada elemento: oportunidad_id, motivo, tipo_reforma, contacto {nombre, telefono, origen} y sus fechas. NUNCA email ni importes (ver 5.7). 503 configuracion_incompleta, sin log | **[Añadido 2026-10-07]** WF3 (n8n), cada día laborable a las 9:00: la lista diaria de llamadas para administración (D25). Nunca un agente. Solo REST, solo lectura. **[Nota 2026-10-11, rama feat/n0-resumen-lista-diaria, D26.1]** Cada elemento lleva además el objeto "solicitud" {m2 (texto exacto o null), nivel_acabados, incluye_cambios_estructurales}, siempre presente, después de tipo_reforma; los de visita (d y e), además, texto_cliente de ESA visita. Siguen sin salir email e importes. Ver la nota del 2026-10-11 en 5.7 |
 | 9 | GET /oportunidades/{oportunidad_id}/ficha | oportunidad_id en la ruta (entero > 0). Cabecera X-Gate-Secret, puesta en el router (ver 5.9) | 200 para CUALQUIER oportunidad que exista, con o sin Gate: oportunidad_id, estado_oportunidad, fecha_solicitud, contacto y reforma (los de 5.6), fotos, presupuesto (null sin presupuesto; los 8 campos de 5.6 + requiere_aprobacion), visitas (todas), llamadas (con su INFORME), historial de estados, historial_cuadra y otras_oportunidades_mismo_email. SÍ email, importes e informes (ver 5.9). 404 oportunidad_no_encontrada; sin 409 ni 503 | **[Añadido 2026-10-10, D26.2]** Página protegida de n8n que abre administración antes de llamar a un cliente (desde la lista diaria de WF3 o el email de WF2). Nunca un agente. Solo REST, solo lectura **[Nota 2026-10-20]** La raíz añade resumen_solicitud (texto o null), después de reforma. Ver 5.12 **[Nota 2026-10-22, rama feat/n0-direccion-obra, D42]** Una clave más en la raíz, direccion_obra: {calle_numero, codigo_postal, municipio} o null. CONFIDENCIAL: es la ÚNICA respuesta que la devuelve (D42.5). Ver 5.13 |
-| 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) **[Nota 2026-10-22, rama feat/n0-direccion-obra, D42]** Entrada OPCIONAL direccion_obra {calle_numero, codigo_postal, municipio} con visita_acordada, confirmar_hora y otra_hora (422 con descartar y cliente_cancela; null = no enviarla); se guarda en direcciones_obra en la misma transacción. La respuesta NO cambia (nunca la devuelve). Ver 5.13 **[Nota 2026-10-23, rama feat/n0-antelacion-visitas, D45]** visita_acordada y otra_hora: como pronto, el 1.er día laborable después de hoy (dias_antelacion_visita_admin); si no, 422 antelacion_insuficiente (mismo mensaje). confirmar_hora no cambia: solo tiene que ser futura. Ver 5.14 |
+| 10 | POST /resultados-llamada | oportunidad_id (entero > 0), resultado ('visita_acordada' o 'descartar' en Gate y seguimiento; 'confirmar_hora', 'otra_hora' o 'cliente_cancela' en la confirmación de una visita pedida desde el chat), fecha y hora (con visita_acordada, confirmar_hora y otra_hora), motivo (con descartar y cliente_cancela; el catálogo de 5.5 más 'sin_decision', D29.3), informe (siempre). El tipo de llamada NO se envía: lo deduce el backend. Cabecera X-Gate-Secret (ver 5.10) | 201 (resultado nuevo) o 200 (repetición exacta): llamada_id, oportunidad_id, tipo_llamada, resultado, motivo, estado_oportunidad, visita_id, fecha_visita, visita_cancelada_id, creado. NUNCA importes (ver 5.10) | **[Añadido 2026-10-11, D25.9-D25.11, bloque 4b de D26.6]** Formulario de n8n que rellena administración DESPUÉS de cada llamada de la lista diaria (Gate, seguimiento o confirmación de visita). Nunca un agente. Solo REST. Contrato para el formulario: docs/Contrato_Formulario_Llamadas.md  **[Nota 2026-10-12, rama feat/n0-agente2]** 409 hueco_ocupado con huecos_libres en visita_acordada, confirmar_hora y otra_hora (D31, P16). Ver 5.11  **[Nota 2026-10-14, rama feat/n0-horario-visitas, D32]** Solo se aceptan las horas de inicio de la rejilla (con las reglas de hoy 08:30, 09:45, 11:00, 12:15, 17:00 y 18:15): otra hora dentro de la franja da 422 fuera_de_rejilla con horas_validas. Dos visitas chocan si entre el fin de una y el inicio de otra hay menos de desplazamiento_min (15). Ver 5.11 (e) **[Nota 2026-10-22, rama feat/n0-direccion-obra, D42]** Entrada OPCIONAL direccion_obra {calle_numero, codigo_postal, municipio} con visita_acordada, confirmar_hora y otra_hora (422 con descartar y cliente_cancela; null = no enviarla); se guarda en direcciones_obra en la misma transacción. La respuesta NO cambia (nunca la devuelve). Ver 5.13 **[Nota 2026-10-23, rama feat/n0-antelacion-visitas, D45]** visita_acordada y otra_hora: como pronto, el 1.er día laborable después de hoy (dias_antelacion_visita_admin); si no, 422 antelacion_insuficiente (mismo mensaje). confirmar_hora no cambia: solo tiene que ser futura. Ver 5.14 **[Nota 2026-10-26, rama feat/n0-cambio-visita, D46 (P5)]** La repetición exacta de una llamada cuya visita se cambió o se canceló después por POST /cambios-visita da 409 visita_modificada_despues ("Esta visita se ha cambiado o cancelado después de registrar la llamada: vuelve a abrir la ficha.") en vez de 200: con el 200, un reintento de n8n haría que WF5 resucitara el evento viejo. Ver 5.10 y 5.15 |
 | 11 | GET /huecos-libres | Sin parámetros (modo días) o ?fecha=AAAA-MM-DD (modo un día); cualquier otro parámetro, 422. Cabecera X-Gate-Secret, puesta en el router (ver 5.11 e) | 200 siempre que la petición sea válida. Modo días: modo, generado_en, dias [{fecha, dia_semana, manana, tarde, num_horas_libres, etiqueta}]. Modo un día: modo, generado_en, fecha, dia_semana, manana, tarde, horas, sin_horas_motivo (null, fecha_pasada, fin_de_semana o dia_completo). NUNCA datos de otras visitas. 401, 422 de forma, 503 configuracion_incompleta sin log | **[Añadido 2026-10-13, D32]** El formulario de n8n de POST /resultados-llamada, en sus páginas "Día" y "Hora". El Agente 2 tiene la misma consulta como tool MCP consultar_huecos_libres (sin etiqueta). Solo lectura. Forma exacta: docs/Contrato_Formulario_Llamadas.md **[Nota 2026-10-23, rama feat/n0-antelacion-visitas, D45]** Canal de ADMINISTRACIÓN (lo fija la ruta): el modo días empieza en el 1.er día laborable después de hoy; el modo un día da [] y sin_horas_motivo = antelacion_insuficiente (valor nuevo) con una fecha anterior. La tool consultar_huecos_libres es del CHAT: empieza en el 2.º. Ver 5.14 |
+| 12 | POST /cambios-visita | oportunidad_id (entero > 0), accion ('cambiar' o 'cancelar'), fecha_actual (YYYY-MM-DD) y hora_actual (HH:MM): la visita confirmada que el operador VE en la ficha (obligatorias en las dos acciones), fecha y hora nuevas (solo con cambiar), motivo (solo con cancelar: precio, plazo, proyecto_no_viable u otro), informe (1 a 2000 caracteres tras recortar, siempre). NUNCA direccion_obra ni visita_id (extra=forbid). Cabecera X-Gate-Secret (ver 5.15) | 201 (cambio nuevo) o 200 (repetición exacta): cambio_id, oportunidad_id, accion, motivo, estado_oportunidad, visita_id (la nueva; null al cancelar), fecha_visita, fecha_fin_visita (null al cancelar), visita_cancelada_id (la vieja, siempre), creado. NUNCA importes ni la dirección (ver 5.15) | **[Añadido 2026-10-26, D46, rama feat/n0-cambio-visita]** Pantalla de llamadas de n8n: administración cambia (sin límite de veces) o cancela por teléfono una visita YA confirmada y futura. Nunca un agente (el Agente 2 no tiene GATE_SECRET, D46.1). Solo REST. Tabla cambios_visita (paso18). Contrato para la pantalla: docs/Contrato_Formulario_Llamadas.md |
 
 Requisito de autenticación de POST /leads (añadido en la sesión de
 autenticación del webhook): además del cuerpo, toda petición debe traer la
@@ -1441,6 +1442,9 @@ resultado ya registrado -> 409 resultado_ya_registrado: una sola fila
 definitiva por oportunidad (UNIQUE (oportunidad_id), P6). Revisado para la
 confirmación de visitas (D25.11): con resultados definitivos, ningún camino
 de N0 lleva a una segunda llamada registrable.
+(Nota 2026-10-26, D46, P5: si la MISMA petición llega cuando su visita ya
+se cambió o se canceló por POST /cambios-visita, 409
+visita_modificada_despues en vez de 200, sin escribir nada. Ver 5.15.)
 
 | Código | motivo | Cuándo | Reintento en n8n |
 |---|---|---|---|
@@ -1451,6 +1455,7 @@ de N0 lleva a una segunda llamada registrable.
 | 404 | oportunidad_no_encontrada | No existe (también 2147483648 y 99999999999999999999) | NO |
 | 409 | sin_presupuesto | Sin presupuesto | NO |
 | 409 | resultado_ya_registrado | Ya hay un resultado DISTINTO registrado | NO |
+| 409 | visita_modificada_despues | (D46, P5) Repetición exacta, pero su visita se cambió o se canceló después por POST /cambios-visita | NO |
 | 409 | estado_no_permitido | El estado no tiene ninguna llamada | NO |
 | 409 | con_gate / contacto_registrado / visita_existente / plazo_no_cumplido | 'presupuesto_enviado' que no cumple un criterio de b) (el primero) | NO |
 | 409 | resultado_no_admitido | El resultado no es de ese tipo (formulario desfasado) | NO |
@@ -1497,7 +1502,9 @@ LIMITACIONES (asumidas en N0):
     llamada" (D29.2, bloque 4c) y descartar con 'sin_decision'. 'aplazar' y
     el registro de intentos de llamada, N1 (D29.1, D24.4).
   - Resultado definitivo: un error de administración se corrige a mano (R2
-    de /gate-decisions). Tampoco se cambia una visita ya confirmada.
+    de /gate-decisions). (Cambio 2026-10-26, D46: aquí decía "Tampoco se
+    cambia una visita ya confirmada"; desde D46, una visita confirmada y
+    futura se cambia o se cancela con POST /cambios-visita, ver 5.15.)
   - Operador no identificado (llave compartida), como 5.5.
   - Un caso con Gate con una visita 'solicitada' (solo posible a mano) se
     trata como confirmación de visita (C18 del plan).
@@ -1958,6 +1965,118 @@ Limitaciones:
   - Visitas 'solicitada' anteriores a D45 con fechas ya demasiado cercanas:
     se pueden confirmar (confirmar_hora no mira la antelación); otra_hora sí
     la mira.
+
+5.15 Cambiar o cancelar una visita confirmada, D46: POST /cambios-visita
+(añadido el 2026-10-26, rama feat/n0-cambio-visita)
+
+Para qué (hallazgo H-129-2, 23/10): una visita confirmada no se podía
+cambiar ni cancelar (5.10 lo decía así), y en la práctica se cambiaba a
+mano. Decisión D46 (Gabi, 23/10 21:10) y veredictos del tutor al PASO 0, al
+PASO 1 y a la fase 2: plan docs/Plan_Cambio_Visita_D46.txt.
+
+Quién y cómo: la pantalla de llamadas de n8n (administración, X-Gate-Secret
+en la ruta; undécimo include_router, solo REST, sin tool MCP). El Agente 2 no
+puede (D46.1): su llave da 401. La visita se identifica por la oportunidad
+(como mucho una activa) y por la fecha y hora que el operador ve en la ficha
+(fecha_actual + hora_actual), no por su id: la ficha no devuelve ids de
+visita.
+
+  cambiar   la confirmada pasa a 'cancelada' y se crea otra 'confirmada' a
+            la hora nueva, con el texto fijo "Visita cambiada por teléfono
+            por administración." (sin límite de veces, D46.2). La
+            oportunidad sigue en 'visita_agendada'.
+  cancelar  la confirmada pasa a 'cancelada' y la oportunidad a 'perdida',
+            con motivo obligatorio del catálogo de cliente_cancela (sin
+            no_contesta ni sin_decision, D46.3).
+Las dos ponen fecha_ultimo_contacto = now() y updated_at, escriben una fila
+en cambios_visita con el informe y UN log sin el informe:
+'visita_confirmada_cambiada' {cambio_id, visita_cancelada_id, visita_id,
+fecha_visita_anterior, fecha_visita, estado} o
+'visita_confirmada_cancelada' {cambio_id, visita_cancelada_id, motivo,
+estado: 'perdida'}. Solo la cancelación entra en el historial de la ficha
+(cambia el estado); el cambio de hora se ve en cambios_visita.
+
+Reglas de la hora nueva (solo al cambiar): las de siempre (futura, de lunes
+a viernes, franja y rejilla) con la antelación de ADMINISTRACIÓN de D45 (5.14)
+y el hueco libre de D31/D32, donde la propia visita NO cuenta (se cancela en
+la misma transacción): se puede mover a una hora que choca con la vieja.
+Cancelar solo exige que la visita sea futura (P4): ni reglas ni hueco.
+"Futura" y "pasada" con el now() de Postgres: una visita que ya empezó es
+pasada (inicio <= now()).
+
+| Código | motivo | Cuándo | Reintento en n8n |
+|---|---|---|---|
+| 201 | — | Cambio o cancelación nuevos | — |
+| 200 | — | Repetición exacta; no escribe nada (el informe nuevo se ignora) | — |
+| 401 | — | Falta X-Gate-Secret o es incorrecto (también el valor de WEBHOOK_SECRET y la llave del Agente 2); antes del cuerpo | NO |
+| 422 | (Pydantic) | Forma: campo de más (direccion_obra, visita_id), acción desconocida, combinación prohibida (fecha/hora con cancelar, motivo con cambiar, sin motivo al cancelar), motivo no_contesta o sin_decision, informe vacío, de más de 2000 o con U+0000, formatos | NO |
+| 404 | oportunidad_no_encontrada | No existe la oportunidad | NO |
+| 409 | visita_ya_cancelada | El último cambio de la oportunidad es una cancelación (con otro motivo, otra fecha u otra acción) | NO |
+| 409 | sin_visita_confirmada | La oportunidad no está en 'visita_agendada' o no tiene una visita 'confirmada' (sin visita, o solo 'solicitada') | NO |
+| 409 | visita_cambiada | fecha_actual + hora_actual no es la confirmada (otro operador la cambió: pantalla desfasada) | NO |
+| 409 | visita_pasada | La confirmada ya empezó o pasó | NO |
+| 503 | configuracion_incompleta | Al cambiar, una regla de visita falta o no es válida (con log, origen "cambios_visita"; 503 diferido) | Inútil, inofensivo |
+| 422 | misma_hora_actual | Al cambiar, la hora nueva es la actual | NO |
+| 422 | fecha_pasada / antelacion_insuficiente / fin_de_semana / fuera_de_franja / fuera_de_rejilla (con horas_validas) | Las reglas de la hora nueva | NO |
+| 409 | hueco_ocupado (con huecos_libres) | La hora nueva choca con OTRA visita activa | NO |
+| 500 | — | Error no controlado | SÍ, con backoff |
+
+Orden de las comprobaciones: 401 -> 422 -> 404 (FOR UPDATE de la
+oportunidad, now() en la misma consulta) -> repetición exacta (200) -> 409
+visita_ya_cancelada -> 409 sin_visita_confirmada -> 409 visita_cambiada ->
+409 visita_pasada -> cancelar: escritura; cambiar: 503 -> 422
+misma_hora_actual -> 422 de fecha -> 409 hueco_ocupado -> escritura. La
+repetición va antes que el estado (tras cancelar, la oportunidad ya está
+'perdida', y un reintento legítimo daría 409). "Visita modificable"
+(sin_visita_confirmada y visita_pasada) la decide UNA función pura,
+motivo_no_modificable, la misma que usa la ficha para visita_modificable.
+
+Repetición (D7): cambiar, si el último cambio es 'cambiar', su visita nueva
+SIGUE confirmada y es la hora pedida, y su visita anterior es la fecha
+actual enviada (lee las reglas para fecha_fin_visita: 503 diferido si
+faltan); cancelar, si el último es 'cancelar' con el mismo motivo y la misma
+fecha actual. Cualquier otra combinación sigue el orden.
+
+Concurrencia (verificada, CASO 10 de check_cambios_visita_http): FOR UPDATE
+de la oportunidad (en fila con /visits, /resultados-llamada y
+/create-followup-task); 5 cambios distintos a la vez -> un 201 y cuatro 409
+visita_cambiada. pg_advisory_xact_lock del día NUEVO (dentro de
+comprobar_hueco_libre): 2 cambios a la misma hora en oportunidades
+distintas -> un 201 y un 409 hueco_ocupado. Primero se cancela la vieja y
+después se inserta la nueva (índice parcial de una visita activa); segunda
+barrera en cada UPDATE.
+
+Tabla cambios_visita (paso18, aplicada el 2026-10-25 a las 20:54:49; la
+12.ª, con RLS sin políticas): id, oportunidad_id (FK), accion
+('cambiar' | 'cancelar'), visita_anterior_id (NOT NULL) y visita_nueva_id
+(solo al cambiar), las dos con clave foránea DOBLE (visita, oportunidad)
+hacia visitas(id, oportunidad_id), motivo (solo al cancelar), informe (1..2000
+recortado), created_at. UNIQUE en cada visita (una visita se cambia o se
+cancela una vez), CHECK de acción, motivo, informe y coherencia, índice por
+oportunidad_id. Vuelta atrás escrita, sin ejecutar, solo con la tabla vacía:
+scripts/migraciones_ejecutadas/paso18_vuelta_atras.py.
+
+En la ficha (5.9): visita_modificable (null o {fecha_visita, acciones:
+[cambiar, cancelar]}, solo con una confirmada futura en 'visita_agendada') y
+cambios_visita [{tipo_cambio, motivo, fecha_registro, fecha_visita_anterior,
+fecha_visita_nueva, informe}], sin ids. tipo_cambio y no accion: accion está
+prohibida en la ficha por ser el nombre de logs.accion (corrección del
+tutor al PASO 1). La raíz pasa a 17 claves. llamadas[] no cambia: es el
+registro de la llamada ORIGINAL, y tras un cambio su fecha_visita ya no es
+la visita actual (la actual es visita_modificable o la confirmada de
+visitas[]).
+
+En POST /resultados-llamada (5.10, P5): la repetición exacta de una llamada
+cuya visita se cambió o se canceló después da 409 visita_modificada_despues
+(H-D46-1).
+
+Limitaciones:
+  - Festivos (como 5.14).
+  - Un recordatorio por email ya enviado con la fecha vieja: lo corrige el
+    email de "visita cambiada" de n8n (WF7, D46.4).
+  - Operador no identificado (llave compartida), como 5.5.
+  - Las confirmadas ya pasadas siguen 'confirmada' para siempre: nadie
+    escribe 'completada' (H-D46-4).
 
 6. Revisión técnica final — hallazgos y resolución
 

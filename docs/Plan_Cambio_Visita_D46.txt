@@ -812,3 +812,16 @@ escrita antes de la primera prueba de la fase 2.
     libres; D46 ya permite cancelar las visitas de prueba del 26/10 desde
     la pantalla). Bloque D (Adenda, Contrato, CLAUDE.md) después del
     veredicto.
+  (Nota 2026-10-26, veredicto del tutor a la fase 2 (APROBADA), parte 1:
+   P-D45-1 CERRADO. Condiciones medidas a las 15:43:45: 2,40 GB libres,
+   sin procesos ajenos, enchufado (a las 15:42:33 el portátil estaba con
+   batería: se paró y se avisó; Gabi lo enchufó). Kernel-Power 41/506/507:
+   ninguno entre 15:42 y 15:54.
+     check_resultados_llamada_http  previsto 215/215 -> REAL 215/215
+       (15:43:57-15:47:51; la guarda H-C-2 eligió el 27/10 08:30, 17:00 y
+       18:15; CASO 9b, V13 de D46, en verde; CASO 7b de D45 por la rama
+       antelacion_insuficiente, 18:15 de hoy aún futura).
+     N14 (sin el arreglo de P5)     previsto 213/215 -> REAL 213/215
+       (15:48:02-15:52:15; las dos repeticiones del CASO 9b dan 200).
+   Foto de las 12 tablas (solo recuentos y SHA-256): antes 15:43:59 y
+   después 15:52:30, las 13 entradas iguales (max(id) de logs 21606).)

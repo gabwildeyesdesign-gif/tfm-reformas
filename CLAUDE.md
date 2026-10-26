@@ -325,6 +325,16 @@ antelacion_insuficiente y sin_horas_motivo nuevo. El canal lo fija el
 adaptador (parámetro obligatorio), nunca la petición. Reglas
 dias_antelacion_visita_chat y dias_antelacion_visita_admin (paso17).
 Detalle: Adenda 5.14 y docs/Plan_Antelacion_Visitas_D45.txt.)
+(Nota 2026-10-26, D46: D45 ya está en main (abe22a6). En la rama
+feat/n0-cambio-visita (pendiente de merge), POST /cambios-visita: undécimo
+include_router, solo REST, sin tool MCP, X-Gate-Secret. Administración
+cambia (sin límite) o cancela (pasa a 'perdida', con motivo) una visita YA
+confirmada y futura, con informe; tabla nueva cambios_visita (paso18, la
+12.ª). La ficha gana visita_modificable y cambios_visita (con tipo_cambio,
+nunca accion). La repetición de POST /resultados-llamada da 409
+visita_modificada_despues si su visita se cambió o canceló (P5). Detalle:
+Adenda 5.15, docs/Contrato_Formulario_Llamadas.md (4c) y
+docs/Plan_Cambio_Visita_D46.txt.)
 
 calculate-estimate tiene las dos (MCP en producción, REST para
 pruebas). get_business_rules() y request_missing_information() son
@@ -420,7 +430,8 @@ SOLO REST.
   reglas_negocio.umbral_aprobacion_manual sigue existiendo pero está marcada
   como OBSOLETA y nadie la lee: editarla no tiene ningún efecto.
   El proyecto tiene por tanto 9 tablas, no 8. (Desde paso10, 2026-09-28,
-  son 10: se añadió decisiones_gate.)
+  son 10: se añadió decisiones_gate. Desde paso16, 2026-10-22, son 11, con
+  direcciones_obra; desde paso18, 2026-10-25, son 12, con cambios_visita.)
 - EstadoOportunidad (app/schemas/common.py, desde el 2026-10-03) replica
   el CHECK oportunidades_estado_check: los mismos 8 valores, en el mismo
   orden (nueva, cualificada, pendiente_aprobacion, visita_agendada,
@@ -848,6 +859,29 @@ SOLO REST.
 > prueba del 26/10 desde la pantalla; hasta entonces V13 la cubre solo la
 > prueba pura. Pendiente solo el veredicto del tutor y el merge, que confirma
 > Gabi.)
+> (Nota 2026-10-26: D45 está en main (abe22a6). P-D45-1 CERRADO en la rama de
+> D46: check_resultados_llamada_http 215/215 el 2026-10-26 a las
+> 15:43:57-15:47:51 (el 27/10 tenía 3 horas libres), así que V13 de D45
+> queda cubierto también por HTTP; detalle en la 11.6 del plan D46.)
+>
+> **(Nota 2026-10-26.) Bloque actual: D46, cambiar o cancelar una visita YA
+> confirmada** (hallazgo H-129-2; decisión D46 y veredictos del tutor al PASO
+> 0, al PASO 1 y a la fase 2, APROBADA), en la rama `feat/n0-cambio-visita`,
+> **pendiente de merge** (PASO 1 ab1036b, fase 2 a802dba, y el commit de
+> P-D45-1 y documentación). Plan docs/Plan_Cambio_Visita_D46.txt (predicción
+> y resultados en su sección 11); contrato en la Adenda 5.15 y en
+> docs/Contrato_Formulario_Llamadas.md (4c). OJO: la migración paso18 (tabla
+> cambios_visita, la 12.ª, con RLS) YA ESTÁ APLICADA (2026-10-25 20:54:49,
+> solo expand; main no la lee). Misma regla de siempre: no hacer merge sin la
+> confirmación explícita de Gabi y siempre con `--ff-only`. Después del
+> merge: reiniciar el uvicorn del 8000 SIN --reload (app/ cambia). Lo que
+> queda en n8n (sección 9 del plan; el tutor): la pantalla de llamadas
+> (botones con visita_modificable, fecha_actual/hora_actual, GET
+> /huecos-libres para la hora nueva, cambios_visita, los 409 y 422 nuevos,
+> WF5 borrar/guardar y WF7, sin avisar a WF4 los errores del operador); el
+> texto de la descripción del evento de WF5; WF7 (opcional, un tipo
+> visita_cambiada); WF_ficha_oportunidad (cambios_visita y la etiqueta del
+> evento visita_confirmada_cancelada).
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1289,6 +1323,16 @@ de las pruebas 127-129 y no le quedan 3 horas libres; decisión del tutor:
 no se tocan, pendiente P-D45-1). Los 13 mutantes en rojo. H-D45-2:
 check_visits_service ajustado a las nueve reglas. Datos reales iguales
 salvo las dos filas de paso17. Detalle: sección 9 del plan D45.)
+(Nota 2026-10-25, rama feat/n0-cambio-visita, D46: la suite pasa a 64
+scripts, con check_migracion_cambios_visita, check_cambios_visita_service y
+check_cambios_visita_http (puerto 8036, nunca el 8000). 63/64 con código 0 +
+1 BLOQUEADO POR DATOS (check_resultados_llamada_http, P-D45-1) en UNA
+pasada válida, de 21:41:49 a 22:01:10, sin Kernel-Power 41, 506 ni 507,
+enchufado y sin procesos ajenos; uvicorn del 8031 detenido por su PID 3348
+(log = netstat). Los cinco de P4 revisados a mano (check_foreign_keys 14 ->
+23). Datos reales de las 11 tablas anteriores iguales antes y después;
+cambios_visita, 0 filas. El 2026-10-26, check_resultados_llamada_http
+215/215 (P-D45-1 cerrado). Detalle: sección 11.6 del plan D46.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
@@ -1670,6 +1714,13 @@ rápida, no sustituye esa documentación. Contiene:
   (P1 = A, H1-H4, resultados sin visita, forma del campo, regla de D42.5),
   pruebas en negativo N1-N15 y resultados de la fase 2. D42 lo tiene el tutor
   en el Proyecto de claude.ai.
+- Plan_Antelacion_Visitas_D45.txt — plan de D45 (antelación mínima de las
+  visitas, paso17), con su predicción y resultados.
+- Plan_Cambio_Visita_D46.txt — plan de D46 (rama feat/n0-cambio-visita):
+  POST /cambios-visita y la tabla cambios_visita (paso18), P1-P11 con los
+  veredictos del tutor, hallazgos H-D46-1 a H-D46-9, predicción y resultados
+  de la fase 2 (N1-N18) y el cierre de P-D45-1 (sección 11). D46 lo tiene el
+  tutor en el Proyecto de claude.ai.
 - Decisiones_D28_Resumen_Conversacion_y_Enlace_Ficha.md y
   Decisiones_D29_Me_Lo_Pienso_y_Ultima_Llamada.md — D28 (resumen de la
   conversación, rama 2) y D29 (copiados del Proyecto de claude.ai el
