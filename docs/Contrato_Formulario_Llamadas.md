@@ -322,8 +322,13 @@ importes ni la dirección.
 |---|---|
 | 201 de `cambiar` | WF5 `borrar` con `visita_cancelada_id`; WF5 `guardar` con `visita_id`, `fecha_visita` y `fecha_fin_visita`; WF7 con el tipo `visita_confirmada` (lee la ficha, que ya tiene la nueva). |
 | 201 de `cancelar` | Solo WF5 `borrar` con `visita_cancelada_id`. Sin email (D46.4). |
-| 200 (repetición) | Lo mismo que el 201 de esa acción: borrar y guardar en WF5 son repetibles, y es normal tras un reintento. |
+| 200 (repetición) | WF5 igual que el 201 (borrar y guardar son repetibles); WF7 NO: el email sale solo con el 201, para no mandar dos al cliente si se recarga la página (O-D46-1, decisión del tutor del 26/10). |
 | 4xx | Nada en WF5 ni en WF7. |
+
+**[Nota 2026-10-27, O-D46-1]** La fila "200 (repetición)" decía antes "Lo mismo que el 201 de esa acción", lo
+que incluía el email de WF7. Corregida según la decisión del tutor del 26/10: con el 200 se repite WF5, pero no
+WF7. Es lo que hace la pantalla publicada (`WF_pantalla_llamadas`, nodo `email_cambio`: solo `statusCode === 201`
+y `accion === 'cambiar'`), exportada a `n8n/` el 27/10.
 
 ### Errores
 

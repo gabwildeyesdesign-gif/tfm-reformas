@@ -882,6 +882,15 @@ SOLO REST.
 > texto de la descripción del evento de WF5; WF7 (opcional, un tipo
 > visita_cambiada); WF_ficha_oportunidad (cambios_visita y la etiqueta del
 > evento visita_confirmada_cancelada).
+>
+> **(Nota 2026-10-27.)** D46 está en `main` (8777032). La exportación saneada
+> de n8n tras D43-D46 está HECHA en la rama `docs/n8n-export-d46`, **pendiente
+> de merge** (solo documentación y JSON de n8n/; ningún .py): WF_pantalla_llamadas
+> NUEVO (sustituye al formulario), y WF3, WF2, WF5, la ficha y el chat
+> actualizados. WF_formulario_llamadas queda **Retirado** el 27/10
+> (despublicado, no borrado). docs/Contrato_Formulario_Llamadas.md, 4c: con el
+> 200 (repetición) WF7 NO manda email (O-D46-1). Misma regla de siempre: no
+> hacer merge sin la confirmación explícita de Gabi, y siempre con `--ff-only`.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,

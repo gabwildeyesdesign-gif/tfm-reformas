@@ -1,0 +1,1832 @@
+{
+  "name": "WF_pantalla_llamadas",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "llamada",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1760,
+        208
+      ],
+      "id": "7338e4fb-ee17-4c7e-a3ad-d56813143789",
+      "name": "abrir",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Fa1bxlK0a6JT0rdh",
+          "name": "Formulario Gate (administracion)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Abrir la pantalla (D43). 2026-10-23.\n// Entrada ($json): lo que recibe el Webhook \"abrir\" (GET). La dirección es\n//   .../webhook/llamada?oportunidad_id=15802            (desde WF2 o a mano)\n//   .../webhook/llamada?oportunidad_id=15802&ultima=1   (desde WF3, D44; ultima=0 si todavía no)\n// n8n guarda lo que va detrás del \"?\" en $json.query y las cabeceras en $json.headers.\n// Salida: el CONTEXTO de la pantalla (mismas claves en todos los nodos que lo crean):\n//   { modo, oportunidad_id, ultima, base, fecha_extra, borrador, avisos,\n//     final, aviso_tecnico, nodo_error, mensaje_tecnico }\n//   modo 'ficha'  -> hay número válido: se lee la ficha y se pinta el formulario\n//   modo 'buscar' -> sin número (o mal escrito): solo la caja para escribirlo\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Lo que llegó al webhook (una sola petición = un solo elemento).\nconst w = $input.first().json;\n// Lo que va detrás del \"?\" (\"?? {}\": objeto vacío si no hay nada).\nconst q = w.query ?? {};\n// Las cabeceras de la petición (n8n las pone en minúsculas).\nconst h = w.headers ?? {};\n\n// ---- 1. Dirección pública de la pantalla (base) -----------------------------\n// n8n mete las páginas HTML en un iframe aislado, donde las direcciones\n// relativas NO funcionan: los enlaces y formularios necesitan la dirección\n// completa. Se saca de las cabeceras de ESTA petición (ngrok añade\n// x-forwarded-host y x-forwarded-proto), así no se escribe el dominio en\n// ningún sitio más (D44: una sola fuente para cada dato).\nfunction baseDe(cab) {\n  // El host público: el de ngrok si existe; si no, el de la propia petición.\n  const host = String(cab['x-forwarded-host'] ?? cab.host ?? '').split(',')[0].trim();\n  // El protocolo: el que dice ngrok (https; puede venir \"https,http\": se toma el primero).\n  // Sin ngrok (n8n abierto en local, http://localhost:5678) no hay cabecera: http.\n  const proto = String(cab['x-forwarded-proto'] ?? 'http').split(',')[0].trim();\n  // Solo letras, cifras, puntos, guiones y un puerto: cualquier otra cosa se descarta.\n  if (!/^[A-Za-z0-9.-]+(:[0-9]{1,5})?$/.test(host)) return '';\n  // Solo http o https.\n  if (proto !== 'http' && proto !== 'https') return '';\n  // La base completa, por ejemplo \"https://tu-dominio\".\n  return `${proto}://${host}`;\n}\nconst base = baseDe(h);\n\n// ---- 2. El número de oportunidad ----------------------------------------------\n// La misma regla que la ficha (validar_enlace): solo cifras, sin 0 delante, 1 a 10 cifras.\nconst texto = String(q.oportunidad_id ?? '').trim();\nconst valido = /^[1-9][0-9]{0,9}$/.test(texto);\n\n// Aviso solo si se escribió algo que no vale (sin número = pantalla de búsqueda, sin aviso).\nconst avisos = [];\nif (texto !== '' && !valido) avisos.push('El número de oportunidad no es válido: solo lleva cifras.');\n\n// ---- 3. El contexto -------------------------------------------------------------\nreturn [{\n  json: {\n    modo: valido ? 'ficha' : 'buscar',          // qué pinta la pantalla\n    oportunidad_id: valido ? Number(texto) : null,\n    // D44: la marca la pone WF3 ('1' = última llamada, '0' = todavía no). Sin marca\n    // (número escrito a mano, aviso del Gate): null = no se sabe. La pantalla no calcula nada.\n    ultima: q.ultima === '1' ? true : q.ultima === '0' ? false : null,\n    base,                                       // dirección pública, para enlaces y formularios\n    fecha_extra: '',                            // \"Otro día más adelante\" (solo en las vueltas por POST)\n    borrador: {},                               // lo ya escrito (solo en las vueltas por POST)\n    avisos,                                     // textos para la caja de avisos (se escapan al pintar)\n    final: null,                                // pantalla final (solo después de registrar)\n    aviso_tecnico: false,                       // nada que avisar al técnico todavía\n    nodo_error: '',\n    mensaje_tecnico: '',\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1536,
+        208
+      ],
+      "id": "539d47f8-f083-427a-887f-0e6e9d9e69a1",
+      "name": "validar_apertura"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Punto de encuentro (D43). 2026-10-23.\n// Aquí llegan TODOS los caminos que acaban pintando la pantalla:\n//   validar_apertura    -> se abre la pantalla (GET)\n//   segun_accion        -> \"Actualizar horas\" u \"Otro día\" (POST)\n//   registro_valido     -> lo enviado no vale: se vuelve a pintar con el aviso\n//   segun_traduccion    -> el backend no lo registró (p. ej. hora ocupada) o ya hay pantalla final\n//   cerrar_pantalla     -> registrado: pantalla final\n// No cambia nada: deja el contexto con un nombre FIJO para que construir_pagina\n// lo lea siempre igual con $('contexto'), venga de donde venga.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Solo se queda con el primer elemento (cada camino manda uno) y lo pasa tal cual.\nreturn [{ json: $input.first().json }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1104,
+        208
+      ],
+      "id": "618384a7-e186-43d3-8004-b7425f71a7a9",
+      "name": "contexto"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "22346dc5-d796-4c45-9e21-746776987690",
+              "leftValue": "={{ $json.modo === 'ficha' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -880,
+        208
+      ],
+      "id": "6fec4450-e86f-4952-a1f8-e90dd07217df",
+      "name": "hay_numero"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/oportunidades/{{ $('contexto').first().json.oportunidad_id }}/ficha",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -656,
+        112
+      ],
+      "id": "529acd6a-be81-4f18-ae1e-c54d4c6d45b4",
+      "name": "leer_ficha_pagina",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:8000/huecos-libres",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -448,
+        112
+      ],
+      "id": "e535ff71-ef8d-48c7-ae83-0ac8db5b31c7",
+      "name": "leer_dias",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e76efbd2-ace2-4cda-8d45-c6e1961f9733",
+              "leftValue": "={{ /^\\d{4}-\\d{2}-\\d{2}$/.test(String($('contexto').first().json.fecha_extra ?? '')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -224,
+        112
+      ],
+      "id": "b015cadb-6d66-4eeb-b030-741b4ea87d65",
+      "name": "pide_dia"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/huecos-libres?fecha={{ encodeURIComponent($('contexto').first().json.fecha_extra) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a9ff5d2e-d775-4ac2-81aa-251b2b57a494",
+      "name": "leer_horas_dia",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Construir la página (D43, D44). 2026-10-23.\n// Pinta TODAS las pantallas de WF_pantalla_llamadas:\n//   modo 'buscar' -> solo la caja para escribir el número (y avisos)\n//   modo 'final'  -> el resultado del registro (verde) o un aviso (naranja)\n//   modo 'ficha'  -> la ficha y el formulario; o un aviso si no hay nada que registrar\n// Lee:\n//   $('contexto')          -> qué pintar, lo ya escrito (borrador) y los avisos\n//   $('leer_ficha_pagina') -> GET /oportunidades/{id}/ficha (solo en modo 'ficha')\n//   $('leer_dias')         -> GET /huecos-libres          (solo en modo 'ficha')\n//   $('leer_horas_dia')    -> GET /huecos-libres?fecha=   (solo con \"Otro día\")\n// Los HTTP llevan \"On Error: Continue\": si no hay respuesta, llega { error }.\n// POR QUÉ LA PÁGINA ES ASÍ: n8n (desde 1.103) mete el HTML de un webhook en un\n//   iframe aislado: sin direcciones relativas, sin contraseña para fetch(). Por eso\n//   la página NO pide datos por su cuenta: todo llega pintado desde aquí, y cada\n//   acción (registrar, otro día, actualizar horas) es un formulario normal que\n//   abre la página nueva en la ventana entera (target=\"_top\"), con la contraseña\n//   que el navegador ya tiene. Lo escrito viaja en el formulario y vuelve pintado.\n// Salida: { html, codigo, aviso_tecnico, nodo_error, mensaje_tecnico, oportunidad_id }\n// CONFIDENCIAL: la dirección solo vuelve a la misma pantalla que la escribió;\n//   nunca va a un aviso técnico (D42.5). Todo texto pasa por esc().\n// D46 (2026-10-26): si la llamada ya está registrada pero la ficha trae\n//   visita_modificable (visita confirmada y futura), se pinta el MISMO formulario con\n//   tres opciones: cambiar día u hora, cancelar la visita o no cambiar nada. Se envía\n//   con accion 'visita' (camino nuevo: validar_cambio -> POST /cambios-visita).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// ---- 0. Piezas fijas de la página: estilos, formulario y JavaScript del navegador ----\n// Van PRIMERO porque la lógica (secciones 1 a 5) las usa. String.raw guarda el texto\n// tal cual. Regla para escribirlas: sin comillas invertidas ni \"dólar + llave\" dentro,\n// porque cortarían el texto; por eso el JavaScript del navegador suma textos con \"+\".\n\n// Estilos: los colores de la empresa (los mismos que la ficha y los emails).\nconst CSS = String.raw`\n/* Colores de la empresa como variables (los mismos que la ficha y los emails) */\n:root{--azul:#0B3C5D;--turquesa:#1F8A8A;--turquesa-claro:#E3F2F1;--texto:#1F2933;--suave:#5B6B79;--borde:#E5E9ED;--fondo:#F4F6F8;\n--aviso:#8A4B00;--aviso-fondo:#FFF4E5;--error:#A61B1B;--error-fondo:#FDECEC;--ok:#1E6B3A;--ok-fondo:#E7F5EC}\n/* Medidas que incluyen el borde; letra y fondo de toda la página */\n*{box-sizing:border-box}\nbody{margin:0;background:var(--fondo);color:var(--texto);font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.45}\n/* Cabecera azul con el título */\n.cab{background:var(--azul);color:#fff;padding:14px 24px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}\n.cab h1{font-size:18px;margin:0}\n.cab small{display:block;color:#A7D8D6;font-size:13px;font-weight:normal;margin-top:2px}\n/* Caja para escribir el número a mano */\n.buscar{display:flex;gap:6px;align-items:center}\n.buscar label{font-size:13px;color:#A7D8D6}\n.buscar input{width:110px;padding:7px 9px;border-radius:5px;border:0;font-size:15px}\n.buscar button{padding:7px 12px;border:0;border-radius:5px;background:var(--turquesa);color:#fff;font-weight:bold;cursor:pointer}\n/* Franja turquesa bajo la cabecera */\n.franja{height:4px;background:var(--turquesa)}\n/* Dos columnas en ordenador (ficha | registro); una sola en avisos y en el móvil */\n.contenido{max-width:1100px;margin:20px auto;padding:0 16px;display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start}\n.contenido.una{grid-template-columns:1fr;max-width:720px}\n@media (max-width:820px){.contenido{grid-template-columns:1fr}}\n/* Tarjeta blanca; la de la ficha se queda fija al bajar */\n.tarjeta{background:#fff;border:1px solid var(--borde);border-radius:8px;padding:18px 20px}\n.ficha{position:sticky;top:12px}\n.titulo-sec{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--turquesa);font-weight:bold;border-bottom:2px solid var(--turquesa-claro);padding-bottom:6px;margin:0 0 10px}\n/* Tabla de la ficha: etiqueta gris a la izquierda, valor en negrita */\n.ficha table{width:100%;border-collapse:collapse}\n.ficha td{padding:5px 0;vertical-align:top;font-size:14px}\n.ficha td:first-child{color:var(--suave);font-size:13px;width:42%;padding-right:10px}\n.ficha td:last-child{font-weight:bold}\n/* Etiqueta del tipo de llamada y cita del cliente */\n.etiqueta-llamada{display:inline-block;background:var(--turquesa-claro);color:var(--azul);font-weight:bold;font-size:13px;border-radius:12px;padding:3px 10px;margin-bottom:10px}\n.cita{background:var(--fondo);border-left:3px solid var(--turquesa);padding:8px 10px;font-size:14px;font-style:italic;margin-top:4px;white-space:pre-wrap}\n/* Enlace a la ficha, pie y textos pequeños */\n.enlace{display:inline-block;margin-top:12px;color:var(--turquesa);font-weight:bold;font-size:14px;text-decoration:none}\n.pie{font-size:12px;color:var(--suave);margin-top:14px;border-top:1px solid var(--borde);padding-top:10px}\n.suave{color:var(--suave)} .peq{font-size:13px;margin-top:8px} .grande{font-size:17px}\n/* Pasos del formulario con su número en un círculo */\n.paso{margin-bottom:22px}\n.paso h2{font-size:16px;margin:0 0 10px;color:var(--azul)}\n.paso h2 .num{display:inline-block;width:24px;height:24px;border-radius:50%;background:var(--azul);color:#fff;text-align:center;font-size:13px;line-height:24px;margin-right:8px}\n/* Botones grandes de resultado; el elegido se marca (en rojo si es definitivo) */\n.opciones{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}\n.opcion{border:2px solid var(--borde);border-radius:8px;padding:12px;cursor:pointer;background:#fff;text-align:left;font-size:15px;font-family:inherit;color:var(--texto)}\n.opcion small{display:block;color:var(--suave);font-size:12px;margin-top:3px}\n.opcion:hover{border-color:var(--turquesa)}\n/* Resultado elegido */\n.opcion.sel{border-color:var(--turquesa);background:var(--turquesa-claro)}\n.opcion.peligro.sel{border-color:var(--error);background:var(--error-fondo)}\n/* Agenda: un recuadro por día, con mañana y tarde */\n.dias{display:flex;flex-direction:column;gap:8px}\n.dia{border:1px solid var(--borde);border-radius:8px;padding:10px 12px}\n.dia-cab{font-weight:bold;margin-bottom:6px}\n.franjas{display:flex;flex-wrap:wrap;gap:6px;align-items:center}\n.franjas em{font-style:normal;color:var(--suave);font-size:12px;width:52px}\n/* Botones de hora: normal, elegida y bloqueada (la que pidió el cliente) */\n.hora{border:1px solid var(--turquesa);background:#fff;color:var(--azul);border-radius:5px;padding:6px 10px;font-size:14px;cursor:pointer;font-family:inherit}\n.hora.sel{background:var(--turquesa);color:#fff;font-weight:bold}\n.hora.ocupada{border-color:var(--borde);color:#B0B8BF;text-decoration:line-through;cursor:not-allowed}\n.otro-dia{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;font-size:14px}\n/* Campos de texto */\n.campo{margin-bottom:14px}\n.campo label{display:block;font-weight:bold;font-size:14px;margin-bottom:5px}\n.campo .ayuda{font-weight:normal;color:var(--suave);font-size:12px}\ninput[type=text],input[type=date],select,textarea{width:100%;padding:9px 10px;border:1px solid #C9D1D8;border-radius:5px;font-size:15px;font-family:inherit;color:var(--texto)}\n/* Cajas grandes y fila del código postal y el municipio */\ntextarea{min-height:90px;resize:vertical}\n.fila-dir{display:grid;grid-template-columns:150px 1fr;gap:10px}\n@media (max-width:520px){.fila-dir{grid-template-columns:1fr}}\n.contador{float:right;font-weight:normal;color:var(--suave);font-size:12px}\n/* Comprobación mientras se escribe: verde bien, rojo mal */\n.estado-campo{font-size:13px;margin-top:4px;min-height:18px}\n.estado-campo.bien{color:var(--ok)} .estado-campo.mal{color:var(--error)}\ninput.mal{border-color:var(--error);background:#FFF8F8} input.bien{border-color:var(--ok)}\n/* Cajas de aviso: naranja (por defecto), rojo y verde */\n.aviso{background:var(--aviso-fondo);border:1px solid #F0C98A;color:var(--aviso);border-radius:6px;padding:10px 12px;font-size:14px;margin-bottom:12px}\n.aviso.rojo{background:var(--error-fondo);border-color:#F2B8B8;color:var(--error)}\n.aviso.verde{background:var(--ok-fondo);border-color:#A9D8B8;color:var(--ok)}\n/* Botones de acción */\n.botonera{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}\n.btn{padding:11px 18px;border-radius:6px;border:0;font-size:15px;font-weight:bold;cursor:pointer;font-family:inherit}\n.btn.principal{background:var(--azul);color:#fff} .btn.principal:disabled{background:#9AA8B4;cursor:not-allowed}\n.btn.secundario{background:#fff;color:var(--azul);border:2px solid var(--azul)}\n/* Botón rojo (definitivo), pequeño y la línea de \"Falta: ...\" */\n.btn.peligro{background:var(--error);color:#fff}\n.btn.peq{padding:5px 10px;font-size:13px}\n.faltan{font-size:13px;color:var(--suave);margin-top:8px}\n/* Resumen antes de registrar: tabla etiqueta | valor */\n.resumen table{width:100%;border-collapse:collapse;margin-bottom:14px}\n.resumen td{padding:8px 0;border-bottom:1px solid var(--borde);vertical-align:top;font-size:15px}\n.resumen td:first-child{color:var(--suave);width:34%;padding-right:12px;font-size:14px}\n/* La dirección, campo a campo; y la clase que esconde lo que no toca */\n.resumen .dir div{margin-bottom:6px}\n.resumen .dir span{display:inline-block;min-width:118px;color:var(--suave);font-size:13px}\n.oculto{display:none}\n`;\n\n// El formulario (vacío: lo rellena y lo enseña el JavaScript según el resultado elegido).\nconst FORMULARIO = String.raw`\n<!-- Todo el formulario; el JavaScript enseña solo los pasos del resultado elegido -->\n<div id=\"formulario\">\n  <!-- Paso 1: los botones de resultado (los pinta pintarOpciones) -->\n  <div class=\"paso\"><h2><span class=\"num\">1</span><span id=\"titulo-paso1\">¿Cómo ha ido la llamada?</span></h2><div class=\"opciones\" id=\"opciones\"></div></div>\n  <!-- Paso 2 (visita acordada / otra hora): la agenda -->\n  <div class=\"paso oculto\" id=\"paso-agenda\">\n    <h2><span class=\"num\">2</span><span id=\"titulo-agenda\">Día y hora de la visita</span>\n      <button type=\"button\" class=\"btn secundario peq\" style=\"float:right\" data-accion=\"actualizar\">↻ Actualizar horas</button></h2>\n    <!-- D46: al cambiar, la visita que tiene ahora (la pinta elegir) -->\n    <div id=\"texto-visita-actual\"></div>\n    <!-- Avisos de la agenda y la explicación -->\n    <div id=\"aviso-agenda\"></div>\n    <p class=\"suave\" style=\"margin:0 0 8px;font-size:14px\">Horas libres en los próximos días laborables. Pulsa la que acuerdes con el cliente.</p>\n    <!-- Los días con sus horas (los pinta pintarDias) -->\n    <div class=\"dias\" id=\"dias\"></div>\n    <!-- Otro día más adelante: se elige la fecha y la página vuelve con sus horas -->\n    <div class=\"otro-dia\">Otro día más adelante:\n      <input type=\"date\" id=\"otra-fecha\" style=\"width:auto\">\n      <button type=\"button\" class=\"btn secundario peq\" data-accion=\"otro-dia\">Ver sus horas</button></div>\n  </div>\n  <!-- Paso 2 (confirmar la hora pedida): solo se enseña la hora -->\n  <div class=\"paso oculto\" id=\"paso-hora-pedida\"><h2><span class=\"num\">2</span>Hora que pidió el cliente</h2><div class=\"aviso verde\" id=\"texto-hora-pedida\"></div></div>\n  <!-- Paso 3 (si queda visita): la dirección de la obra, obligatoria (D42) -->\n  <div class=\"paso oculto\" id=\"paso-direccion\">\n    <h2><span class=\"num\">3</span>Dirección de la obra</h2>\n    <!-- Calle y número -->\n    <div class=\"campo\"><label for=\"calle\">Calle y número <span class=\"ayuda\">(con piso y puerta si los hay)</span></label>\n      <input type=\"text\" id=\"calle\" maxlength=\"150\" autocomplete=\"off\"><div class=\"estado-campo\" id=\"estado-calle\"></div></div>\n    <!-- Código postal y municipio, en la misma fila -->\n    <div class=\"fila-dir\">\n      <div class=\"campo\"><label for=\"cp\">Código postal</label>\n        <input type=\"text\" id=\"cp\" inputmode=\"numeric\" maxlength=\"5\" autocomplete=\"off\"><div class=\"estado-campo\" id=\"estado-cp\"></div></div>\n      <!-- Municipio -->\n      <div class=\"campo\"><label for=\"municipio\">Municipio</label>\n        <input type=\"text\" id=\"municipio\" maxlength=\"100\" autocomplete=\"off\"><div class=\"estado-campo\" id=\"estado-municipio\"></div></div>\n    </div>\n  </div>\n  <!-- Paso 2 (descartar / el cliente cancela): el motivo, con su aviso de \"definitivo\" -->\n  <div class=\"paso oculto\" id=\"paso-motivo\">\n    <h2><span class=\"num\">2</span>Motivo</h2><div class=\"aviso rojo\" id=\"aviso-definitivo\"></div>\n    <div id=\"aviso-sin-decidir\"></div>\n    <div class=\"campo\"><select id=\"motivo\"></select></div>\n  </div>\n  <!-- Último paso: el informe (siempre) y el mensaje para el cliente (solo si queda visita) -->\n  <div class=\"paso oculto\" id=\"paso-informe\">\n    <h2><span class=\"num\" id=\"num-informe\">4</span>Informe y mensaje</h2>\n    <!-- Informe: lo que se habló (obligatorio, máximo 2.000) -->\n    <div class=\"campo\"><label for=\"informe\">Informe de la llamada <span class=\"contador\" id=\"cont-informe\">0 / 2000</span></label>\n      <textarea id=\"informe\" maxlength=\"2000\" placeholder=\"Qué se habló, qué se acordó y dudas del cliente.\"></textarea></div>\n    <!-- Mensaje para el email del cliente (opcional, máximo 500) -->\n    <div class=\"campo\" id=\"campo-mensaje\"><label for=\"mensaje\">Mensaje para el cliente <span class=\"ayuda\">(opcional; aparecerá en su email)</span>\n      <span class=\"contador\" id=\"cont-mensaje\">0 / 500</span></label>\n      <textarea id=\"mensaje\" maxlength=\"500\" placeholder=\"Por ejemplo, qué preparar para la visita o cómo acceder al edificio. Nada de valoraciones internas.\"></textarea></div>\n  </div>\n  <!-- \"No contesta o se lo piensa\": solo el texto de qué pasa ahora -->\n  <div class=\"paso oculto\" id=\"paso-sin-registro\"><div class=\"aviso\" id=\"texto-sin-registro\"></div></div>\n  <!-- Botón para pasar al resumen y la línea de \"Falta: ...\" -->\n  <div class=\"botonera\"><button type=\"button\" class=\"btn principal\" id=\"btn-revisar\" disabled data-accion=\"revisar\">Revisar antes de registrar</button></div>\n  <div class=\"faltan\" id=\"faltan\"></div>\n</div>\n<!-- El resumen antes de registrar (sustituye al formulario; \"Volver a editar\" no borra nada) -->\n<div class=\"resumen oculto\" id=\"resumen\">\n  <h2 style=\"font-size:17px;color:var(--azul);margin:0 0 12px\">Comprueba antes de registrar</h2>\n  <div id=\"resumen-aviso\"></div><table id=\"resumen-tabla\"></table>\n  <!-- Registrar (envía) o volver a editar -->\n  <div class=\"botonera\"><button type=\"button\" class=\"btn principal\" id=\"btn-registrar\" data-accion=\"registrar\">Sí, registrar</button>\n    <button type=\"button\" class=\"btn secundario\" data-accion=\"volver\">Volver a editar</button></div>\n</div>\n<!-- Mensaje de \"Cerrar sin registrar\" -->\n<div class=\"oculto\" id=\"final\"></div>\n`;\n\n// El JavaScript del navegador. Solo enseña, comprueba y ENVÍA formularios normales:\n// no pide datos por su cuenta (el iframe de n8n no lo permite) y no decide nada:\n// lo que se registra lo vuelven a comprobar validar_registro y el backend.\nconst SCRIPT = String.raw`\n// Los datos que ha pintado n8n (JSON, no HTML).\nvar D = JSON.parse(document.getElementById('datos').textContent);\n// Atajo para buscar un elemento por su id.\nfunction el(id) { return document.getElementById(id); }\n// Escapar texto antes de meterlo en HTML (lo escrito por personas).\nfunction esc(v) { return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;'); }\n\n// Textos de cada resultado; sin_registro NO es un resultado del backend: no se envía.\n// visita = queda una visita (pide dirección); agenda = se elige día y hora; peligro = definitivo.\nvar RES = {\n  visita_acordada: { texto: 'Visita acordada', ayuda: 'Se elige día y hora', visita: true, agenda: true },\n  descartar: { texto: 'Descartar', ayuda: 'Definitivo: cierra la oportunidad', peligro: true },\n  confirmar_hora: { texto: 'Confirmar la hora pedida', ayuda: 'Se queda la que eligió el cliente', visita: true },\n  otra_hora: { texto: 'Otra hora', ayuda: 'La pedida se cancela', visita: true, agenda: true },\n  // (sigue la lista) los dos de abajo: cancelar (definitivo) y \"no registrar nada\"\n  cliente_cancela: { texto: 'El cliente cancela', ayuda: 'Definitivo: cierra la oportunidad', peligro: true },\n  sin_registro: { texto: 'No contesta o se lo piensa', ayuda: 'No se registra nada', nada: true },\n  // D46: visita YA confirmada. mensaje = pide el mensaje para el email, sin pedir la dirección.\n  cambiar_visita: { texto: 'Cambiar día u hora', ayuda: 'La hora actual se anula', agenda: true, mensaje: true },\n  cancelar_visita: { texto: 'Cancelar la visita', ayuda: 'Definitivo: cierra la oportunidad', peligro: true },\n  sin_cambio: { texto: 'No cambiar nada', ayuda: 'La visita sigue como está', nada: true }\n};\n// Motivos: [código del backend, texto]. Al cancelar no valen \"no contesta\" ni \"sin decidirse\" (D29.3).\nvar MOT_DESCARTAR = [['precio', 'Precio: le parece caro'], ['plazo', 'Plazo: no le encajan los tiempos'],\n  ['no_contesta', 'No contesta (tras varios intentos)'], ['sin_decision', 'Sigue sin decidirse (última llamada)'],\n  ['proyecto_no_viable', 'Proyecto no viable técnicamente'], ['otro', 'Otro (explícalo en el informe)']];\n// Los cuatro motivos admitidos cuando el cliente cancela.\nvar MOT_CANCELA = [['precio', 'Precio: le parece caro'], ['plazo', 'Plazo: no le encajan los tiempos'],\n  ['proyecto_no_viable', 'Proyecto no viable técnicamente'], ['otro', 'Otro (explícalo en el informe)']];\n// Primeras 2 cifras del código postal -> provincia (para comprobarlo mientras se escribe).\nvar PROV = {'01':'Álava','02':'Albacete','03':'Alicante','04':'Almería','05':'Ávila','06':'Badajoz','07':'Illes Balears','08':'Barcelona','09':'Burgos','10':'Cáceres','11':'Cádiz','12':'Castellón','13':'Ciudad Real','14':'Córdoba','15':'A Coruña','16':'Cuenca','17':'Girona','18':'Granada','19':'Guadalajara','20':'Gipuzkoa','21':'Huelva','22':'Huesca','23':'Jaén','24':'León','25':'Lleida','26':'La Rioja','27':'Lugo','28':'Madrid','29':'Málaga','30':'Murcia','31':'Navarra','32':'Ourense','33':'Asturias','34':'Palencia','35':'Las Palmas','36':'Pontevedra','37':'Salamanca','38':'Santa Cruz de Tenerife','39':'Cantabria','40':'Segovia','41':'Sevilla','42':'Soria','43':'Tarragona','44':'Teruel','45':'Toledo','46':'Valencia','47':'Valladolid','48':'Bizkaia','49':'Zamora','50':'Zaragoza','51':'Ceuta','52':'Melilla'};\n\nvar eleccion = null;   // resultado elegido\nvar visita = null;     // { fecha, hora, legible } elegida\nvar enviando = false;  // evita enviar dos veces (doble clic)\n\n// ---- Botones de resultado: solo los que admite el backend para esta llamada ----\nfunction pintarOpciones() {\n  var h = '';                                                   // el HTML de los botones\n  D.resultados.forEach(function (r) {                           // uno por resultado admitido\n    var o = RES[r]; if (!o) return;                             // un resultado desconocido no se pinta\n    h += '<button type=\"button\" class=\"opcion' + (o.peligro ? ' peligro' : '') + (eleccion === r ? ' sel' : '') +\n      '\" data-resultado=\"' + r + '\">' + o.texto + '<small>' + o.ayuda + '</small></button>';   // botón con su ayuda\n  });\n  el('opciones').innerHTML = h;                                 // se ponen en la página\n}\n\n// ---- Agenda: un botón por hora libre ----\nfunction botonHora(d, h) {\n  // La hora que no se puede volver a elegir (el backend daría 422): en \"Otra hora\", la que\n  // pidió el cliente; en \"Cambiar día u hora\" (D46), la que tiene ahora la visita.\n  var vp = eleccion === 'otra_hora' ? D.visita_pedida : eleccion === 'cambiar_visita' ? D.visita_actual : null;\n  if (vp && vp.fecha === d.fecha && vp.hora === h) {\n    return '<button type=\"button\" class=\"hora ocupada\" title=\"' + (eleccion === 'otra_hora' ? 'Es la hora que pidió el cliente' : 'Es la hora que tiene ahora') + '\">' + h + '</button>';\n  }\n  var sel = visita && visita.fecha === d.fecha && visita.hora === h;          // ¿es la elegida?\n  return '<button type=\"button\" class=\"hora' + (sel ? ' sel' : '') + '\" data-fecha=\"' + d.fecha + '\" data-hora=\"' + h + '\">' + h + '</button>';\n}\n// Pinta todos los días con sus horas de mañana y de tarde.\nfunction pintarDias() {\n  var h = '';                                                   // el HTML de la agenda\n  D.dias.forEach(function (d) {                                 // un recuadro por día\n    h += '<div class=\"dia\"><div class=\"dia-cab\">' + esc(d.titulo) + (d.extra ? ' <span class=\"suave\">(otro día)</span>' : '') + '</div><div class=\"franjas\">';\n    if (d.manana.length) h += '<em>Mañana</em>' + d.manana.map(function (x) { return botonHora(d, x); }).join('');   // horas de mañana\n    if (d.tarde.length) h += '<em style=\"margin-left:' + (d.manana.length ? 10 : 0) + 'px\">Tarde</em>' + d.tarde.map(function (x) { return botonHora(d, x); }).join('');   // de tarde\n    h += '</div></div>';                                        // se cierra el recuadro\n  });\n  el('dias').innerHTML = h;                                     // se pone en la página\n  if (D.aviso_agenda) el('aviso-agenda').innerHTML = '<div class=\"aviso\">⚠️ ' + esc(D.aviso_agenda) + '</div>';   // aviso de n8n\n}\n// Elegir una hora: solo si está en la lista que dio el backend.\nfunction elegirHora(fecha, hora) {\n  var d = D.dias.filter(function (x) { return x.fecha === fecha; })[0];       // el día de esa fecha\n  if (!d || (d.manana.indexOf(hora) < 0 && d.tarde.indexOf(hora) < 0)) return;   // ya no está libre: nada\n  visita = { fecha: fecha, hora: hora, legible: d.titulo.toLowerCase() + '/' + fecha.slice(0, 4) + ' a las ' + hora };   // \"lunes 26/10/2026 a las 10:30\"\n  pintarDias(); comprobar();                                    // se marca y se revisa qué falta\n}\n\n// ---- Elegir un resultado: enseña solo lo que ese resultado necesita ----\nfunction elegir(r) {\n  var o = RES[r]; if (!o) return;                               // resultado desconocido: nada\n  eleccion = r; visita = null;                                  // al cambiar de resultado, la hora se vuelve a elegir\n  var definitivo = !!o.peligro;                                 // descartar o cancelar\n  // Qué pasos se ven con este resultado (toggle con true = esconder).\n  el('paso-agenda').classList.toggle('oculto', !o.agenda);\n  el('paso-hora-pedida').classList.toggle('oculto', r !== 'confirmar_hora');\n  el('paso-direccion').classList.toggle('oculto', !o.visita);\n  el('paso-motivo').classList.toggle('oculto', !definitivo);\n  // El informe (no en \"sin registro\"), el mensaje (solo con visita) y el texto de \"sin registro\".\n  el('paso-informe').classList.toggle('oculto', !!o.nada);\n  el('campo-mensaje').classList.toggle('oculto', !(o.visita || o.mensaje));   // D46: también al cambiar la hora\n  el('paso-sin-registro').classList.toggle('oculto', !o.nada);\n  el('num-informe').textContent = o.visita ? '4' : '3';         // con dirección (paso 3) el informe es el 4\n  el('btn-revisar').textContent = o.nada ? 'Cerrar sin registrar' : 'Revisar antes de registrar';\n  // D46: al cambiar, la agenda dice que es la NUEVA hora y enseña la que tiene ahora.\n  el('titulo-agenda').textContent = r === 'cambiar_visita' ? 'Nuevo día y hora' : 'Día y hora de la visita';\n  el('texto-visita-actual').innerHTML = r === 'cambiar_visita' && D.visita_actual\n    ? '<div class=\"aviso\">Ahora tiene la visita el <strong>' + esc(D.visita_actual.legible) + '</strong>. Elige la nueva hora con el cliente.</div>' : '';\n  // Confirmar la hora pedida: la visita es la pedida (el servidor la vuelve a leer de la ficha).\n  if (r === 'confirmar_hora' && D.visita_pedida) {\n    visita = { fecha: D.visita_pedida.fecha, hora: D.visita_pedida.hora, legible: D.visita_pedida.legible };\n    el('texto-hora-pedida').innerHTML = 'Se confirmará: <strong>' + esc(D.visita_pedida.legible) + '</strong>';\n  }\n  // Descartar o cancelar: la lista de motivos que toca y el aviso de \"definitivo\".\n  if (definitivo) {\n    var lista = r === 'descartar' ? MOT_DESCARTAR : MOT_CANCELA;  // qué motivos valen\n    var previo = el('motivo').value;                            // el motivo que ya estaba elegido\n    el('motivo').innerHTML = '<option value=\"\">— Elige el motivo —</option>' + lista.map(function (m) {\n      return '<option value=\"' + m[0] + '\">' + m[1] + '</option>'; }).join('');   // una opción por motivo\n    if (lista.some(function (m) { return m[0] === previo; })) el('motivo').value = previo;   // se conserva si vale\n    el('aviso-definitivo').innerHTML = r === 'descartar'        // el aviso, según el resultado\n      ? '⚠️ <strong>Descartar es definitivo.</strong> Usa \"No contesta\" solo después de 3 intentos en 2 días laborables distintos, y \"Sigue sin decidirse\" solo en la última llamada.'\n      : r === 'cancelar_visita'                                 // D46: la visita ya estaba confirmada\n        ? '⚠️ <strong>Es definitivo:</strong> la visita confirmada se cancela, se quita del calendario y la oportunidad queda cerrada como perdida. Si el cliente solo quiere otro día, elige \"Cambiar día u hora\".'\n        : '⚠️ <strong>Es definitivo:</strong> la visita pedida se cancela y la oportunidad queda cerrada como perdida.';\n  }\n  // \"No contesta o se lo piensa\" (o \"No cambiar nada\"): qué pasa ahora, con las palabras de administración.\n  if (o.nada) {\n    var t = '<strong>No se registra nada.</strong> ';           // siempre igual al principio\n    if (r === 'sin_cambio') t = '<strong>No se cambia nada.</strong> La visita sigue confirmada el ' + esc(D.visita_actual ? D.visita_actual.legible : '') + '.';\n    else if (D.tipo_llamada === 'confirmacion_visita') t += 'La visita pedida sigue pendiente y volverá a salir en el email diario.';\n    else if (D.ultima === '1') t += 'La oportunidad sigue pendiente.<br>⚠️ <strong>Ya es la última llamada.</strong> Si no contesta tras 3 intentos en 2 días laborables distintos, o sigue sin decidirse, descártala.';\n    else t += 'La oportunidad sigue pendiente y volverá a salir en el email diario, que te avisará cuando toque la última llamada.';\n    el('texto-sin-registro').innerHTML = t;                     // se pone en la página\n  }\n  avisoSinDecidir(); pintarOpciones(); pintarDias(); comprobar();   // se repinta y se revisa qué falta\n}\n\n// ---- \"Sigue sin decidirse\" antes de tiempo: solo si el email diario dijo que NO es la última (D44) ----\nfunction avisoSinDecidir() {\n  var temprano = eleccion === 'descartar' && el('motivo').value === 'sin_decision' && D.ultima === '0';   // '' = no se sabe: sin aviso\n  el('aviso-sin-decidir').innerHTML = temprano\n    ? '<div class=\"aviso\">⚠️ Según el email diario, todavía <strong>no</strong> es la última llamada. Si se lo está pensando, elige \"No contesta o se lo piensa\".</div>' : '';\n}\n\n// ---- La dirección, comprobada MIENTRAS SE ESCRIBE (mismas reglas que el backend, D42.3) ----\n// Marca un campo: 'bien' (verde), 'mal' (rojo) o nada, con un texto debajo.\nfunction marcar(campo, estado, texto) {\n  el(campo).classList.remove('bien', 'mal'); if (estado) el(campo).classList.add(estado);   // color del borde\n  var e = el('estado-' + campo); e.className = 'estado-campo ' + (estado || ''); e.textContent = texto;   // texto debajo\n}\n// ¿Está completa y bien la dirección? Marca cada campo y devuelve true o false.\nfunction direccionOk() {\n  var calle = el('calle').value.trim(), cp = el('cp').value.trim(), mun = el('municipio').value.trim(), ok = true;   // lo escrito, sin espacios de sobra\n  if (!calle) { marcar('calle', null, ''); ok = false; } else marcar('calle', 'bien', '');   // calle: no vacía\n  if (!cp) { marcar('cp', null, ''); ok = false; }                                         // CP vacío: sin texto\n  else if (!/^\\d+$/.test(cp)) { marcar('cp', 'mal', 'Solo números.'); ok = false; }         // CP con letras\n  else if (cp.length < 5) { marcar('cp', null, cp.length === 4 ? 'Falta 1 cifra.' : 'Faltan ' + (5 - cp.length) + ' cifras.'); ok = false; }   // CP corto\n  else if (!PROV[cp.slice(0, 2)]) { marcar('cp', 'mal', 'No existe ningún código postal que empiece por ' + cp.slice(0, 2) + '.'); ok = false; }   // provincia inexistente\n  else marcar('cp', 'bien', '✓ ' + PROV[cp.slice(0, 2)]);                                   // CP bien: se dice la provincia\n  if (!mun) { marcar('municipio', null, ''); ok = false; } else marcar('municipio', 'bien', '');   // municipio: no vacío\n  return ok;\n}\n\n// ---- ¿Se puede pasar al resumen? Dice qué falta en vez de dejar un botón muerto ----\nfunction comprobar() {\n  var faltan = [];                                              // lo que falta, en palabras\n  if (!eleccion) faltan.push('el resultado de la llamada');     // sin resultado no hay nada más\n  else {\n    var o = RES[eleccion];                                      // qué pide este resultado\n    if (o.agenda && !visita) faltan.push('el día y la hora');\n    if (o.visita && !direccionOk()) faltan.push('la dirección completa');\n    if (o.peligro && !el('motivo').value) faltan.push('el motivo');\n    if (!o.nada && !el('informe').value.trim()) faltan.push('el informe');\n  }\n  el('cont-informe').textContent = el('informe').value.length + ' / 2000';   // contadores de caracteres\n  el('cont-mensaje').textContent = el('mensaje').value.length + ' / 500';\n  el('btn-revisar').disabled = faltan.length > 0;               // el botón solo se activa si no falta nada\n  el('faltan').textContent = faltan.length ? 'Falta: ' + faltan.join(', ') + '.' : '';   // y dice qué falta\n}\n\n// ---- Resumen antes de registrar (la dirección campo a campo, D43.7) ----\nfunction revisar() {\n  var o = RES[eleccion];                                        // qué se ha elegido\n  if (o.nada) {                                                 // nada que enviar: se dice y se cierra\n    el('formulario').classList.add('oculto'); el('final').classList.remove('oculto');\n    el('final').innerHTML = eleccion === 'sin_cambio'           // D46: la visita confirmada sigue igual\n      ? '<div class=\"aviso\"><strong class=\"grande\">No se ha cambiado nada</strong><br>La visita de la oportunidad ' +\n        esc(D.oportunidad_id) + ' sigue confirmada el ' + esc(D.visita_actual ? D.visita_actual.legible : '') + '.</div>'\n      : '<div class=\"aviso\"><strong class=\"grande\">No se ha registrado nada</strong><br>La oportunidad ' +\n        esc(D.oportunidad_id) + ' sigue pendiente y saldrá en el email diario.</div>';\n    return;\n  }\n  // Etiquetas del resultado (las definitivas, en mayúsculas).\n  var ET = { visita_acordada: 'Visita acordada', descartar: 'DESCARTAR (definitivo)', confirmar_hora: 'Confirmar la hora pedida',\n    otra_hora: 'Otra hora (la pedida se cancela)', cliente_cancela: 'EL CLIENTE CANCELA (definitivo)',\n    cambiar_visita: 'Cambiar día u hora', cancelar_visita: 'CANCELAR LA VISITA (definitivo)' };\n  var f = '<tr><td>Oportunidad</td><td><strong>' + esc(D.oportunidad_id) + '</strong></td></tr>' +\n    '<tr><td>' + (D.modo_visita ? 'Acción' : 'Resultado') + '</td><td><strong>' + ET[eleccion] + '</strong></td></tr>';   // número y resultado\n  if (D.modo_visita) {                                          // D46: la visita de ahora y, al cambiar, la nueva\n    f += '<tr><td>Visita actual</td><td><strong>' + esc(D.visita_actual.legible) + '</strong>' + (o.agenda ? ' (se anula)' : '') + '</td></tr>';\n    if (o.agenda) f += '<tr><td>Nueva visita</td><td><strong>' + esc(visita.legible) + '</strong></td></tr>';\n  }\n  if (o.visita) {                                               // con visita: día y dirección campo a campo\n    var cp = el('cp').value.trim();\n    f += '<tr><td>Visita</td><td><strong>' + esc(visita.legible) + '</strong></td></tr>' +\n      '<tr><td>Dirección de la obra</td><td class=\"dir\">' +\n      '<div><span>Calle y número</span><strong>' + esc(el('calle').value.trim()) + '</strong></div>' +\n      '<div><span>Código postal</span><strong>' + esc(cp) + '</strong> (' + esc(PROV[cp.slice(0, 2)] || '') + ')</div>' +\n      '<div><span>Municipio</span><strong>' + esc(el('municipio').value.trim()) + '</strong></div></td></tr>';\n  } else if (o.peligro) {                                       // descartar o cancelar: el motivo (su texto)\n    f += '<tr><td>Motivo</td><td><strong>' + esc(el('motivo').options[el('motivo').selectedIndex].text) + '</strong></td></tr>';\n  }\n  f += '<tr><td>Informe</td><td>' + esc(el('informe').value.trim()).replace(/\\n/g, '<br>') + '</td></tr>';   // el informe, con sus saltos de línea\n  if (o.visita || o.mensaje) {                                  // el mensaje: lo que leerá el cliente, o que no hay\n    var m = el('mensaje').value.trim();\n    f += '<tr><td>Mensaje para el cliente</td><td>' + (m ? esc(m).replace(/\\n/g, '<br>') : '<em class=\"suave\">Sin mensaje: el email saldrá sin nota</em>') + '</td></tr>';\n  }\n  el('resumen-tabla').innerHTML = f;                            // la tabla del resumen\n  // Qué pasará al registrar: definitivo (rojo), cambio de hora (D46) o visita nueva.\n  el('resumen-aviso').innerHTML = o.peligro ? '<div class=\"aviso rojo\">⚠️ Esto es <strong>definitivo</strong>: no se podrá cambiar después.</div>'\n    : eleccion === 'cambiar_visita'\n      ? '<div class=\"aviso\">Al registrar, se quita del calendario la hora actual, se añade la nueva y se envía al cliente un email con la nueva fecha.</div>'\n      : '<div class=\"aviso\">Al registrar, se crea el evento en el calendario y se envía el email al cliente.</div>';\n  el('btn-registrar').className = 'btn ' + (o.peligro ? 'peligro' : 'principal');   // botón rojo si es definitivo\n  el('formulario').classList.add('oculto'); el('resumen').classList.remove('oculto');   // se cambia el formulario por el resumen\n  window.scrollTo(0, 0);                                        // y se sube arriba\n}\n// \"Volver a editar\": se vuelve al formulario sin borrar nada.\nfunction volver() { el('resumen').classList.add('oculto'); el('formulario').classList.remove('oculto'); }\n\n// ---- Enviar: un formulario normal que abre la respuesta en la ventana entera ----\n// accion 'registrar' -> registra; 'horas' -> vuelve a pintar con las horas al día (u otro día).\n// Lo escrito viaja siempre: si la página vuelve, vuelve rellena.\nfunction enviar(accion, fechaExtra) {\n  if (enviando) return; enviando = true;                        // un solo envío (doble clic)\n  if (accion === 'registrar') { el('btn-registrar').disabled = true; el('btn-registrar').textContent = 'Registrando…'; }\n  // Todos los campos, como texto (el servidor los vuelve a comprobar).\n  // D46: con una visita confirmada, \"registrar\" va por el camino de los cambios ('visita'),\n  // con la fecha y hora que el operador VE (si alguien la cambió mientras tanto, el backend da 409).\n  if (accion === 'registrar' && D.modo_visita) accion = 'visita';\n  var campos = { accion: accion, oportunidad_id: D.oportunidad_id, ultima: D.ultima, fecha_extra: fechaExtra || '',\n    fecha_actual: D.visita_actual ? D.visita_actual.fecha : '', hora_actual: D.visita_actual ? D.visita_actual.hora : '',\n    resultado: eleccion && !RES[eleccion].nada ? eleccion : '', fecha: visita ? visita.fecha : '', hora: visita ? visita.hora : '',\n    calle: el('calle').value, cp: el('cp').value, municipio: el('municipio').value, motivo: el('motivo').value,\n    informe: el('informe').value, mensaje: el('mensaje').value };\n  var form = document.createElement('form');                    // un formulario invisible\n  form.method = 'POST'; form.action = D.url_enviar; form.target = '_top';   // POST a n8n, en la ventana entera\n  Object.keys(campos).forEach(function (k) {                    // un campo oculto por dato\n    var i = document.createElement('input'); i.type = 'hidden'; i.name = k; i.value = campos[k] == null ? '' : String(campos[k]);\n    form.appendChild(i);\n  });\n  document.body.appendChild(form); form.submit();               // se envía\n}\n// \"Otro día más adelante\": la fecha se comprueba aquí antes de pedirla (fin de semana).\nfunction verOtroDia() {\n  var f = el('otra-fecha').value;                               // \"AAAA-MM-DD\" o vacío\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(f)) { el('aviso-agenda').innerHTML = '<div class=\"aviso\">Elige primero una fecha.</div>'; return; }\n  var ds = new Date(Date.UTC(+f.slice(0, 4), +f.slice(5, 7) - 1, +f.slice(8, 10))).getUTCDay();   // 0 domingo ... 6 sábado\n  if (ds === 0 || ds === 6) { el('aviso-agenda').innerHTML = '<div class=\"aviso\">⚠️ Es fin de semana: no hay visitas. Elige otro día.</div>'; return; }\n  enviar('horas', f);                                           // la página vuelve con las horas de ese día\n}\n\n// ---- Clics: uno solo para toda la página (sin onclick dentro del HTML) ----\ndocument.addEventListener('click', function (ev) {\n  var b = ev.target.closest('button'); if (!b) return;          // solo interesan los botones\n  if (b.dataset.resultado) return elegir(b.dataset.resultado);  // botón de resultado\n  if (b.dataset.hora) return elegirHora(b.dataset.fecha, b.dataset.hora);   // botón de hora\n  var a = b.dataset.accion;                                     // botones de acción\n  if (a === 'revisar') return revisar();\n  if (a === 'volver') return volver();\n  if (a === 'registrar') return enviar('registrar', '');\n  if (a === 'actualizar') return enviar('horas', D.fecha_extra);   // mantiene el \"otro día\" si lo había\n  if (a === 'otro-dia') return verOtroDia();\n});\n// Al escribir, se revisa qué falta; al cambiar el motivo, también el aviso de \"sin decidirse\".\n['calle', 'cp', 'municipio', 'informe', 'mensaje'].forEach(function (id) { el(id).addEventListener('input', comprobar); });\nel('motivo').addEventListener('change', function () { avisoSinDecidir(); comprobar(); });\n\n// ---- Al abrir: se pinta todo y se recupera lo ya escrito (vuelta tras \"horas\" o tras un aviso) ----\n// D46: con una visita confirmada, la pregunta es qué quiere hacer el cliente con ella.\nif (D.modo_visita) el('titulo-paso1').textContent = '¿Qué quiere hacer el cliente con su visita?';\npintarOpciones(); pintarDias();                                 // botones y agenda\nvar B = D.borrador || {};                                       // lo escrito antes (vacío la primera vez)\nel('calle').value = B.calle || ''; el('cp').value = B.cp || ''; el('municipio').value = B.municipio || '';   // la dirección\nel('informe').value = B.informe || ''; el('mensaje').value = B.mensaje || '';   // el informe y el mensaje\nif (B.resultado && D.resultados.indexOf(B.resultado) >= 0) {    // si había resultado elegido y sigue admitido\n  if (B.motivo) el('motivo').innerHTML = '<option value=\"' + esc(B.motivo) + '\"></option>';   // para que elegir() lo conserve\n  elegir(B.resultado);                                          // se vuelve a elegir\n  if (B.fecha && B.hora && RES[B.resultado].agenda) elegirHora(B.fecha, B.hora);   // la hora, solo si sigue libre\n}\ncomprobar();                                                    // y se dice qué falta\n`;\n\n// ---- 1. Lo que hay que pintar ---------------------------------------------------\nconst ctx = $('contexto').first().json;\n// Lee la salida de un nodo; si ese nodo no se ha ejecutado en esta ejecución, null.\nfunction leer(nodo) {\n  try { return $(nodo).first().json; } catch (e) { return null; }\n}\nconst enFicha = ctx.modo === 'ficha';\nconst f = enFicha ? leer('leer_ficha_pagina') : null;                    // la ficha\nconst rd = enFicha ? leer('leer_dias') : null;                           // los días con horas libres\nconst rx = enFicha && ctx.fecha_extra ? leer('leer_horas_dia') : null;   // \"Otro día más adelante\"\n\n// Avisos técnicos: los que ya traía el contexto y los que se encuentren aquí.\nconst tecnicos = [];\nif (ctx.aviso_tecnico) tecnicos.push({ nodo: ctx.nodo_error, texto: ctx.mensaje_tecnico });\n\n// ---- 2. Utilidades ----------------------------------------------------------------\n// Escapar texto antes de meterlo en HTML: nombres, informes y textos de visitas\n// los escribieron personas y podrían llevar código HTML.\nfunction esc(valor) {\n  return String(valor ?? '')\n    .replace(/&/g, '&amp;')    // el & primero, para no estropear los siguientes\n    .replace(/</g, '&lt;')     // < y > : impiden abrir etiquetas\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')   // comillas: impiden salir de un atributo\n    .replace(/'/g, '&#39;');\n}\n// Texto de un error de n8n (solo code y message: nunca el objeto entero).\nfunction textoError(e) {\n  if (!e) return 'sin detalle';                                // no llegó nada\n  if (typeof e === 'string') return e;                         // ya es un texto\n  const partes = [e.code, e.message].filter((x) => typeof x === 'string' && x.trim() !== '');\n  return partes.length ? partes.join(' · ') : 'error sin texto';\n}\n// Formatos españoles (solo para MOSTRAR).\nconst eur = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' });\nconst num = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 });\nconst dinero = (t) => (t === null || t === undefined ? '—' : eur.format(Number(t)));\n// Fecha con hora, en hora de Madrid.\nfunction fecha(t) {\n  if (!t) return '—';                                          // sin fecha: una raya\n  return new Date(t).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', weekday: 'long', day: '2-digit',\n    month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });\n}\n// Días enteros desde una fecha (el MISMO cálculo que \"hace X días\" del email diario).\nconst diasDesde = (t) => Math.floor((Date.now() - new Date(t).getTime()) / 86400000);\n// \"jueves\" + \"2026-10-29\" -> \"Jueves 29/10\" (texto recortado: ninguna zona horaria mueve el día).\nfunction tituloDia(diaSemana, f) {\n  const d = String(diaSemana ?? '');\n  return `${d.charAt(0).toUpperCase()}${d.slice(1)} ${String(f).slice(8, 10)}/${String(f).slice(5, 7)}`;\n}\n// Solo horas \"HH:MM\" (lo demás se descarta).\nconst horas = (lista) => (Array.isArray(lista) ? lista : []).filter((h) => typeof h === 'string' && /^\\d{2}:\\d{2}$/.test(h));\n\n// Diccionarios: códigos del backend -> texto.\nconst TIPOS = { bano: 'Baño', cocina: 'Cocina', integral_vivienda: 'Reforma integral de vivienda', parcial_acabados: 'Acabados parciales' };\n// Acabados, tipo de llamada, resultado y estado de la oportunidad.\nconst ACABADOS = { basico: 'básico', medio: 'medio', alto: 'alto' };\nconst TIPOS_LLAMADA = { gate: 'Gate (aprobación manual)', seguimiento: 'Seguimiento del presupuesto', confirmacion_visita: 'Confirmación de visita pedida' };\n// Resultados ya registrados y estados de la oportunidad (para los avisos).\nconst RESULTADOS = { visita_acordada: 'Visita acordada', descartar: 'Descartado', confirmar_hora: 'Hora confirmada',\n  otra_hora: 'Otra hora acordada', cliente_cancela: 'El cliente cancela' };\nconst ESTADOS = { nueva: 'nueva', cualificada: 'cualificada', pendiente_aprobacion: 'pendiente de aprobación',\n  visita_agendada: 'visita agendada', presupuesto_enviado: 'presupuesto enviado',\n  seguimiento_pendiente: 'seguimiento pendiente', ganada: 'ganada', perdida: 'perdida' };\n\n// Direcciones completas (el iframe de n8n no admite direcciones relativas).\nconst URL_ABRIR = `${ctx.base}/webhook/llamada`;\nconst URL_ENVIAR = `${ctx.base}/webhook/llamada-registrar`;\nconst URL_FICHA = `${ctx.base}/webhook/ficha`;\n\n// ---- 3. Qué se pinta en el cuerpo ---------------------------------------------------\n// Tarjeta de aviso o de resultado (tipo: 'ok' verde, 'aviso' naranja, 'error' rojo).\nfunction tarjeta(titulo, mensaje, tipo) {\n  return `<section class=\"tarjeta solo\"><div class=\"aviso ${tipo === 'ok' ? 'verde' : tipo === 'error' ? 'rojo' : ''}\">` +\n    `<strong class=\"grande\">${esc(titulo)}</strong><br>${esc(mensaje)}</div>` +\n    '<p class=\"suave\">Para registrar otra llamada, escribe su número arriba o vuelve al email diario.</p></section>';\n}\n// Lista de avisos del contexto (ya vienen como texto: se escapan aquí).\nconst avisosHtml = (ctx.avisos ?? []).map((a) => `<div class=\"aviso\">⚠️ ${esc(a)}</div>`).join('');\n\nlet cuerpo = '';          // el contenido bajo la cabecera\nlet datos = null;         // lo que necesita el JavaScript de la página (solo con formulario)\nlet subtitulo = 'Escribe el número de oportunidad';\n\nif (ctx.modo === 'buscar') {\n  // ---- 3a. Sin número --------------------------------------------------------------\n  cuerpo = `<section class=\"tarjeta solo\">${avisosHtml}<p>Escribe arriba el número de oportunidad que aparece en el email diario y pulsa <strong>Abrir</strong>.</p></section>`;\n} else if (ctx.modo === 'final') {\n  // ---- 3b. Pantalla final ------------------------------------------------------------\n  subtitulo = `Oportunidad ${ctx.oportunidad_id}`;\n  cuerpo = tarjeta(ctx.final?.titulo ?? 'Aviso', ctx.final?.mensaje ?? '', ctx.final?.tipo ?? 'aviso');\n} else {\n  // ---- 3c. Modo ficha ---------------------------------------------------------------\n  subtitulo = `Oportunidad ${ctx.oportunidad_id}`;\n  const b = f?.body ?? {};\n  const lr = b.llamada_registrable;                           // null o { tipo_llamada, resultados }\n  let vp = null;                                              // la visita pedida (confirmaciones)\n  if (!f || f.error) {\n    // Sin respuesta del backend.\n    tecnicos.push({ nodo: 'leer_ficha_pagina', texto: `Sin respuesta del backend al leer la ficha: ${textoError(f?.error)}` });\n    cuerpo = tarjeta('Sistema no disponible', 'No se ha podido conectar con el sistema. Inténtalo de nuevo en unos minutos; el responsable técnico ya ha recibido un aviso.', 'error');\n  } else if (f.statusCode === 404) {                          // número que no existe: lo arregla el operador\n    cuerpo = tarjeta('No existe', `No existe ninguna oportunidad con el número ${ctx.oportunidad_id}. Revisa el número del email diario.`, 'aviso');\n  } else if (f.statusCode === 422) {                          // número mal formado: sin aviso técnico\n    cuerpo = tarjeta('Número no válido', 'El número de oportunidad no es válido.', 'aviso');\n  } else if (f.statusCode !== 200) {                          // 401, 500, 503...: fallo del sistema -> aviso técnico\n    tecnicos.push({ nodo: 'leer_ficha_pagina', texto: `GET /oportunidades/{id}/ficha respondió ${f.statusCode}.` });\n    cuerpo = tarjeta('Error del sistema', `Error inesperado del sistema (código ${f.statusCode}). El responsable técnico ya ha recibido un aviso.`, 'error');\n  } else if ((b.llamadas ?? []).length > 0 && !b.visita_modificable) {\n    // Ya registrada y sin visita que se pueda tocar. Se dice qué y cuándo (nunca el informe).\n    const u = b.llamadas[b.llamadas.length - 1];                // la última (vienen de la más antigua a la más reciente)\n    const detalle = u.fecha_visita ? `visita el ${fecha(u.fecha_visita)}` : 'sin visita';\n    // D46: si la visita se cambió o se canceló después, la fecha de la llamada ya no es la visita (H-D46-2).\n    const cv = b.cambios_visita ?? [];                          // los cambios, del más antiguo al más reciente\n    const ult = cv.length ? cv[cv.length - 1] : null;           // el último cambio, o null\n    const despues = !ult ? ''\n      : ult.tipo_cambio === 'cancelar'\n        ? ` Después, la visita se canceló el ${fecha(ult.fecha_registro)} y la oportunidad quedó cerrada como perdida.`\n        : ` Después, la visita se cambió al ${fecha(ult.fecha_visita_nueva)}.`;\n    // Por qué no se puede cambiar ahora (solo si la visita sigue confirmada y ya ha empezado o pasado).\n    const pasada = b.estado_oportunidad === 'visita_agendada' && (!ult || ult.tipo_cambio !== 'cancelar') && u.fecha_visita\n      ? ' La visita ya ha empezado o ha pasado: no se puede cambiar ni cancelar.' : '';\n    cuerpo = tarjeta('Ya está registrada', `La oportunidad ${b.oportunidad_id} ya tiene un resultado (${RESULTADOS[u.resultado] ?? u.resultado}, ${detalle}; registrado el ${fecha(u.fecha_registro)}). Es definitivo: no hace falta volver a registrarlo.${despues}${pasada}`, 'ok');\n  } else if (!lr && !b.visita_modificable) {                  // el backend dice que no toca ninguna llamada\n    cuerpo = tarjeta('No hay ninguna llamada pendiente', `La oportunidad ${b.oportunidad_id} está en estado \"${ESTADOS[b.estado_oportunidad] ?? b.estado_oportunidad}\": ahora no toca llamar.`, 'aviso');\n  } else if (lr && lr.tipo_llamada === 'confirmacion_visita' && !(b.visitas ?? []).some((x) => x.estado_visita === 'solicitada')) {\n    // Incoherencia de datos del sistema: aviso técnico.\n    tecnicos.push({ nodo: 'leer_ficha_pagina', texto: 'Confirmación de visita sin visita \"solicitada\" en la ficha.' });\n    cuerpo = tarjeta('No se puede registrar', 'Falta la visita pedida. El responsable técnico ya ha recibido un aviso.', 'error');\n  } else {\n    // ---- Hay una llamada que registrar, o (D46) una visita confirmada que cambiar: ficha + formulario\n    // D46: sin llamada pendiente pero con visita_modificable -> modo visita. La visita actual sale de\n    // la ficha (texto recortado, como la visita pedida): es la que se reenvía como fecha_actual + hora_actual.\n    const vm = lr ? null : b.visita_modificable;                // { fecha_visita, acciones } o null\n    const va = vm ? { fecha: String(vm.fecha_visita).slice(0, 10), hora: String(vm.fecha_visita).slice(11, 16),\n      legible: fecha(vm.fecha_visita) } : null;\n    if (lr && lr.tipo_llamada === 'confirmacion_visita') {\n      const v = b.visitas.find((x) => x.estado_visita === 'solicitada');   // la visita que pidió el cliente\n      // Fecha y hora recortadas del texto (ninguna zona horaria las mueve); legible para enseñarla.\n      vp = { fecha: String(v.fecha_visita).slice(0, 10), hora: String(v.fecha_visita).slice(11, 16),\n             legible: fecha(v.fecha_visita), texto: v.texto_cliente ?? '' };\n    }\n    // La ficha (columna izquierda). Solo administración: puede ver importes.\n    const c = b.contacto ?? {};                                 // nombre, teléfono, origen\n    const r = b.reforma ?? {};                                  // tipo, m², acabados\n    const p = b.presupuesto;                                    // null si no hay presupuesto\n    // Una fila \"etiqueta | valor\"; el valor SIEMPRE pasa por esc().\n    const fila = (et, val) => `<tr><td>${et}</td><td>${esc(val)}</td></tr>`;\n    // Contacto de la solicitud, o aviso si la solicitud no lo trae.\n    let filas = c.origen === 'solicitud'\n      ? fila('Cliente', c.nombre ?? '—') + fila('Teléfono', c.telefono ?? '—')\n      : fila('Contacto', 'No disponible en la solicitud: mira la ficha completa');\n    // La reforma: tipo, metros y acabado.\n    const m2 = r.m2 === null || r.m2 === undefined ? '—' : `${num.format(Number(r.m2))} m²`;\n    filas += fila('Reforma', `${TIPOS[r.tipo_reforma] ?? r.tipo_reforma ?? '—'}, ${m2}, acabado ${ACABADOS[r.nivel_acabados] ?? r.nivel_acabados ?? '—'}`);\n    if (p) {                                                    // el presupuesto, si existe\n      filas += fila('Horquilla (IVA incl.)', `${dinero(p.importe_min_con_iva)} – ${dinero(p.importe_max_con_iva)}`);\n      if (p.fecha_presupuesto) {\n        const n = diasDesde(p.fecha_presupuesto);                 // días desde el presupuesto (sin reglas: una resta)\n        filas += fila('Presupuesto', n <= 0 ? 'hoy' : n === 1 ? 'hace 1 día' : `hace ${n} días`);\n      }\n    }\n    if (vp) filas += fila('Visita pedida', vp.legible);         // en confirmaciones, la hora pedida\n    if (va) {                                                   // D46: la visita confirmada y cuántas veces se ha cambiado\n      filas += fila('Visita confirmada', va.legible);\n      const nCambios = (b.cambios_visita ?? []).filter((x) => x.tipo_cambio === 'cambiar').length;\n      if (nCambios > 0) filas += fila('Cambios de hora', nCambios === 1 ? '1 vez' : `${nCambios} veces`);\n    }\n    // D44: el aviso de última llamada lo decide WF3 (marca ultima=1); aquí no se calcula nada.\n    const banner = lr && ctx.ultima === true && lr.tipo_llamada !== 'confirmacion_visita'\n      ? '<div class=\"aviso rojo\">⚠️ <strong>Última llamada.</strong> Si sigue sin decidirse, descártalo con el motivo \"Sigue sin decidirse (última llamada)\".</div>' : '';\n    // La etiqueta: el tipo de llamada, o (D46) que es un cambio de una visita ya confirmada.\n    const etiqueta = lr ? (TIPOS_LLAMADA[lr.tipo_llamada] ?? lr.tipo_llamada) : 'Visita confirmada: cambiar o cancelar';\n    // La tarjeta de la ficha: título, tipo de llamada, aviso, tabla, texto del cliente y enlace.\n    const fichaHtml = `<aside class=\"tarjeta ficha\"><div class=\"titulo-sec\">Oportunidad ${esc(b.oportunidad_id)}</div>` +\n      `<div class=\"etiqueta-llamada\">${esc(etiqueta)}</div>${banner}` +\n      `<table>${filas}</table>` +                                // las filas de arriba\n      (vp ? `<div class=\"suave peq\">Lo que dijo el cliente</div><div class=\"cita\">${esc(vp.texto || '—')}</div>` : '') +\n      // Enlace a la ficha completa, en una pestaña nueva (dirección completa: el iframe no admite relativas).\n      `<a class=\"enlace\" target=\"_blank\" rel=\"noopener\" href=\"${esc(URL_FICHA)}?oportunidad_id=${esc(b.oportunidad_id)}\">Ver ficha completa ↗</a>` +\n      '<div class=\"pie\">Uso interno de administración: contiene datos personales.</div></aside>';\n\n    // La agenda: días con horas libres (GET /huecos-libres).\n    let dias = [];                                              // los días con horas\n    let agendaOk = true;                                        // false si no se pudieron leer\n    let avisoAgenda = '';                                       // texto para la agenda (vacío = ninguno)\n    if (!rd || rd.error || rd.statusCode !== 200) {\n      agendaOk = false;                                         // sin agenda: se puede descartar, no dar visita\n      tecnicos.push({ nodo: 'leer_dias', texto: rd?.error ? `Sin respuesta al leer los días libres: ${textoError(rd.error)}` : `GET /huecos-libres respondió ${rd?.statusCode}.` });\n      avisoAgenda = 'No se han podido leer las horas libres. Prueba con \"Actualizar horas\"; el responsable técnico ya ha recibido un aviso.';\n    } else {\n      // Solo días con fecha AAAA-MM-DD y alguna hora; con título \"Lunes 26/10\".\n      dias = (Array.isArray(rd.body?.dias) ? rd.body.dias : [])\n        .filter((d) => d && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(d.fecha ?? '')))\n        .map((d) => ({ fecha: d.fecha, titulo: tituloDia(d.dia_semana, d.fecha), manana: horas(d.manana), tarde: horas(d.tarde) }))\n        .filter((d) => d.manana.length + d.tarde.length > 0);\n      if (dias.length === 0) avisoAgenda = 'No queda ninguna hora libre en los próximos días laborables: usa \"Otro día más adelante\".';\n    }\n    // \"Otro día más adelante\": sus horas, o por qué no hay.\n    if (ctx.fecha_extra) {\n      if (!rx || rx.error || rx.statusCode !== 200) {\n        tecnicos.push({ nodo: 'leer_horas_dia', texto: rx?.error ? `Sin respuesta al leer las horas de un día: ${textoError(rx.error)}` : `GET /huecos-libres?fecha=... respondió ${rx?.statusCode}.` });\n        // Aviso en la agenda; lo demás de la pantalla sigue funcionando.\n        avisoAgenda = 'No se han podido leer las horas de ese día. Inténtalo de nuevo; el responsable técnico ya ha recibido un aviso.';\n      } else {\n        // El día pedido, con el mismo formato que los demás (extra = se marca \"(otro día)\").\n        const e = { fecha: String(rx.body?.fecha ?? ctx.fecha_extra), titulo: tituloDia(rx.body?.dia_semana, rx.body?.fecha ?? ctx.fecha_extra),\n          manana: horas(rx.body?.manana), tarde: horas(rx.body?.tarde), extra: true };\n        // D45: antelacion_insuficiente = ese día es anterior al primero permitido (sin número escrito: lo decide el backend).\n        const SIN_HORAS = { dia_completo: 'ya no queda ninguna hora libre', fin_de_semana: 'es fin de semana: no hay visitas', fecha_pasada: 'esa fecha ya ha pasado',\n          antelacion_insuficiente: 'es demasiado pronto para una visita (la primera fecha posible es el primer día de la lista)' };\n        if (e.manana.length + e.tarde.length === 0) {                // ese día no tiene horas: se dice por qué\n          avisoAgenda = `El ${e.titulo.toLowerCase()} ${SIN_HORAS[rx.body?.sin_horas_motivo] ?? 'no tiene ninguna hora libre'}. Elige otro día.`;\n        } else if (!dias.some((d) => d.fecha === e.fecha)) {\n          dias.push(e);                                  // se añade al final de la lista\n        }\n      }\n    }\n\n    // Lo que necesita el JavaScript de la página (se mete como JSON, nunca como HTML).\n    datos = {\n      oportunidad_id: b.oportunidad_id,                          // el número\n      tipo_llamada: lr ? lr.tipo_llamada : 'cambio_visita',     // gate, seguimiento, confirmacion_visita o (D46) cambio_visita\n      // Los botones: los del backend + \"No contesta o se lo piensa\"; en modo visita (D46), los tres de un cambio.\n      resultados: lr ? [...(lr.resultados ?? []), 'sin_registro'] : ['cambiar_visita', 'cancelar_visita', 'sin_cambio'],\n      visita_pedida: vp ? { fecha: vp.fecha, hora: vp.hora, legible: vp.legible } : null,\n      modo_visita: !!va,                                         // D46: el envío va por el camino de los cambios\n      visita_actual: va,                                         // D46: la visita confirmada que ve el operador (o null)\n      dias, agenda_ok: agendaOk, aviso_agenda: avisoAgenda,     // la agenda\n      fecha_extra: ctx.fecha_extra ?? '',                        // el \"otro día\" pedido (para Actualizar)\n      ultima: ctx.ultima === true ? '1' : ctx.ultima === false ? '0' : '',\n      borrador: ctx.borrador ?? {},                              // lo ya escrito (vuelve a ponerse en los campos)\n      url_enviar: URL_ENVIAR,                                    // a dónde se envían los formularios\n    };\n    cuerpo = fichaHtml + `<section class=\"tarjeta\" id=\"registro\">${avisosHtml}${FORMULARIO}</section>`;\n  }\n}\n\n// ---- 4. La página completa ------------------------------------------------------------\n// El JSON de datos va en un <script type=\"application/json\">: el navegador no lo\n// ejecuta. \"<\" se cambia por < para que ningún texto pueda cerrar la etiqueta.\nconst datosJson = datos ? JSON.stringify(datos).replace(/</g, '\\\\u003c') : 'null';\n// La página: cabecera con la caja del número, el cuerpo, los datos y el JavaScript.\nconst html = '<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\">' +\n  '<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Registrar llamada</title>' +\n  `<style>${CSS}</style></head><body>` +\n  '<header class=\"cab\"><h1>Reformas Integrales Amedida · Registrar llamada' +\n  `<small>${esc(subtitulo)}</small></h1>` +\n  // Caja para escribir el número a mano (D43.7): GET normal, en la ventana entera.\n  `<form class=\"buscar\" method=\"GET\" target=\"_top\" action=\"${esc(URL_ABRIR)}\">` +\n  '<label for=\"num\">Nº de oportunidad</label>' +\n  `<input id=\"num\" name=\"oportunidad_id\" inputmode=\"numeric\" maxlength=\"10\" value=\"${esc(ctx.oportunidad_id ?? '')}\">` +\n  '<button type=\"submit\">Abrir</button></form></header><div class=\"franja\"></div>' +\n  // El cuerpo (dos columnas con formulario; una sola con avisos).\n  `<main class=\"contenido ${datos ? '' : 'una'}\">${cuerpo}</main>` +\n  `<script type=\"application/json\" id=\"datos\">${datosJson}</script>` +\n  (datos ? `<script>${SCRIPT}</script>` : '') +\n  '</body></html>';\n\n// ---- 5. Salida ---------------------------------------------------------------------------\n// Un solo aviso técnico por ejecución: se juntan todos los textos (solo códigos y nodos).\nreturn [{\n  json: {\n    html,                                                       // la página\n    codigo: 200,                                                // siempre 200: los avisos van DENTRO de la página\n    aviso_tecnico: tecnicos.length > 0,\n    nodo_error: tecnicos.map((t) => t.nodo).join(', '),\n    mensaje_tecnico: tecnicos.map((t) => t.texto).join(' | '),\n    oportunidad_id: ctx.oportunidad_id ?? null,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        208
+      ],
+      "id": "39e75ba2-de87-46d1-b902-6da98016ce92",
+      "name": "construir_pagina"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": "={{ $json.codigo }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        448,
+        208
+      ],
+      "id": "89356919-6747-47a2-afc6-dc8fdd2bc148",
+      "name": "responder_pagina"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ed088af9-8616-4c7d-991e-16f00ad4ebda",
+              "leftValue": "={{ $json.aviso_tecnico === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        672,
+        208
+      ],
+      "id": "137505ca-cdd5-4191-8e79-ffc89992b291",
+      "name": "es_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "jVVsWYknS0DDKhaO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/jVVsWYknS0DDKhaO",
+          "cachedResultName": "WF4_aviso_tecnico"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "flujo": "={{ $workflow.name }}",
+            "nodo": "={{ $json.nodo_error }}",
+            "mensaje_error": "={{ $json.mensaje_tecnico }}",
+            "oportunidad_id": "={{ $json.oportunidad_id }}",
+            "ejecucion_id": "={{ $execution.id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "flujo",
+              "displayName": "flujo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "nodo",
+              "displayName": "nodo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "ejecucion_id",
+              "displayName": "ejecucion_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        880,
+        208
+      ],
+      "id": "acf90dfa-93e4-4988-877e-07c8ff28c8f1",
+      "name": "llamar_aviso_tecnico"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "llamada-registrar",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1760,
+        608
+      ],
+      "id": "354af003-cb12-4922-b2fa-60057c60ae91",
+      "name": "enviar",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "Fa1bxlK0a6JT0rdh",
+          "name": "Formulario Gate (administracion)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Leer lo que envía la pantalla (D43). 2026-10-23.\n// Entrada ($json): lo que recibe el Webhook \"enviar\" (POST, formulario normal de\n//   la página). n8n pone los campos en $json.body, todos como TEXTO.\n//   accion = 'registrar' -> registrar el resultado de la llamada\n//   accion = 'visita'    -> (D46) cambiar o cancelar una visita ya confirmada\n//   accion = 'horas'     -> volver a pintar la pantalla con las horas al día\n//                           (\"Actualizar horas\") o con otro día (\"Ver sus horas\")\n// Salida: el CONTEXTO (como validar_apertura) + accion. El borrador guarda lo\n//   escrito para volver a ponerlo en la pantalla: así nunca se pierde nada.\n// CONFIDENCIAL: el borrador lleva la dirección de la obra. Nunca se copia a un\n//   aviso técnico ni a un mensaje de error (D42.5).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Lo que llegó al webhook (una sola petición = un solo elemento).\nconst w = $input.first().json;\n// Los campos del formulario (\"?? {}\": objeto vacío si no hay cuerpo).\nconst b = w.body ?? {};\n// Las cabeceras (para la dirección pública, igual que en validar_apertura).\nconst h = w.headers ?? {};\n\n// Un campo como texto, con un tope de longitud: nadie puede colar un texto enorme.\n// El tope es MAYOR que el límite real (así el límite real lo dice validar_registro).\nfunction campo(nombre, tope) {\n  return String(b[nombre] ?? '').slice(0, tope);\n}\n\n// La dirección pública (misma función que validar_apertura).\nfunction baseDe(cab) {\n  const host = String(cab['x-forwarded-host'] ?? cab.host ?? '').split(',')[0].trim();   // host público\n  const proto = String(cab['x-forwarded-proto'] ?? 'http').split(',')[0].trim();        // protocolo\n  if (!/^[A-Za-z0-9.-]+(:[0-9]{1,5})?$/.test(host)) return '';                           // host raro: nada\n  if (proto !== 'http' && proto !== 'https') return '';                                  // protocolo raro: nada\n  return `${proto}://${host}`;                                                           // \"https://dominio\"\n}\n\n// El número de oportunidad, con la misma regla de siempre.\nconst texto = campo('oportunidad_id', 20).trim();\nconst valido = /^[1-9][0-9]{0,9}$/.test(texto);\n// La acción: solo tres valores posibles; cualquier otra cosa se trata como \"horas\" (no escribe nada).\n// D46 (2026-10-26): 'visita' = cambiar o cancelar una visita YA confirmada (camino de es_cambio_visita).\nconst pedida = campo('accion', 20);\nconst accion = pedida === 'registrar' || pedida === 'visita' ? pedida : 'horas';\n// \"Otro día más adelante\": solo una fecha AAAA-MM-DD; si no, vacío.\nconst fechaExtra = campo('fecha_extra', 20);\n\n// Lo escrito en la pantalla, tal cual (se valida después, en validar_registro).\nconst borrador = {\n  resultado: campo('resultado', 40),            // el resultado elegido (código)\n  fecha: campo('fecha', 20),                    // día elegido en la agenda (AAAA-MM-DD)\n  hora: campo('hora', 10),                      // hora elegida (HH:MM)\n  calle: campo('calle', 400),                   // dirección de la obra (CONFIDENCIAL)\n  cp: campo('cp', 40),\n  municipio: campo('municipio', 300),\n  motivo: campo('motivo', 40),                  // motivo de descarte o cancelación (código)\n  informe: campo('informe', 4000),              // informe de la llamada\n  mensaje: campo('mensaje', 1000),              // mensaje para el email del cliente\n  // D46: la visita confirmada que VEÍA el operador (fecha AAAA-MM-DD y hora HH:MM); la comprueba el backend.\n  fecha_actual: campo('fecha_actual', 20),\n  hora_actual: campo('hora_actual', 10),\n};\n\n// Sin número válido no se puede seguir: pantalla de búsqueda con un aviso.\nconst avisos = valido ? [] : ['No llegó un número de oportunidad válido. Escríbelo arriba y pulsa Abrir.'];\n\nreturn [{\n  json: {\n    accion,                                       // 'registrar', 'visita' (D46) o 'horas'\n    modo: valido ? 'ficha' : 'buscar',            // qué pinta la pantalla\n    oportunidad_id: valido ? Number(texto) : null,\n    // D44: la marca viaja con la pantalla ('1' sí, '0' no, vacío = no se sabe).\n    ultima: campo('ultima', 5) === '1' ? true : campo('ultima', 5) === '0' ? false : null,\n    base: baseDe(h),                              // dirección pública para enlaces y formularios\n    // \"Otro día más adelante\": solo una fecha con forma AAAA-MM-DD.\n    fecha_extra: /^\\d{4}-\\d{2}-\\d{2}$/.test(fechaExtra) ? fechaExtra : '',\n    borrador,                                     // lo escrito, para volver a ponerlo\n    avisos,                                       // avisos para la pantalla\n    final: null,                                  // todavía no hay pantalla final\n    aviso_tecnico: false,                         // nada que avisar al técnico todavía\n    nodo_error: '',\n    mensaje_tecnico: '',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1536,
+        608
+      ],
+      "id": "eafc7cd1-a9bc-4fad-b117-4672b0ed2059",
+      "name": "preparar_envio"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "69ddd934-0cee-41c5-99de-0ecc4c8dee85",
+              "leftValue": "={{ $json.accion === 'registrar' && $json.modo === 'ficha' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1328,
+        608
+      ],
+      "id": "45370906-51f2-4292-86e5-d753d440c6d1",
+      "name": "segun_accion"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/oportunidades/{{ $json.oportunidad_id }}/ficha",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -1104,
+        704
+      ],
+      "id": "ddea5b2e-4ffc-4ce1-8730-a7873a06bdaa",
+      "name": "leer_ficha_registro",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Comprobar lo enviado ANTES de registrar (D43). 2026-10-23.\n// Basado en preparar_ficha y preparar_decision del formulario viejo (ya probados).\n// Entrada:\n//   $json                        -> la ficha recién leída (leer_ficha_registro):\n//                                   { statusCode, body } o { error } si no hubo respuesta\n//   $('preparar_envio')          -> el contexto y lo escrito (borrador)\n// Salida (1 elemento):\n//   valido = true  -> { valido, cuerpo, mensaje_cliente, nombre, tipo_reforma, ...contexto }\n//                     cuerpo = el JSON EXACTO para POST /resultados-llamada\n//   valido = false -> el CONTEXTO para volver a pintar la pantalla (con el aviso)\n//                     o para la pantalla final (modo 'final')\n// La ficha se vuelve a leer AQUÍ, en el servidor: la hora pedida, los resultados\n// admitidos y el tipo de llamada NUNCA se toman de lo que manda el navegador.\n// CONFIDENCIAL: ningún aviso ni mensaje copia la dirección ni el informe (D42.5).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// El contexto y lo escrito en la pantalla.\nconst env = $('preparar_envio').first().json;\nconst d = env.borrador ?? {};\n// La ficha leída ahora mismo.\nconst f = $input.first().json;\nconst b = f.body ?? {};\n\n// El contexto base, para las salidas que vuelven a pintar la pantalla.\nfunction contexto(extra) {\n  return {\n    valido: false,                               // registro_valido manda esto a \"contexto\"\n    modo: 'ficha', oportunidad_id: env.oportunidad_id, ultima: env.ultima, base: env.base,\n    fecha_extra: env.fecha_extra, borrador: d, avisos: [], final: null,\n    aviso_tecnico: false, nodo_error: '', mensaje_tecnico: '',\n    ...extra,                                    // lo que cambie en cada caso\n  };\n}\n// Pantalla final de aviso (no hay nada que corregir en la pantalla).\nfunction final(titulo, mensaje, tecnico = false, mensaje_tecnico = '') {\n  return [{ json: contexto({ modo: 'final', final: { titulo, mensaje, tipo: 'aviso' },\n    aviso_tecnico: tecnico, nodo_error: tecnico ? 'leer_ficha_registro' : '', mensaje_tecnico }) }];\n}\n// Volver a la pantalla con uno o varios avisos (lo escrito se conserva).\nfunction corregir(...avisos) {\n  return [{ json: contexto({ avisos }) }];\n}\nconst NADA = ' No se ha registrado nada.';\n\n// ---- 1. La ficha: ¿se puede registrar? (como preparar_ficha) -----------------\nif (f.error) {\n  // Sin respuesta del backend: nada que hacer; aviso técnico (solo el código del error).\n  const e = f.error;                                       // el error de n8n\n  const detalle = typeof e === 'string' ? e : [e.code, e.message].filter((x) => typeof x === 'string').join(' · ');\n  return final('Sistema no disponible', 'No se ha podido conectar con el sistema.' + NADA +\n    ' Inténtalo de nuevo en unos minutos.', true, `Sin respuesta al leer la ficha antes de registrar: ${detalle || 'sin detalle'}`);\n}\n// 404 y 422: los arregla el operador (sin aviso técnico).\nif (f.statusCode === 404) return final('No se puede registrar', 'No existe ninguna oportunidad con ese número.' + NADA);\nif (f.statusCode === 422) return final('No se puede registrar', 'El número de oportunidad no es válido.' + NADA);\nif (f.statusCode !== 200) {\n  // 401, 500, 503...: fallo del sistema -> aviso técnico.\n  return final('Error del sistema', `Error inesperado del sistema (código ${f.statusCode}).` + NADA +\n    ' El responsable técnico ya ha recibido un aviso.', true, `GET /oportunidades/{id}/ficha respondió ${f.statusCode} antes de registrar.`);\n}\n// Ya tiene un resultado (es definitivo).\nif ((b.llamadas ?? []).length > 0) {\n  return final('Ya está registrada', `La oportunidad ${b.oportunidad_id} ya tiene un resultado registrado. Es definitivo: no hace falta volver a registrarlo.`);\n}\n// Nada pendiente.\nconst lr = b.llamada_registrable;                  // null o { tipo_llamada, resultados }\nif (!lr) return final('No hay ninguna llamada pendiente', `La oportunidad ${b.oportunidad_id} no tiene ninguna llamada pendiente.` + NADA);\n// En una confirmación, la hora PEDIDA sale de la ficha (texto recortado, sin zonas horarias).\nlet vp = null;\nif (lr.tipo_llamada === 'confirmacion_visita') {\n  const v = (b.visitas ?? []).find((x) => x.estado_visita === 'solicitada');\n  if (!v) return final('No se puede registrar', 'Falta la visita pedida.' + NADA + ' El responsable técnico ya ha recibido un aviso.',\n    true, 'Confirmación de visita sin visita \"solicitada\" en la ficha.');\n  // Fecha y hora recortadas del texto (\"2026-10-27T10:30:00+01:00\" -> \"2026-10-27\" y \"10:30\").\n  vp = { fecha: String(v.fecha_visita).slice(0, 10), hora: String(v.fecha_visita).slice(11, 16) };\n}\n\n// ---- 2. Lo escrito: las mismas reglas que el backend ------------------------\n// Texto con el carácter nulo: psycopg2 lo rechaza con un 500 (H-D42-1). Se para aquí.\nconst tieneNulo = (t) => t.includes('\\u0000');\nconst resultado = String(d.resultado ?? '');\n// El resultado tiene que estar entre los que el backend admite para ESTA llamada.\nif (!(lr.resultados ?? []).includes(resultado)) {\n  return corregir('La situación de esta oportunidad ha cambiado o el resultado no es válido: revisa la pantalla y vuelve a elegir.');\n}\n// El informe: sin espacios sobrantes, de 1 a 2.000 caracteres (lo mismo que exige el backend).\nconst informe = String(d.informe ?? '').trim();\nif (informe.length === 0) return corregir('El informe de la llamada está vacío.');\nif (informe.length > 2000) return corregir(`El informe tiene ${informe.length} caracteres; el máximo es 2.000.`);\nif (tieneNulo(informe)) return corregir('El informe contiene un carácter no válido. Vuelve a escribirlo.');\n\n// ¿Queda una visita? Entonces hacen falta la dirección y (opcional) el mensaje.\nconst conVisita = ['visita_acordada', 'confirmar_hora', 'otra_hora'].includes(resultado);\nconst cuerpo = { oportunidad_id: b.oportunidad_id, resultado, informe };\nlet mensaje_cliente = '';\nif (conVisita) {\n  // Día y hora: elegidos en la agenda; en \"confirmar_hora\", los de la ficha.\n  if (resultado === 'confirmar_hora') {\n    cuerpo.fecha = vp.fecha; cuerpo.hora = vp.hora;      // la hora pedida, de la ficha\n  } else {\n    const fecha = String(d.fecha ?? ''), hora = String(d.hora ?? '');   // las elegidas en la agenda\n    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(fecha) || !/^\\d{2}:\\d{2}$/.test(hora)) return corregir('Falta el día o la hora de la visita.');\n    // \"Otra hora\" no puede ser la misma que pidió el cliente (el backend daría 422).\n    if (resultado === 'otra_hora' && vp && fecha === vp.fecha && hora === vp.hora) {\n      return corregir('Es la misma hora que pidió el cliente: elige \"Confirmar la hora pedida\".');\n    }\n    cuerpo.fecha = fecha; cuerpo.hora = hora;\n  }\n  // La dirección de la obra (D42.3): los mismos límites que el backend.\n  const calle = String(d.calle ?? '').trim();              // los tres campos, sin espacios sobrantes\n  const cp = String(d.cp ?? '').trim();\n  const municipio = String(d.municipio ?? '').trim();\n  const errores = [];                                      // se juntan todos los errores para decirlos a la vez\n  if (calle.length < 1 || calle.length > 150) errores.push('La calle y número tiene que tener entre 1 y 150 caracteres.');\n  if (!/^(0[1-9]|[1-4][0-9]|5[0-2])[0-9]{3}$/.test(cp)) errores.push('El código postal no es válido.');\n  if (municipio.length < 1 || municipio.length > 100) errores.push('El municipio tiene que tener entre 1 y 100 caracteres.');\n  // Carácter nulo en cualquiera de los tres (H-D42-1).\n  if ([calle, cp, municipio].some(tieneNulo)) errores.push('La dirección contiene un carácter no válido.');\n  if (errores.length) return corregir(...errores);\n  // Todo bien: la dirección va en el cuerpo, ya recortada.\n  cuerpo.direccion_obra = { calle_numero: calle, codigo_postal: cp, municipio };\n  // El mensaje para el cliente (D39.4): opcional, máx. 500, va al email (WF7), NUNCA al backend.\n  mensaje_cliente = String(d.mensaje ?? '').trim();\n  if (mensaje_cliente.length > 500) return corregir(`El mensaje para el cliente tiene ${mensaje_cliente.length} caracteres; el máximo es 500.`);\n  if (tieneNulo(mensaje_cliente)) return corregir('El mensaje para el cliente contiene un carácter no válido.');\n} else {\n  // descartar o cliente_cancela: motivo OBLIGATORIO (códigos del backend, D29.3).\n  const MOTIVOS = ['precio', 'plazo', 'no_contesta', 'sin_decision', 'proyecto_no_viable', 'otro'];\n  const motivo = String(d.motivo ?? '');\n  if (!MOTIVOS.includes(motivo)) return corregir('Elige el motivo.');\n  // Quien cancela ha contestado y ha decidido: esos dos motivos no valen.\n  if (resultado === 'cliente_cancela' && (motivo === 'no_contesta' || motivo === 'sin_decision')) {\n    return corregir('Ese motivo no vale cuando el cliente cancela. Elige otro.');\n  }\n  cuerpo.motivo = motivo;\n}\n\n// ---- 3. Todo listo -------------------------------------------------------------\nconst c = b.contacto ?? {};\nreturn [{\n  json: {\n    ...contexto({}),\n    valido: true,\n    cuerpo,                                       // para POST /resultados-llamada\n    mensaje_cliente,                              // para WF7 (vacío sin visita)\n    nombre: c.origen === 'solicitud' ? (c.nombre ?? '') : '',   // título del evento (WF5): solo el nombre\n    tipo_reforma: b.reforma?.tipo_reforma ?? '',  // título del evento (WF5)\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -880,
+        704
+      ],
+      "id": "c83e52d0-6f34-4709-9a51-52c9c2c9678d",
+      "name": "validar_registro"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f7b4889d-b121-4c6d-8dc9-0f70a3f774ce",
+              "leftValue": "={{ $json.valido === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -656,
+        704
+      ],
+      "id": "5a83e897-3e9a-43f2-917a-fcf93f743bc8",
+      "name": "registro_valido"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/resultados-llamada",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('validar_registro').first().json.cuerpo) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -448,
+        704
+      ],
+      "id": "a76ecdb3-3008-42ea-8145-783f3963e094",
+      "name": "registrar_resultado",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Traducir la respuesta de POST /resultados-llamada (D43).\n// 2026-10-23. Basado en traducir_resultado del formulario viejo (ya probado), con\n// una mejora: los errores que se arreglan ELIGIENDO OTRA COSA vuelven a la\n// pantalla con todo lo escrito, en vez de obligar a empezar de nuevo (H-D42-3).\n// Entrada ($json): { statusCode, body } o { error } si se cortó la conexión.\n// Salida (1 elemento), con destino:\n//   'calendario' -> registrado (201 o 200): sigue a preparar_calendario\n//   'pantalla'   -> no registrado y se puede corregir: el CONTEXTO, modo 'ficha'\n//   'final'      -> no registrado y no hay nada que corregir: el CONTEXTO, modo 'final'\n// Textos: secciones 4 y 4b de docs/Contrato_Formulario_Llamadas.md.\n// D45 (23/10, noche): 422 antelacion_insuficiente = error del operador (elegir otro día), NUNCA técnico.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// La respuesta del backend.\nconst r = $input.first().json;\nconst estado = r.statusCode;\nconst b = r.body ?? {};\n// Lo que se envió y el contexto de la pantalla.\nconst v = $('validar_registro').first().json;\nconst enviado = v.cuerpo ?? {};\nconst op = enviado.oportunidad_id;\nconst NADA = ' No se ha registrado nada.';\n\n// Fecha y hora en español y hora de Madrid, solo para MOSTRAR.\nfunction fecha(t) {\n  if (!t) return '—';\n  return new Date(t).toLocaleString('es-ES', {\n    timeZone: 'Europe/Madrid', weekday: 'long', day: '2-digit', month: '2-digit',\n    year: 'numeric', hour: '2-digit', minute: '2-digit',\n  });\n}\n// \"2026-10-26\" -> \"26/10/2026\" (sin zonas horarias: se recorta el texto).\nconst diaCorto = (f) => (/^\\d{4}-\\d{2}-\\d{2}$/.test(String(f)) ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}` : '');\n// Motivos del backend -> texto para administración.\nconst MOTIVOS = { precio: 'precio', plazo: 'plazo', no_contesta: 'no contesta', proyecto_no_viable: 'proyecto no viable',\n  otro: 'otro', sin_decision: 'sigue sin decidirse' };\n\n// El contexto común (sin cuerpo ni datos de registro: solo lo de la pantalla).\nfunction ctx(extra) {\n  return { destino: 'pantalla', modo: 'ficha', oportunidad_id: v.oportunidad_id, ultima: v.ultima, base: v.base,\n    fecha_extra: v.fecha_extra, borrador: v.borrador, avisos: [], final: null,\n    aviso_tecnico: false, nodo_error: '', mensaje_tecnico: '', ...extra };\n}\n// Volver a la pantalla con un aviso. limpiarHora: la hora elegida ya no vale.\nfunction pantalla(aviso, limpiarHora = false, tecnico = false, mensaje_tecnico = '') {\n  const borrador = limpiarHora ? { ...v.borrador, fecha: '', hora: '' } : v.borrador;\n  return [{ json: ctx({ avisos: [aviso], borrador, aviso_tecnico: tecnico,\n    nodo_error: tecnico ? 'registrar_resultado' : '', mensaje_tecnico }) }];\n}\n// Pantalla final (tipo 'ok' = verde; 'aviso' = naranja).\nfunction final(titulo, mensaje, tipo = 'aviso', tecnico = false, mensaje_tecnico = '') {\n  return [{ json: ctx({ destino: tipo === 'ok' ? 'calendario' : 'final', modo: 'final',\n    final: { titulo, mensaje, tipo }, aviso_tecnico: tecnico,\n    nodo_error: tecnico ? 'registrar_resultado' : '', mensaje_tecnico }) }];\n}\n\n// ---- 0. Sin respuesta: puede que se haya registrado o no ---------------------\nif (r.error) {\n  const e = r.error;\n  const detalle = typeof e === 'string' ? e : [e.code, e.message].filter((x) => typeof x === 'string').join(' · ');\n  return final('No se sabe si se ha registrado',\n    'Se ha perdido la conexión con el sistema durante el registro. Vuelve a abrir la pantalla con el mismo número: ' +\n    'si se registró, lo verás indicado; si no, podrás registrarlo de nuevo sin riesgo de duplicarlo.',\n    'aviso', true, `Sin respuesta durante POST /resultados-llamada; NO se sabe si se registró: ${detalle || 'sin detalle'}`);\n}\n\n// ---- 1. Éxito: 201 (registrado ahora) o 200 (repetición exacta) -------------\nif (estado === 201 || estado === 200) {\n  // 200: el backend no ha escrito nada (repetición exacta; normal si se reintenta).\n  if (estado === 200) return final('Ya estaba registrado', `Oportunidad ${op}: este mismo resultado ya estaba registrado. No se ha cambiado nada.`, 'ok');\n  if (['visita_acordada', 'confirmar_hora', 'otra_hora'].includes(b.resultado)) {\n    // Con visita (acordada, hora confirmada u otra hora); en \"otra hora\", la pedida queda cancelada.\n    const cancelada = b.resultado === 'otra_hora' ? ' La hora que había pedido el cliente queda cancelada.' : '';\n    return final('Visita registrada', `Oportunidad ${op}: visita confirmada el ${fecha(b.fecha_visita)}.${cancelada}`, 'ok');\n  }\n  if (b.resultado === 'descartar') {                       // descarte: la oportunidad queda perdida\n    return final('Descarte registrado', `Oportunidad ${op} descartada, motivo: ${MOTIVOS[b.motivo] ?? b.motivo}. La oportunidad queda cerrada como perdida.`, 'ok');\n  }\n  if (b.resultado === 'cliente_cancela') {                 // cancelación del cliente\n    return final('Cancelación registrada', `Oportunidad ${op}: el cliente cancela, motivo: ${MOTIVOS[b.motivo] ?? b.motivo}. ` +\n      'La visita pedida queda cancelada y la oportunidad cerrada como perdida.', 'ok');\n  }\n  // Un resultado nuevo que este nodo no conoce: se enseña tal cual.\n  return final('Resultado registrado', `Oportunidad ${op}: ${b.resultado}.`, 'ok');\n}\n\n// ---- 2. Errores que se corrigen en la pantalla (todo lo escrito se conserva) --\nconst motivo = b.detail?.motivo;                          // el motivo del error que da el backend\nconst mensajeBackend = String(b.detail?.mensaje ?? '');\nif (estado === 409 && motivo === 'hueco_ocupado') {\n  if (enviado.resultado === 'visita_acordada' || enviado.resultado === 'otra_hora') {\n    return pantalla(`La hora ${enviado.hora} del ${diaCorto(enviado.fecha)} se acaba de ocupar.${NADA} Elige otra con el cliente; lo demás sigue escrito.`, true);\n  }\n  // confirmar_hora: la hora pedida ya no está libre -> elegir \"Otra hora\".\n  return pantalla(`La hora que pidió el cliente ya está ocupada por otra visita.${NADA} Elige \"Otra hora\" y acuerda una nueva con él.`);\n}\n// D45: antelacion_insuficiente también (por ejemplo, la pantalla se abrió antes de medianoche y se envió después).\nif (estado === 422 && ['fecha_pasada', 'fin_de_semana', 'fuera_de_franja', 'antelacion_insuficiente'].includes(motivo)) {\n  return pantalla(`${mensajeBackend}${NADA} Elige otro día u otra hora.`, true);\n}\nif (estado === 422 && motivo === 'fuera_de_rejilla') {\n  // No debería pasar nunca (las horas salen de /huecos-libres): fallo de la pantalla -> aviso técnico.\n  return pantalla(`Esa hora no es válida.${NADA} Elige otra; el responsable técnico ya ha recibido un aviso.`, true, true,\n    'POST /resultados-llamada respondió 422 fuera_de_rejilla: la pantalla ofreció una hora fuera de la rejilla.');\n}\nif (estado === 422 && motivo === 'misma_hora_pedida') {\n  return pantalla(`Es la hora que pidió el cliente: elige \"Confirmar la hora pedida\".${NADA}`, true);\n}\nif (estado === 409 && (motivo === 'resultado_no_admitido' || motivo === 'visita_cambiada')) {\n  // La situación cambió desde que se abrió la pantalla: se vuelve a pintar CON LA FICHA NUEVA.\n  const texto = motivo === 'visita_cambiada' ? 'El cliente ha cambiado la hora pedida mientras tanto.' : 'La situación del cliente ha cambiado mientras tanto.';\n  return pantalla(`${texto}${NADA} Revisa la pantalla, que ya está al día, y vuelve a elegir.`, true);\n}\n\n// ---- 3. Errores sin nada que corregir: pantalla final -------------------------\nconst MENSAJES = {\n  resultado_ya_registrado: 'Esta llamada ya tiene un resultado registrado (es definitivo).',\n  estado_no_permitido: 'Esta oportunidad no tiene ninguna llamada pendiente.',\n  sin_presupuesto: 'Todavía no tiene presupuesto.',\n  visita_activa_existente: 'Ya tiene una visita activa.',\n  oportunidad_no_encontrada: 'Oportunidad no encontrada.',\n};\nif (MENSAJES[motivo]) return final('No se ha podido registrar', MENSAJES[motivo] + NADA);\nif (['plazo_no_cumplido', 'contacto_registrado', 'visita_existente', 'con_gate'].includes(motivo)) {\n  return final('No se ha podido registrar', `Esta oportunidad no está en el seguimiento ahora mismo.${NADA}`);\n}\n// Errores técnicos: aviso al responsable técnico (solo códigos, nunca el cuerpo enviado).\nconst TECNICOS = { 401: 'Error de configuración', 422: 'Error en los datos enviados', 503: 'Sistema no disponible' };\nreturn final(TECNICOS[estado] ?? 'Error inesperado', `El sistema no ha aceptado el registro (código ${estado}).${NADA} ` +\n  'El responsable técnico ya ha recibido un aviso.', 'aviso', true,\n  `POST /resultados-llamada respondió ${estado}${motivo ? ` (${motivo})` : ''}.`);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        608
+      ],
+      "id": "edcf938b-9f82-422d-893c-ac2e893ba8ab",
+      "name": "traducir_resultado"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e9efee03-65ea-4faa-8c37-c09bd4011114",
+              "leftValue": "={{ $json.destino === 'calendario' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        0,
+        608
+      ],
+      "id": "5d1a83c2-f051-44c7-935b-10e53b31171e",
+      "name": "segun_traduccion"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Preparar las llamadas a WF5 (D33, D43). 2026-10-23.\n// Copia de preparar_calendario del formulario viejo (ya probado); solo cambia de\n// dónde salen el nombre y el tipo de reforma (validar_registro, en vez de preparar_ficha).\n// Lo decide la RESPUESTA del backend, no el resultado elegido:\n//   visita_cancelada_id  -> WF5 'borrar' esa visita   (otra_hora, cliente_cancela)\n//   visita_id            -> WF5 'guardar' confirmada  (visita_acordada, confirmar_hora, otra_hora)\n// También en un 200 (repetición): WF5 no duplica nunca, y así se recupera un\n// calendario que falló la primera vez.\n// Salida: 1 elemento por llamada a WF5, o 1 elemento { sin_calendario: true }.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// La respuesta del registro.\nconst resp = $('registrar_resultado').first().json;\nconst estado = resp.statusCode;                       // 201, 200...\nconst b = resp.body ?? {};                            // el cuerpo (\"?? {}\": vacío si no hay)\n// Nombre y tipo de reforma, leídos de la ficha en validar_registro.\nconst v = $('validar_registro').first().json;\n\n// Sin registro (no debería llegar aquí): nada que copiar.\nif (estado !== 201 && estado !== 200) return [{ json: { sin_calendario: true } }];\n\n// Lo común a todas las llamadas (RGPD: solo el nombre, nunca el contacto ni la dirección).\nconst comun = {\n  nombre: v.nombre ?? '',\n  tipo_reforma: v.tipo_reforma ?? '',\n  oportunidad_id: b.oportunidad_id ?? v.oportunidad_id,\n};\n\nconst llamadas = [];                                  // las llamadas a WF5, en orden\n// 1. La visita pedida que se ha cancelado: su evento amarillo se borra.\nif (b.visita_cancelada_id) {\n  llamadas.push({ accion: 'borrar', visita_id: b.visita_cancelada_id, estado_visita: '', inicio: '', fin: '', ...comun });\n}\n// 2. La visita que queda confirmada: se crea, o se pasa de amarillo a verde.\n//    Inicio y fin, tal cual los da el backend (n8n no suma la duración, D33).\nif (b.visita_id) {\n  llamadas.push({ accion: 'guardar', visita_id: b.visita_id, estado_visita: 'confirmada',\n    inicio: b.fecha_visita ?? '', fin: b.fecha_fin_visita ?? '', ...comun });\n}\n\n// Descartar (sin visitas): nada que copiar.\nif (llamadas.length === 0) return [{ json: { sin_calendario: true } }];\n// Un elemento por llamada: llamar_calendario (modo \"each\") llama a WF5 una vez por cada uno.\nreturn llamadas.map((j) => ({ json: j }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        608
+      ],
+      "id": "7b8e99b2-53a2-4b57-ba81-4a0cf9a024ce",
+      "name": "preparar_calendario"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "34d2447e-6bc1-44a1-a9ef-8e27cc729b5e",
+              "leftValue": "={{ $json.sin_calendario !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        608
+      ],
+      "id": "51fe8f08-2170-4cf5-a6b5-25f7098e4730",
+      "name": "necesita_calendario"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "hJQF6yGml9qaUDKf",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/hJQF6yGml9qaUDKf",
+          "cachedResultName": "WF5_calendario_visita"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "accion": "={{ $json.accion }}",
+            "visita_id": "={{ $json.visita_id }}",
+            "estado_visita": "={{ $json.estado_visita }}",
+            "inicio": "={{ $json.inicio }}",
+            "fin": "={{ $json.fin }}",
+            "nombre": "={{ $json.nombre }}",
+            "tipo_reforma": "={{ $json.tipo_reforma }}",
+            "oportunidad_id": "={{ $json.oportunidad_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "accion",
+              "displayName": "accion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "visita_id",
+              "displayName": "visita_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "estado_visita",
+              "displayName": "estado_visita",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "inicio",
+              "displayName": "inicio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fin",
+              "displayName": "fin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "nombre",
+              "displayName": "nombre",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "tipo_reforma",
+              "displayName": "tipo_reforma",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        672,
+        512
+      ],
+      "id": "3e6db832-fe70-4a3f-b6a1-1f818b0d1556",
+      "name": "llamar_calendario",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Texto de la pantalla final (D33, D43). 2026-10-23.\n// Basado en cerrar_pantalla del formulario viejo (ya probado, F-1 incluido).\n// Recibe de dos sitios (se sabe cuál con $prevNode.name):\n//   - necesita_calendario -> no había nada que copiar (descarte): el texto tal cual\n//   - llamar_calendario   -> 1 resultado de WF5 por llamada: { ok, ... }, o { error }\n//                            si WF5 no se pudo ni ejecutar\n// Salida: el CONTEXTO en modo 'final' para construir_pagina.\n//   aviso_tecnico = true SOLO si WF5 no se ejecutó (si se ejecutó y falló, ya avisó él).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// El contexto y el texto del registro (traducir_resultado).\nconst t = $('traducir_resultado').first().json;\n// Lo que se envió (para saber el resultado) y la respuesta (para saber si sale el email).\nconst v = $('validar_registro').first().json;\nconst resp = $('registrar_resultado').first().json;\n// ¿Sale el email de \"visita confirmada\"? La MISMA condición que el nodo email_visita.\nconst saleEmail = resp.statusCode === 201 && ['visita_acordada', 'confirmar_hora', 'otra_hora'].includes(resp.body?.resultado)\n  && !!resp.body?.visita_id;\nconst lineaEmail = saleEmail ? ' Se envía al cliente un email con la confirmación de la visita.' : '';\n\n// Atajo para la salida: el contexto de traducir_resultado con su pantalla final.\nfunction salida(titulo, mensaje, tipo, tecnico = false, mensaje_tecnico = '') {\n  return [{ json: { ...t, modo: 'final', final: { titulo, mensaje, tipo },\n    aviso_tecnico: tecnico, nodo_error: tecnico ? 'llamar_calendario' : '', mensaje_tecnico } }];\n}\n\n// Sin calendario (descarte): el texto de siempre.\nif ($prevNode.name !== 'llamar_calendario') return salida(t.final.titulo, t.final.mensaje, 'ok');\n\n// ¿Se confirma la hora que pidió el cliente? Entonces su evento pendiente ya existía (F-1).\nconst esConfirmarHora = String(v.cuerpo?.resultado ?? '') === 'confirmar_hora';\n// Lo que se pidió a WF5 y lo que contestó, en el mismo orden.\nconst pedidas = $('preparar_calendario').all().map((i) => i.json);\nconst resultados = $input.all().map((i) => i.json);\nconst hayGuardar = pedidas.some((p) => p.accion === 'guardar');\n\n// Texto de un error de n8n sin enviar el objeto entero (podría llevar datos).\nfunction textoError(e) {\n  if (!e) return 'sin detalle';                                  // no llegó nada\n  if (typeof e === 'string') return e;                           // ya es un texto\n  const partes = [e.code, e.message, e.description].filter((x) => typeof x === 'string' && x.trim() !== '');\n  return partes.length > 0 ? partes.join(' · ') : 'error sin texto';\n}\n\n// Fallo de la LLAMADA (WF5 no llegó a ejecutarse) o fallo DENTRO de WF5 (ok = false; ya avisó él).\nconst falloLlamada = resultados.length !== pedidas.length || resultados.some((r) => typeof r.ok !== 'boolean');\nconst falloWf5 = resultados.some((r) => r.ok === false);\nif (falloLlamada || falloWf5) {\n  // El registro SÍ está hecho: que nadie lo repita, y que se sepa que el calendario no cuadra.\n  const titulo = hayGuardar ? 'Visita registrada, pero NO copiada al calendario' : 'Registrado, pero el calendario no se ha actualizado';\n  const mensaje = `${t.final.mensaje}${lineaEmail} ⚠️ El registro SÍ está guardado: no lo repitas. ` +\n    'No se ha podido actualizar el calendario \"Visitas técnicas — Reformas Amedida\": el responsable técnico ya ha recibido un aviso.';\n  // Solo si WF5 no se ejecutó hace falta que este flujo avise (si no, WF4 llegaría dos veces).\n  const tecnico = falloLlamada\n    ? `WF5 no se pudo ejecutar (${resultados.length} de ${pedidas.length} respuestas): ` + resultados.map((r) => textoError(r.error)).join(' | ')\n    : '';\n  return salida(titulo, mensaje, 'aviso', falloLlamada, tecnico);\n}\n\n// Todo bien: el título y la frase del calendario según el caso.\nlet titulo = t.final.titulo;\nif (resp.statusCode === 201 && hayGuardar) {\n  titulo = esConfirmarHora ? 'Visita registrada y actualizada en el calendario' : 'Visita registrada y añadida al calendario';\n}\nlet frase;                                                       // la frase del calendario\n// Otra hora (borrar + guardar), confirmar la hora pedida, visita nueva o solo borrar (cancela).\nif (hayGuardar && pedidas.length > 1) frase = ' Calendario actualizado: la hora anterior se ha quitado y la nueva está añadida.';\nelse if (hayGuardar && esConfirmarHora) frase = ' Calendario actualizado: la visita pedida ya figura como confirmada.';\nelse if (hayGuardar) frase = ' Visita añadida al calendario \"Visitas técnicas — Reformas Amedida\".';\nelse frase = ' La visita pedida se ha quitado del calendario.';\n// Pantalla final verde: el texto del registro + la frase del calendario + la del email.\nreturn salida(titulo, t.final.mensaje + frase + lineaEmail, 'ok');\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        608
+      ],
+      "id": "6adfef5c-4124-4321-81fa-837c674500b9",
+      "name": "cerrar_pantalla"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e96477c9-fc26-4e9c-839b-ada35e83cc7a",
+              "leftValue": "={{ $json.statusCode === 201 && ['visita_acordada', 'confirmar_hora', 'otra_hora'].includes($json.body?.resultado) && !!$json.body?.visita_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -224,
+        912
+      ],
+      "id": "d91c8c75-5839-432d-96f5-7cc71007a40e",
+      "name": "email_visita",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "l8edafYQrjMMI7ci",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/l8edafYQrjMMI7ci",
+          "cachedResultName": "WF7_email_cliente"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "oportunidad_id": "={{ $('validar_registro').first().json.cuerpo.oportunidad_id }}",
+            "tipo": "visita_confirmada",
+            "mensaje_cliente": "={{ $('validar_registro').first().json.mensaje_cliente }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "tipo",
+              "displayName": "tipo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "mensaje_cliente",
+              "displayName": "mensaje_cliente",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        912
+      ],
+      "id": "b9d748b2-74ff-488e-8c9b-90471ed78970",
+      "name": "lanzar_email_visita",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1f6cfbd4-8fef-446c-8637-0da99251b52d",
+              "leftValue": "={{ $json.accion === 'visita' && $json.modo === 'ficha' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -1152,
+        1328
+      ],
+      "id": "ad3ea2d0-ea09-416e-9f17-20d3dc815a83",
+      "name": "es_cambio_visita"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:8000/oportunidades/{{ $json.oportunidad_id }}/ficha",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -928,
+        1328
+      ],
+      "id": "4c6d18d2-a559-464f-86dc-0f59c4ae80bd",
+      "name": "leer_ficha_cambio",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Comprobar un cambio de visita ANTES de enviarlo (D46). 2026-10-26.\n// Mismo patrón que validar_registro (ya probado), para POST /cambios-visita.\n// Entrada:\n//   $json                        -> la ficha recién leída (leer_ficha_cambio):\n//                                   { statusCode, body } o { error } si no hubo respuesta\n//   $('preparar_envio')          -> el contexto y lo escrito (borrador)\n// Salida (1 elemento):\n//   valido = true  -> { valido, cuerpo, mensaje_cliente, nombre, tipo_reforma, ...contexto }\n//                     cuerpo = el JSON EXACTO para POST /cambios-visita\n//   valido = false -> el CONTEXTO para volver a pintar la pantalla (con el aviso)\n//                     o para la pantalla final (modo 'final')\n// La fecha y hora ACTUALES son las que vio el operador (borrador): si alguien cambió la\n// visita mientras tanto, se le dice aquí y, si no, lo dice el backend (409 visita_cambiada).\n// CONFIDENCIAL: ningún aviso ni mensaje copia el informe (D42.5).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// El contexto y lo escrito en la pantalla.\nconst env = $('preparar_envio').first().json;\nconst d = env.borrador ?? {};\n// La ficha leída ahora mismo.\nconst f = $input.first().json;\nconst b = f.body ?? {};\n\n// El contexto base, para las salidas que vuelven a pintar la pantalla.\nfunction contexto(extra) {\n  return {\n    valido: false,                               // cambio_valido manda esto a vuelta_cambio\n    modo: 'ficha', oportunidad_id: env.oportunidad_id, ultima: env.ultima, base: env.base,\n    fecha_extra: env.fecha_extra, borrador: d, avisos: [], final: null,\n    aviso_tecnico: false, nodo_error: '', mensaje_tecnico: '',\n    ...extra,                                    // lo que cambie en cada caso\n  };\n}\n// Pantalla final de aviso (no hay nada que corregir en la pantalla).\nfunction final(titulo, mensaje, tecnico = false, mensaje_tecnico = '') {\n  return [{ json: contexto({ modo: 'final', final: { titulo, mensaje, tipo: 'aviso' },\n    aviso_tecnico: tecnico, nodo_error: tecnico ? 'leer_ficha_cambio' : '', mensaje_tecnico }) }];\n}\n// Volver a la pantalla con uno o varios avisos (lo escrito se conserva).\nfunction corregir(...avisos) {\n  return [{ json: contexto({ avisos }) }];\n}\nconst NADA = ' No se ha cambiado nada.';\n\n// ---- 1. La ficha: ¿hay una visita que se pueda cambiar? ------------------------\nif (f.error) {\n  // Sin respuesta del backend: nada que hacer; aviso técnico (solo el código del error).\n  const e = f.error;                                       // el error de n8n\n  const detalle = typeof e === 'string' ? e : [e.code, e.message].filter((x) => typeof x === 'string').join(' · ');\n  return final('Sistema no disponible', 'No se ha podido conectar con el sistema.' + NADA +\n    ' Inténtalo de nuevo en unos minutos.', true, `Sin respuesta al leer la ficha antes de cambiar la visita: ${detalle || 'sin detalle'}`);\n}\n// 404 y 422: los arregla el operador (sin aviso técnico).\nif (f.statusCode === 404) return final('No se puede cambiar', 'No existe ninguna oportunidad con ese número.' + NADA);\nif (f.statusCode === 422) return final('No se puede cambiar', 'El número de oportunidad no es válido.' + NADA);\nif (f.statusCode !== 200) {\n  // 401, 500, 503...: fallo del sistema -> aviso técnico.\n  return final('Error del sistema', `Error inesperado del sistema (código ${f.statusCode}).` + NADA +\n    ' El responsable técnico ya ha recibido un aviso.', true, `GET /oportunidades/{id}/ficha respondió ${f.statusCode} antes de cambiar la visita.`);\n}\n// ---- 2. Lo escrito: las mismas reglas que el backend ------------------------\n// Texto con el carácter nulo: el backend lo rechaza con 422 (H-D46-6). Se para aquí, con un texto claro.\nconst tieneNulo = (t) => t.includes('\\u0000');\nconst resultado = String(d.resultado ?? '');\n// Solo las dos acciones de un cambio.\nif (resultado !== 'cambiar_visita' && resultado !== 'cancelar_visita') {\n  return corregir('Elige qué hacer con la visita: cambiar el día o la hora, o cancelarla.');\n}\n// La visita que veía el operador: fecha AAAA-MM-DD y hora HH:MM.\nconst fechaActual = String(d.fecha_actual ?? ''), horaActual = String(d.hora_actual ?? '');\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(fechaActual) || !/^\\d{2}:\\d{2}$/.test(horaActual)) {\n  return corregir('La pantalla no traía la visita actual. Revisa la pantalla, que ya está al día, y vuelve a elegir.');\n}\n// Fecha y hora de un texto ISO de la ficha, recortadas como en la pantalla (\"2026-11-03T09:45:00+01:00\").\nconst fh = (t) => ({ fecha: String(t ?? '').slice(0, 10), hora: String(t ?? '').slice(11, 16) });\n// ¿Es la REPETICIÓN del último cambio (página recargada o enviada dos veces)? Entonces se manda\n// igual: el backend responde 200 sin escribir nada y WF5 deja el calendario como debe estar.\nconst cv = b.cambios_visita ?? [];                          // los cambios, del más antiguo al más reciente\nconst ult = cv.length ? cv[cv.length - 1] : null;           // el último, o null\nconst ultAnterior = fh(ult?.fecha_visita_anterior), ultNueva = fh(ult?.fecha_visita_nueva);\nconst repetido = !!ult && ultAnterior.fecha === fechaActual && ultAnterior.hora === horaActual && (\n  resultado === 'cambiar_visita'\n    ? ult.tipo_cambio === 'cambiar' && ultNueva.fecha === String(d.fecha ?? '') && ultNueva.hora === String(d.hora ?? '')\n    : ult.tipo_cambio === 'cancelar' && ult.motivo === String(d.motivo ?? ''));\n// La visita que se puede tocar (la MISMA regla que el backend): null si ya no hay ninguna.\nconst vm = b.visita_modificable;\nif (!vm && !repetido) {\n  // ¿Por qué? Si el último cambio fue una cancelación, se dice; si no, ya pasó o no hay visita confirmada.\n  const cancelada = ult?.tipo_cambio === 'cancelar';\n  return final('No se puede cambiar', (cancelada\n    ? 'Esta visita ya se canceló (la oportunidad está cerrada como perdida).'\n    : 'La oportunidad ya no tiene ninguna visita confirmada que se pueda cambiar (o la visita ya ha empezado o pasado).') + NADA);\n}\n// La de la ficha ahora mismo. Si no es la que veía el operador (y no es una repetición), otra persona la cambió.\nif (vm && !repetido) {\n  const ahora = fh(vm.fecha_visita);\n  if (ahora.fecha !== fechaActual || ahora.hora !== horaActual) {\n    return corregir('La visita ha cambiado mientras tanto (otra persona la ha modificado).' + NADA +\n      ' Revisa la pantalla, que ya está al día, y vuelve a elegir.');\n  }\n}\n// El informe: sin espacios sobrantes, de 1 a 2.000 caracteres (lo mismo que exige el backend).\nconst informe = String(d.informe ?? '').trim();\nif (informe.length === 0) return corregir('El informe de la llamada está vacío.');\nif (informe.length > 2000) return corregir(`El informe tiene ${informe.length} caracteres; el máximo es 2.000.`);\nif (tieneNulo(informe)) return corregir('El informe contiene un carácter no válido. Vuelve a escribirlo.');\n\n// El cuerpo para POST /cambios-visita (nombres del Contrato, sección 4c).\nconst cuerpo = { oportunidad_id: b.oportunidad_id, accion: resultado === 'cambiar_visita' ? 'cambiar' : 'cancelar',\n  fecha_actual: fechaActual, hora_actual: horaActual, informe };\nlet mensaje_cliente = '';\nif (cuerpo.accion === 'cambiar') {\n  // La nueva fecha y hora, elegidas en la agenda.\n  const fecha = String(d.fecha ?? ''), hora = String(d.hora ?? '');\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(fecha) || !/^\\d{2}:\\d{2}$/.test(hora)) return corregir('Falta el nuevo día o la nueva hora.');\n  // La misma hora que ya tiene: el backend daría 422 misma_hora_actual.\n  if (fecha === fechaActual && hora === horaActual) return corregir('Es la misma hora que ya tiene: elige otra.');\n  cuerpo.fecha = fecha; cuerpo.hora = hora;\n  // El mensaje para el cliente (D39.4): opcional, máx. 500, va al email (WF7), NUNCA al backend.\n  mensaje_cliente = String(d.mensaje ?? '').trim();\n  if (mensaje_cliente.length > 500) return corregir(`El mensaje para el cliente tiene ${mensaje_cliente.length} caracteres; el máximo es 500.`);\n  if (tieneNulo(mensaje_cliente)) return corregir('El mensaje para el cliente contiene un carácter no válido.');\n} else {\n  // Cancelar: motivo OBLIGATORIO, los cuatro de \"el cliente cancela\" (D46.3: ni no_contesta ni sin_decision).\n  const MOTIVOS = ['precio', 'plazo', 'proyecto_no_viable', 'otro'];\n  const motivo = String(d.motivo ?? '');\n  if (!MOTIVOS.includes(motivo)) return corregir('Elige el motivo de la cancelación.');\n  cuerpo.motivo = motivo;\n}\n\n// ---- 3. Todo listo -------------------------------------------------------------\nconst c = b.contacto ?? {};\nreturn [{\n  json: {\n    ...contexto({}),\n    valido: true,\n    cuerpo,                                       // para POST /cambios-visita\n    mensaje_cliente,                              // para WF7 (vacío al cancelar)\n    nombre: c.origen === 'solicitud' ? (c.nombre ?? '') : '',   // título del evento (WF5): solo el nombre\n    tipo_reforma: b.reforma?.tipo_reforma ?? '',  // título del evento (WF5)\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        1328
+      ],
+      "id": "19359bca-e288-4a29-82ef-6fb232845e12",
+      "name": "validar_cambio"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "62921ffa-688d-4ac0-8306-63b762ed15f0",
+              "leftValue": "={{ $json.valido === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -480,
+        1328
+      ],
+      "id": "5dc0f1a4-9a97-4fb9-b1f3-6258fc7067cd",
+      "name": "cambio_valido"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/cambios-visita",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('validar_cambio').first().json.cuerpo) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -272,
+        1328
+      ],
+      "id": "b10bcde7-2308-48cf-96f1-588e688275ba",
+      "name": "registrar_cambio",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ayhUqTymBB7Iswmz",
+          "name": "X-Gate-Secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Traducir la respuesta de POST /cambios-visita (D46). 2026-10-26.\n// Mismo patrón que traducir_resultado (ya probado). Textos: sección 4c del Contrato.\n// Entrada ($json): { statusCode, body } o { error } si se cortó la conexión.\n// Salida (1 elemento), con destino:\n//   'calendario' -> hecho (201 o 200): sigue a preparar_calendario_cambio\n//   'pantalla'   -> no hecho y se puede corregir: el CONTEXTO, modo 'ficha'\n//   'final'      -> no hecho y no hay nada que corregir: el CONTEXTO, modo 'final'\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// La respuesta del backend.\nconst r = $input.first().json;\nconst estado = r.statusCode;\nconst b = r.body ?? {};\n// Lo que se envió y el contexto de la pantalla.\nconst v = $('validar_cambio').first().json;\nconst enviado = v.cuerpo ?? {};\nconst op = enviado.oportunidad_id;\nconst NADA = ' No se ha cambiado nada.';\n\n// Fecha y hora en español y hora de Madrid, solo para MOSTRAR.\nfunction fecha(t) {\n  if (!t) return '—';\n  return new Date(t).toLocaleString('es-ES', {\n    timeZone: 'Europe/Madrid', weekday: 'long', day: '2-digit', month: '2-digit',\n    year: 'numeric', hour: '2-digit', minute: '2-digit',\n  });\n}\n// \"2026-10-26\" + \"09:45\" -> \"26/10/2026 a las 09:45\" (sin zonas horarias: se recorta el texto).\nconst diaHora = (f, h) => (/^\\d{4}-\\d{2}-\\d{2}$/.test(String(f)) ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)} a las ${h}` : '');\n// Motivos del backend -> texto para administración.\nconst MOTIVOS = { precio: 'precio', plazo: 'plazo', proyecto_no_viable: 'proyecto no viable', otro: 'otro' };\n\n// El contexto común (sin cuerpo ni datos de envío: solo lo de la pantalla).\nfunction ctx(extra) {\n  return { destino: 'pantalla', modo: 'ficha', oportunidad_id: v.oportunidad_id, ultima: v.ultima, base: v.base,\n    fecha_extra: v.fecha_extra, borrador: v.borrador, avisos: [], final: null,\n    aviso_tecnico: false, nodo_error: '', mensaje_tecnico: '', ...extra };\n}\n// Volver a la pantalla con un aviso. limpiarHora: la hora nueva elegida ya no vale.\nfunction pantalla(aviso, limpiarHora = false, tecnico = false, mensaje_tecnico = '') {\n  const borrador = limpiarHora ? { ...v.borrador, fecha: '', hora: '' } : v.borrador;\n  return [{ json: ctx({ avisos: [aviso], borrador, aviso_tecnico: tecnico,\n    nodo_error: tecnico ? 'registrar_cambio' : '', mensaje_tecnico }) }];\n}\n// Pantalla final (tipo 'ok' = verde y sigue al calendario; 'aviso' = naranja).\nfunction final(titulo, mensaje, tipo = 'aviso', tecnico = false, mensaje_tecnico = '') {\n  return [{ json: ctx({ destino: tipo === 'ok' ? 'calendario' : 'final', modo: 'final',\n    final: { titulo, mensaje, tipo }, aviso_tecnico: tecnico,\n    nodo_error: tecnico ? 'registrar_cambio' : '', mensaje_tecnico }) }];\n}\n\n// ---- 0. Sin respuesta: puede que se haya hecho o no ---------------------------\nif (r.error) {\n  const e = r.error;\n  const detalle = typeof e === 'string' ? e : [e.code, e.message].filter((x) => typeof x === 'string').join(' · ');\n  return final('No se sabe si se ha cambiado',\n    'Se ha perdido la conexión con el sistema. Vuelve a abrir la pantalla con el mismo número: si la visita ya ' +\n    'tiene la hora nueva (o ya no aparece), se hizo; si no, puedes repetirlo sin riesgo de duplicarlo. ' +\n    'Si se hizo, el cliente NO ha recibido el email: avísale por teléfono.',\n    'aviso', true, `Sin respuesta durante POST /cambios-visita; NO se sabe si se hizo: ${detalle || 'sin detalle'}`);\n}\n\n// ---- 1. Éxito: 201 (hecho ahora) o 200 (repetición exacta) -------------------\nif (estado === 201 || estado === 200) {\n  // La visita de antes, tal como la veía el operador.\n  const antes = diaHora(enviado.fecha_actual, enviado.hora_actual);\n  if (b.accion === 'cancelar') {\n    // 200: ya estaba cancelada con el mismo motivo (normal tras un reintento o una recarga).\n    if (estado === 200) return final('Ya estaba cancelada', `Oportunidad ${op}: esta cancelación ya estaba hecha. No se ha cambiado nada.`, 'ok');\n    return final('Visita cancelada', `Oportunidad ${op}: visita del ${antes} cancelada, motivo: ${MOTIVOS[b.motivo] ?? b.motivo}. ` +\n      'La oportunidad queda cerrada como perdida.', 'ok');\n  }\n  // cambiar. 200: ya estaba cambiada a esa hora.\n  if (estado === 200) return final('Ya estaba cambiada', `Oportunidad ${op}: la visita ya tenía la nueva hora (${fecha(b.fecha_visita)}). No se ha cambiado nada.`, 'ok');\n  // La nueva, con el MISMO formato que la de antes (recortada del texto que da el backend).\n  const nueva = diaHora(String(b.fecha_visita ?? '').slice(0, 10), String(b.fecha_visita ?? '').slice(11, 16));\n  return final('Visita cambiada', `Oportunidad ${op}: la visita pasa del ${antes} al ${nueva}.`, 'ok');\n}\n\n// ---- 2. Errores que se corrigen en la pantalla (todo lo escrito se conserva) --\nconst motivo = b.detail?.motivo;                          // el motivo del error que da el backend\nconst mensajeBackend = String(b.detail?.mensaje ?? '');\nif (estado === 409 && motivo === 'visita_cambiada') {\n  // Otra persona la cambió: la pantalla vuelve a leer la ficha y ya enseña la visita nueva.\n  return pantalla(`La visita ya no es la que veías: alguien la ha cambiado mientras tanto.${NADA} Revisa la pantalla, que ya está al día, y vuelve a elegir.`, true);\n}\nif (estado === 409 && motivo === 'hueco_ocupado') {\n  return pantalla(`La hora ${diaHora(enviado.fecha, enviado.hora)} se acaba de ocupar por otra visita.${NADA} Elige otra con el cliente; lo demás sigue escrito.`, true);\n}\nif (estado === 422 && motivo === 'misma_hora_actual') {\n  return pantalla(`Es la misma hora que ya tiene: elige otra.${NADA}`, true);\n}\n// D45: antelacion_insuficiente también (por ejemplo, la pantalla se abrió antes de medianoche y se envió después).\nif (estado === 422 && ['fecha_pasada', 'fin_de_semana', 'fuera_de_franja', 'antelacion_insuficiente'].includes(motivo)) {\n  return pantalla(`${mensajeBackend}${NADA} Elige otro día u otra hora.`, true);\n}\nif (estado === 422 && motivo === 'fuera_de_rejilla') {\n  // No debería pasar nunca (las horas salen de /huecos-libres): fallo de la pantalla -> aviso técnico.\n  return pantalla(`Esa hora no es válida.${NADA} Elige otra; el responsable técnico ya ha recibido un aviso.`, true, true,\n    'POST /cambios-visita respondió 422 fuera_de_rejilla: la pantalla ofreció una hora fuera de la rejilla.');\n}\n\n// ---- 3. Errores sin nada que corregir: pantalla final -------------------------\nconst MENSAJES = {\n  sin_visita_confirmada: 'Esta oportunidad no tiene ninguna visita confirmada que cambiar o cancelar.',\n  visita_pasada: 'La visita ya ha empezado o ha pasado: no se puede cambiar ni cancelar.',\n  visita_ya_cancelada: 'Esta visita ya se canceló (la oportunidad está cerrada como perdida).',\n  oportunidad_no_encontrada: 'Oportunidad no encontrada.',\n};\nif (MENSAJES[motivo]) return final('No se ha podido cambiar', MENSAJES[motivo] + NADA);\n// Errores técnicos (401, 422 de formato, 503, 500): aviso al responsable técnico (solo códigos, nunca el cuerpo).\nconst TECNICOS = { 401: 'Error de configuración', 422: 'Error en los datos enviados', 503: 'Sistema no disponible' };\nreturn final(TECNICOS[estado] ?? 'Error inesperado', `El sistema no ha aceptado el cambio (código ${estado}).${NADA} ` +\n  'El responsable técnico ya ha recibido un aviso.', 'aviso', true,\n  `POST /cambios-visita respondió ${estado}${motivo ? ` (${motivo})` : ''}.`);\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        1232
+      ],
+      "id": "63bc0dc3-f2fe-4939-b9fb-607b5cfe541e",
+      "name": "traducir_cambio"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a53af504-e2a8-4011-bacb-fba14d30e636",
+              "leftValue": "={{ $json.destino === 'calendario' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        176,
+        1232
+      ],
+      "id": "1bf9ec59-b397-450a-b390-6eeee76db7ed",
+      "name": "segun_traduccion_cambio"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Preparar las llamadas a WF5 tras un cambio de visita (D46). 2026-10-26.\n// Copia de preparar_calendario (ya probado), leyendo registrar_cambio y validar_cambio.\n// Lo decide la RESPUESTA del backend (mismos nombres que POST /resultados-llamada):\n//   visita_cancelada_id  -> WF5 'borrar' la visita vieja      (cambiar y cancelar: siempre viene)\n//   visita_id            -> WF5 'guardar' la nueva confirmada (solo cambiar)\n// También en un 200 (repetición): WF5 no duplica nunca, y así se recupera un\n// calendario que falló la primera vez.\n// Salida: 1 elemento por llamada a WF5 (borrar primero, guardar después).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// La respuesta del cambio.\nconst resp = $('registrar_cambio').first().json;\nconst b = resp.body ?? {};                            // el cuerpo (\"?? {}\": vacío si no hay)\n// Nombre y tipo de reforma, leídos de la ficha en validar_cambio.\nconst v = $('validar_cambio').first().json;\n\n// Lo común a todas las llamadas (RGPD: solo el nombre, nunca el contacto ni la dirección).\nconst comun = {\n  nombre: v.nombre ?? '',\n  tipo_reforma: v.tipo_reforma ?? '',\n  oportunidad_id: b.oportunidad_id ?? v.oportunidad_id,\n};\n\nconst llamadas = [];                                  // las llamadas a WF5, en orden\n// 1. La visita de antes: su evento verde se borra.\nif (b.visita_cancelada_id) {\n  llamadas.push({ accion: 'borrar', visita_id: b.visita_cancelada_id, estado_visita: '', inicio: '', fin: '', ...comun });\n}\n// 2. La visita nueva (solo al cambiar): se crea su evento. Inicio y fin, tal cual los da el backend (D33).\nif (b.visita_id) {\n  llamadas.push({ accion: 'guardar', visita_id: b.visita_id, estado_visita: 'confirmada',\n    inicio: b.fecha_visita ?? '', fin: b.fecha_fin_visita ?? '', ...comun });\n}\n// Un elemento por llamada: llamar_calendario_cambio (modo \"each\") llama a WF5 una vez por cada uno.\n// (Con 201 o 200 siempre viene visita_cancelada_id: la lista nunca está vacía.)\nreturn llamadas.map((j) => ({ json: j }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        1232
+      ],
+      "id": "865598a8-2fa9-4bbd-b0a0-66b5af2aa6dc",
+      "name": "preparar_calendario_cambio"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "hJQF6yGml9qaUDKf",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/hJQF6yGml9qaUDKf",
+          "cachedResultName": "WF5_calendario_visita"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "accion": "={{ $json.accion }}",
+            "visita_id": "={{ $json.visita_id }}",
+            "estado_visita": "={{ $json.estado_visita }}",
+            "inicio": "={{ $json.inicio }}",
+            "fin": "={{ $json.fin }}",
+            "nombre": "={{ $json.nombre }}",
+            "tipo_reforma": "={{ $json.tipo_reforma }}",
+            "oportunidad_id": "={{ $json.oportunidad_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "accion",
+              "displayName": "accion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "visita_id",
+              "displayName": "visita_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "estado_visita",
+              "displayName": "estado_visita",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "inicio",
+              "displayName": "inicio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "fin",
+              "displayName": "fin",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "nombre",
+              "displayName": "nombre",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "tipo_reforma",
+              "displayName": "tipo_reforma",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        624,
+        1232
+      ],
+      "id": "9a7888dd-785d-42fc-94a9-f392ed592b10",
+      "name": "llamar_calendario_cambio",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Texto de la pantalla final tras un cambio de visita (D46). 2026-10-26.\n// Mismo patrón que cerrar_pantalla (ya probado).\n// Entrada: 1 resultado de WF5 por llamada (llamar_calendario_cambio): { ok, ... }, o { error }\n//   si WF5 no se pudo ni ejecutar.\n// Salida: el CONTEXTO en modo 'final' para construir_pagina (por vuelta_cambio).\n//   aviso_tecnico = true SOLO si WF5 no se ejecutó (si se ejecutó y falló, ya avisó él).\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// El contexto y el texto del cambio (traducir_cambio).\nconst t = $('traducir_cambio').first().json;\n// La respuesta (para saber la acción y si sale el email).\nconst resp = $('registrar_cambio').first().json;\nconst cancelar = resp.body?.accion === 'cancelar';\n// ¿Sale el email con la nueva fecha? La MISMA condición que el nodo email_cambio (solo con el 201).\nconst saleEmail = resp.statusCode === 201 && resp.body?.accion === 'cambiar' && !!resp.body?.visita_id;\nconst lineaEmail = saleEmail ? ' Se envía al cliente un email con la nueva fecha.'\n  : cancelar ? ' Al cliente no se le envía ningún email: si hace falta, avísale tú.' : '';\n\n// Atajo para la salida: el contexto de traducir_cambio con su pantalla final.\nfunction salida(titulo, mensaje, tipo, tecnico = false, mensaje_tecnico = '') {\n  return [{ json: { ...t, modo: 'final', final: { titulo, mensaje, tipo },\n    aviso_tecnico: tecnico, nodo_error: tecnico ? 'llamar_calendario_cambio' : '', mensaje_tecnico } }];\n}\n\n// Lo que se pidió a WF5 y lo que contestó, en el mismo orden.\nconst pedidas = $('preparar_calendario_cambio').all().map((i) => i.json);\nconst resultados = $input.all().map((i) => i.json);\n\n// Texto de un error de n8n sin enviar el objeto entero (podría llevar datos).\nfunction textoError(e) {\n  if (!e) return 'sin detalle';                                  // no llegó nada\n  if (typeof e === 'string') return e;                           // ya es un texto\n  const partes = [e.code, e.message, e.description].filter((x) => typeof x === 'string' && x.trim() !== '');\n  return partes.length > 0 ? partes.join(' · ') : 'error sin texto';\n}\n\n// Fallo de la LLAMADA (WF5 no llegó a ejecutarse) o fallo DENTRO de WF5 (ok = false; ya avisó él).\nconst falloLlamada = resultados.length !== pedidas.length || resultados.some((r) => typeof r.ok !== 'boolean');\nconst falloWf5 = resultados.some((r) => r.ok === false);\nif (falloLlamada || falloWf5) {\n  // El cambio SÍ está hecho: que nadie lo repita, y que se sepa que el calendario no cuadra.\n  const titulo = cancelar ? 'Visita cancelada, pero el evento sigue en el calendario' : 'Visita cambiada, pero el calendario NO está al día';\n  const mensaje = `${t.final.mensaje}${lineaEmail} ⚠️ El cambio SÍ está guardado: no lo repitas. ` +\n    'No se ha podido actualizar el calendario \"Visitas técnicas — Reformas Amedida\": el responsable técnico ya ha recibido un aviso.';\n  // Solo si WF5 no se ejecutó hace falta que este flujo avise (si no, WF4 llegaría dos veces).\n  const tecnico = falloLlamada\n    ? `WF5 no se pudo ejecutar (${resultados.length} de ${pedidas.length} respuestas): ` + resultados.map((r) => textoError(r.error)).join(' | ')\n    : '';\n  return salida(titulo, mensaje, 'aviso', falloLlamada, tecnico);\n}\n\n// Todo bien: la frase del calendario según la acción.\nconst frase = cancelar\n  ? ' La visita se ha quitado del calendario.'\n  : ' Calendario actualizado: la hora anterior se ha quitado y la nueva está añadida.';\n// Pantalla final verde: el texto del cambio + la frase del calendario + la del email.\nreturn salida(t.final.titulo, t.final.mensaje + frase + lineaEmail, 'ok');\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        1232
+      ],
+      "id": "04ce3a21-521d-4c4c-8c78-f6aea70a0ab5",
+      "name": "cerrar_cambio"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c3affce9-5158-4987-82ce-2eff26ba19ae",
+              "leftValue": "={{ $json.statusCode === 201 && $json.body?.accion === 'cambiar' && !!$json.body?.visita_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -64,
+        1712
+      ],
+      "id": "304afac4-9913-445e-bb1c-f072a7e7789b",
+      "name": "email_cambio",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "l8edafYQrjMMI7ci",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/l8edafYQrjMMI7ci",
+          "cachedResultName": "WF7_email_cliente"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "oportunidad_id": "={{ $('validar_cambio').first().json.cuerpo.oportunidad_id }}",
+            "tipo": "visita_confirmada",
+            "mensaje_cliente": "={{ $('validar_cambio').first().json.mensaje_cliente }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "oportunidad_id",
+              "displayName": "oportunidad_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "tipo",
+              "displayName": "tipo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "mensaje_cliente",
+              "displayName": "mensaje_cliente",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        240,
+        1696
+      ],
+      "id": "e445c670-e2b4-46f0-9612-d6c140cb6e87",
+      "name": "lanzar_email_cambio",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---------------------------------------------------------------------------\n// Pantalla de llamadas · Vuelta del camino de los cambios de visita (D46). 2026-10-26.\n// Junta en UN solo nodo las cuatro salidas del camino nuevo que acaban pintando la pantalla:\n//   es_cambio_visita (no)      -> \"Actualizar horas\" u \"Otro día\" (POST)\n//   cambio_valido (no)         -> lo enviado no vale: se vuelve a pintar con el aviso\n//   segun_traduccion_cambio    -> el backend no lo hizo (p. ej. hora ocupada) o pantalla final\n//   cerrar_cambio              -> hecho: pantalla final\n// y las manda a \"contexto\" con UNA sola conexión.\n// Mode: Run Once for All Items. Determinista: ningún LLM interviene.\n// ---------------------------------------------------------------------------\n\n// Solo se queda con el primer elemento (cada camino manda uno) y lo pasa tal cual.\nreturn [{ json: $input.first().json }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        1728
+      ],
+      "id": "1670b22a-7111-4a66-b207-df3fc15dab32",
+      "name": "vuelta_cambio"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "abrir": {
+      "main": [
+        [
+          {
+            "node": "validar_apertura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validar_apertura": {
+      "main": [
+        [
+          {
+            "node": "contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "contexto": {
+      "main": [
+        [
+          {
+            "node": "hay_numero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hay_numero": {
+      "main": [
+        [
+          {
+            "node": "leer_ficha_pagina",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "construir_pagina",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_ficha_pagina": {
+      "main": [
+        [
+          {
+            "node": "leer_dias",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_dias": {
+      "main": [
+        [
+          {
+            "node": "pide_dia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pide_dia": {
+      "main": [
+        [
+          {
+            "node": "leer_horas_dia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "construir_pagina",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_horas_dia": {
+      "main": [
+        [
+          {
+            "node": "construir_pagina",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "construir_pagina": {
+      "main": [
+        [
+          {
+            "node": "responder_pagina",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "responder_pagina": {
+      "main": [
+        [
+          {
+            "node": "es_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "es_aviso_tecnico": {
+      "main": [
+        [
+          {
+            "node": "llamar_aviso_tecnico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enviar": {
+      "main": [
+        [
+          {
+            "node": "preparar_envio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_envio": {
+      "main": [
+        [
+          {
+            "node": "segun_accion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_accion": {
+      "main": [
+        [
+          {
+            "node": "leer_ficha_registro",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "es_cambio_visita",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_ficha_registro": {
+      "main": [
+        [
+          {
+            "node": "validar_registro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validar_registro": {
+      "main": [
+        [
+          {
+            "node": "registro_valido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "registro_valido": {
+      "main": [
+        [
+          {
+            "node": "registrar_resultado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "registrar_resultado": {
+      "main": [
+        [
+          {
+            "node": "traducir_resultado",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "email_visita",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "traducir_resultado": {
+      "main": [
+        [
+          {
+            "node": "segun_traduccion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_traduccion": {
+      "main": [
+        [
+          {
+            "node": "preparar_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_calendario": {
+      "main": [
+        [
+          {
+            "node": "necesita_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "necesita_calendario": {
+      "main": [
+        [
+          {
+            "node": "llamar_calendario",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "cerrar_pantalla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "llamar_calendario": {
+      "main": [
+        [
+          {
+            "node": "cerrar_pantalla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cerrar_pantalla": {
+      "main": [
+        [
+          {
+            "node": "contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "email_visita": {
+      "main": [
+        [
+          {
+            "node": "lanzar_email_visita",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "es_cambio_visita": {
+      "main": [
+        [
+          {
+            "node": "leer_ficha_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "vuelta_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leer_ficha_cambio": {
+      "main": [
+        [
+          {
+            "node": "validar_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validar_cambio": {
+      "main": [
+        [
+          {
+            "node": "cambio_valido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cambio_valido": {
+      "main": [
+        [
+          {
+            "node": "registrar_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "vuelta_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "registrar_cambio": {
+      "main": [
+        [
+          {
+            "node": "traducir_cambio",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "email_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "traducir_cambio": {
+      "main": [
+        [
+          {
+            "node": "segun_traduccion_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "segun_traduccion_cambio": {
+      "main": [
+        [
+          {
+            "node": "preparar_calendario_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "vuelta_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "preparar_calendario_cambio": {
+      "main": [
+        [
+          {
+            "node": "llamar_calendario_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "llamar_calendario_cambio": {
+      "main": [
+        [
+          {
+            "node": "cerrar_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cerrar_cambio": {
+      "main": [
+        [
+          {
+            "node": "vuelta_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "email_cambio": {
+      "main": [
+        [
+          {
+            "node": "lanzar_email_cambio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "vuelta_cambio": {
+      "main": [
+        [
+          {
+            "node": "contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "XyWcmtuXIy3yT4eY",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "id": "sL7gsYrzyktXpM8Q",
+  "tags": []
+}
