@@ -19,7 +19,9 @@ import argparse            # leer los parámetros de la línea de comandos
 import asyncio             # el cliente WebSocket es asíncrono
 import csv                 # escribir el CSV de resultados
 import json                # leer los casos y enviar/recibir JSON
+import os                  # leer la variable de entorno TU_EMAIL
 import re                  # comprobaciones con expresiones regulares
+import sys                 # salir con código 2 y escribir el error en stderr
 import time                # medir la duración de cada turno
 import urllib.request      # el POST, con la librería estándar (sin instalar nada)
 import uuid                # una sesión nueva y única por conversación
@@ -33,6 +35,8 @@ LATIDO = "n8n|heartbeat"               # señal de vida que manda n8n (protocolo
 LATIDO_ACK = "n8n|heartbeat-ack"       # respuesta obligatoria al latido
 SIGUE = "n8n|continue"                 # n8n avisa de que la ejecución continúa
 MARCA_RESUMEN = "Antes de guardar nada"   # frase fija con la que empieza el resumen (pintar_resumen)
+VARIABLE_EMAIL = "TU_EMAIL"            # variable de entorno con el email real de pruebas (nunca va al repositorio)
+MARCADORES = ("TU_EMAIL_CON", "TU_EMAIL_MAYUS", "TU_EMAIL")  # los largos primero: "TU_EMAIL" está dentro de los otros dos
 
 # Comprobaciones que valen para TODAS las respuestas del Agente 1 (críticos y calidad).
 GLOBALES = [
@@ -42,6 +46,39 @@ GLOBALES = [
     ("Q_distorsion_tabiques", r"no (hay|habría) tabiques"),    # cambia el sentido de "sin tabiques"
     ("Q_oferta_vacia", r"orientaci[oó]n general|dudas generales"),  # ofrece algo que no hace
 ]
+
+
+def variantes_email(email: str) -> dict[str, str]:
+    """Devuelve el texto real que sustituye a cada marcador."""
+    return {
+        "TU_EMAIL_CON": email[: -len(".com")] + ".con",               # el final ".com" cambiado por ".con"
+        "TU_EMAIL_MAYUS": email[:1].upper() + email[1:],               # la primera letra en mayúscula
+        "TU_EMAIL": email,                                             # el email tal cual
+    }
+
+
+def poner_email(texto: str, variantes: dict[str, str] | None) -> str:
+    """Cambia cada marcador por su email real, justo antes de enviar el mensaje."""
+    if variantes is None:                                              # sin email configurado no hay nada que poner
+        return texto
+    for marcador in MARCADORES:                                        # en orden: los dos largos y después TU_EMAIL
+        texto = texto.replace(marcador, variantes[marcador])           # sustitución literal del marcador
+    return texto
+
+
+def quitar_email(texto: str, variantes: dict[str, str] | None) -> str:
+    """Vuelve a poner el marcador donde aparezca el email real, sin distinguir mayúsculas."""
+    if variantes is None:                                              # sin email configurado no hay nada que quitar
+        return texto
+    texto = re.sub(re.escape(variantes["TU_EMAIL_CON"]), "TU_EMAIL_CON", texto, flags=re.IGNORECASE)  # primero la variante ".con"
+
+    def marcador_de(encontrado: re.Match) -> str:                      # el email y su versión con mayúscula solo difieren en la caja
+        exacto = encontrado.group(0)                                   # el email tal como aparece en el texto
+        if exacto == variantes["TU_EMAIL_MAYUS"] and exacto != variantes["TU_EMAIL"]:  # escrito justo con la primera en mayúscula
+            return "TU_EMAIL_MAYUS"
+        return "TU_EMAIL"                                              # cualquier otra combinación de mayúsculas
+
+    return re.sub(re.escape(variantes["TU_EMAIL"]), marcador_de, texto, flags=re.IGNORECASE)  # el email, en cualquier caja
 
 
 def post_mensaje(url_webhook: str, sesion: str, texto: str) -> str:
@@ -84,22 +121,24 @@ def comprobar(texto: str, reglas: list[tuple[str, str]]) -> list[str]:
     return [nombre for nombre, patron in reglas if re.search(patron, texto, flags=re.IGNORECASE | re.MULTILINE)]
 
 
-def ejecutar_caso(url: str, caso: dict, espera_max: float) -> list[dict]:
+def ejecutar_caso(url: str, caso: dict, espera_max: float, variantes: dict[str, str] | None) -> list[dict]:
     """Ejecuta una conversación completa en una sesión nueva y devuelve una fila por turno."""
     sesion = f"suite-{caso['id']}-{uuid.uuid4().hex[:8]}"                # sesión nueva y reconocible
     filas, ultima = [], ""                                               # resultados y última respuesta
     for n, mensaje in enumerate(caso["mensajes"], start=1):              # un mensaje por turno, en orden
+        mensaje_guardado = quitar_email(mensaje, variantes)              # lo que se guarda: con marcadores, nunca el email
         if mensaje.strip().lower() in ("no", "si", "sí") and MARCA_RESUMEN not in ultima:  # el guion espera un resumen
-            filas.append({"caso": caso["id"], "turno": n, "mensaje": mensaje, "respuesta": "",
+            filas.append({"caso": caso["id"], "turno": n, "mensaje": mensaje_guardado, "respuesta": "",
                           "segundos": "", "fallos": "PARADA: no hubo resumen antes de este mensaje"})  # se para y se anota
             break
         t0 = time.monotonic()                                            # empieza a contar el tiempo del turno
         try:
-            ejecucion = post_mensaje(url, sesion, mensaje)               # envía el mensaje
+            ejecucion = post_mensaje(url, sesion, poner_email(mensaje, variantes))  # envía el mensaje, con el email real
             textos = asyncio.run(recibir_respuesta(url, sesion, ejecucion, espera_max))  # espera la respuesta
             respuesta = "\n".join(textos) if textos else "(SIN RESPUESTA)"  # une, o marca que no llegó nada
         except Exception as e:                                           # error de red o de n8n
             ejecucion, respuesta = "", f"(ERROR: {e})"                   # se anota y se sigue
+        respuesta = quitar_email(respuesta, variantes)                   # el email vuelve a ser marcador ANTES de comprobar y guardar
         segundos = round(time.monotonic() - t0, 2)                       # duración del turno vista por el cliente
         es_resumen = MARCA_RESUMEN in respuesta                          # el resumen lo pinta el código, no el modelo
         es_estimacion = "Según los datos que nos has facilitado" in respuesta  # la cifra la escribe el código tras el "sí"
@@ -115,7 +154,7 @@ def ejecutar_caso(url: str, caso: dict, espera_max: float) -> list[dict]:
             for patron in exp.get("no_contiene", []):                    # no debe aparecer
                 if re.search(patron, respuesta, flags=re.IGNORECASE):
                     fallos.append(f"sobra: {patron}")
-        filas.append({"caso": caso["id"], "turno": n, "mensaje": mensaje, "respuesta": respuesta,
+        filas.append({"caso": caso["id"], "turno": n, "mensaje": mensaje_guardado, "respuesta": respuesta,
                       "segundos": segundos, "ejecucion": ejecucion, "fallos": "; ".join(fallos)})  # fila del turno
         if respuesta.startswith("(ERROR") or respuesta == "(SIN RESPUESTA)":  # H-175-2: el turno no llegó a n8n o no contestó
             break                                                        # corta: más turnos solo gastarían ejecuciones
@@ -133,6 +172,13 @@ def main() -> None:
     args = ap.parse_args()                                               # lee los parámetros
 
     casos = json.loads(Path(args.casos).read_text(encoding="utf-8"))     # carga las conversaciones
+    email = os.environ.get(VARIABLE_EMAIL, "").strip()                   # el email real; no se imprime nunca
+    usa_marcador = any("TU_EMAIL" in m for c in casos for m in c["mensajes"])  # "TU_EMAIL" está dentro de los tres marcadores
+    if usa_marcador and not email.endswith(".com"):                      # falta la variable o no acaba en ".com"
+        print(f"ERROR: los casos usan los marcadores {', '.join(MARCADORES)}, pero la variable de entorno "
+              f"{VARIABLE_EMAIL} no existe o no termina en \".com\". No se ha enviado nada.", file=sys.stderr)  # sin su valor
+        sys.exit(2)                                                      # se niega a empezar
+    variantes = variantes_email(email) if email.endswith(".com") else None  # sin email válido no se sustituye ni se enmascara
     salida = Path(args.salida)                                           # carpeta de resultados
     salida.mkdir(parents=True, exist_ok=True)                            # la crea si no existe
     sello = datetime.now().strftime("%Y%m%d_%H%M%S")                     # para no pisar resultados anteriores
@@ -142,7 +188,7 @@ def main() -> None:
         for r in range(1, args.repeticiones + 1):                        # y cada repetición
             c = dict(caso, id=f"{caso['id']}" + (f"#{r}" if args.repeticiones > 1 else ""))  # id con número de vuelta
             print(f"-> {c['id']}", flush=True)                           # progreso en pantalla
-            filas = ejecutar_caso(args.url, c, args.espera)              # ejecuta la conversación
+            filas = ejecutar_caso(args.url, c, args.espera, variantes)   # ejecuta la conversación
             for f in filas:                                              # muestra cada turno resumido
                 marca = "OK " if not f["fallos"] else "XX "              # OK o fallo automático
                 print(f"   {marca}t{f['turno']} {f['segundos']}s | {f['respuesta'][:90]!r} {f['fallos']}", flush=True)
