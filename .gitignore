@@ -8,3 +8,9 @@ venv/
 # lleva la huella de cada precio_m2, que con dos decimales se adivina probando.
 # El repositorio es público: no se sube; solo su SHA-256 va en el commit.
 docs/datos/D39_9_tarifas_antes.json
+
+# Transcripciones y CSV de la suite conversacional (pruebas_conversacionales/
+# ejecutar_conversaciones.py): copian literalmente lo que dijeron el cliente
+# simulado y el bot, con los nombres, emails y teléfonos de prueba de cada
+# caso. El repositorio es público: se generan en local y no se suben.
+pruebas_conversacionales/resultados/
