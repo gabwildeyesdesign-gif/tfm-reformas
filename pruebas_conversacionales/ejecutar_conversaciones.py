@@ -25,7 +25,7 @@ import urllib.request      # el POST, con la librería estándar (sin instalar n
 import uuid                # una sesión nueva y única por conversación
 from datetime import datetime          # sello de fecha para los archivos de salida
 from pathlib import Path               # rutas de archivos independientes del sistema
-from urllib.parse import urlparse      # sacar host y puerto de la URL del webhook
+from urllib.parse import urlencode, urlparse   # urlencode: consulta escapada ("#" -> %23); urlparse: host y puerto del webhook
 
 import websockets          # cliente WebSocket (viene con uvicorn[standard]; si falta: pip install websockets)
 
@@ -58,7 +58,8 @@ async def recibir_respuesta(url_webhook: str, sesion: str, ejecucion: str, esper
     """Abre el WebSocket de la ejecución y junta los mensajes del bot hasta que n8n cierra."""
     p = urlparse(url_webhook)                                            # separa esquema, host y puerto
     esquema = "wss" if p.scheme == "https" else "ws"                     # http -> ws, https -> wss
-    url_ws = f"{esquema}://{p.netloc}/chat?sessionId={sesion}&executionId={ejecucion}&isPublic=true"  # como el widget oficial
+    consulta = urlencode({"sessionId": sesion, "executionId": ejecucion, "isPublic": "true"})  # escapa "#" (H-175-4): si no, corta la URL
+    url_ws = f"{esquema}://{p.netloc}/chat?{consulta}"                   # como el widget oficial
     mensajes: list[str] = []                                             # aquí van los textos del bot
     async with websockets.connect(url_ws) as ws:                         # conecta al canal de esa ejecución
         fin = time.monotonic() + espera_max                              # límite de tiempo del turno
@@ -116,6 +117,8 @@ def ejecutar_caso(url: str, caso: dict, espera_max: float) -> list[dict]:
                     fallos.append(f"sobra: {patron}")
         filas.append({"caso": caso["id"], "turno": n, "mensaje": mensaje, "respuesta": respuesta,
                       "segundos": segundos, "ejecucion": ejecucion, "fallos": "; ".join(fallos)})  # fila del turno
+        if respuesta.startswith("(ERROR") or respuesta == "(SIN RESPUESTA)":  # H-175-2: el turno no llegó a n8n o no contestó
+            break                                                        # corta: más turnos solo gastarían ejecuciones
         ultima = respuesta                                               # para la regla de parada
     return filas
 

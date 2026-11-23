@@ -1,0 +1,82 @@
+[
+ {
+  "id": "A1-56",
+  "mensajes": [
+   "hola",
+   "quiero reformar la cocina, acabados medios, sin tirar tabiques, pero no sé cuántos metros tiene",
+   "ni idea, no lo he medido",
+   "vale, a ojo será unos 3 por 3",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "largo|ancho|aproximad"
+    ]
+   },
+   {
+    "turno": 5,
+    "contiene": [
+     "Superficie: 9 m²",
+     "Superficie aproximada",
+     "Teléfono: 611223344"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-57",
+  "mensajes": [
+   "hola",
+   "quiero reformar el baño de 5 m2, pero no sé qué acabados ni si habrá que tirar algo",
+   "no sé, lo que me recomendéis",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 4,
+    "contiene": [
+     "Acabados: Medio",
+     "\\(tirar o mover tabiques\\): Sí",
+     "se ha tomado medio"
+    ],
+    "no_contiene": [
+     "Superficie aproximada"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-64",
+  "mensajes": [
+   "kiero reformar la cosina, unos 10 metros, normalitos, sin tirar na",
+   "medios",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 1,
+    "contiene": [
+     "acabados"
+    ],
+    "no_contiene": [
+     "email",
+     "teléfono"
+    ]
+   },
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada",
+     "Cocina",
+     "Superficie: 10 m²",
+     "Superficie aproximada"
+    ]
+   }
+  ]
+ }
+]

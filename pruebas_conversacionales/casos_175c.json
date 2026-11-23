@@ -1,0 +1,27 @@
+[
+ {
+  "id": "A1-65",
+  "mensajes": [
+   "hola, quiero reformar la cocina",
+   "unos 12 metros",
+   "¿qué diferencia hay entre los acabados?",
+   "¿y qué incluye el nivel medio?",
+   "¿y cuánto se tarda la obra?",
+   "vale, medios",
+   "no hay que tirar nada",
+   "Pablo Ruiz Gómez, pablo.prueba@example.com, 633 444 555",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 8,
+    "contiene": [
+     "Antes de guardar nada",
+     "Cocina",
+     "Superficie: 12 m²",
+     "Acabados: Medio"
+    ]
+   }
+  ]
+ }
+]
