@@ -184,11 +184,12 @@ def calcular_importes(
     hasta dónde puede subir el precio si aparecen complicaciones: un
     techo de negociación, no un recargo oculto.
 
-    Ejemplo: baño medio (1150.00 €/m²), 6 m², con cambios estructurales
-    (recargo 600.00), margen 15.00:
-        importe_min_sin_iva = 1150.00 × 6 + 600.00 = 7500.00
-        importe_max_sin_iva = 7500.00 × (1 + 15.00 / 100) = 8625.00
-    (con el 21 % de IVA, al cliente se le mostraría 9075.00 - 10436.25)
+    Ejemplo con cifras INVENTADAS (no son las tarifas reales, que no van
+    en el repositorio, D40.9): tarifa 100.00 €/m², 6 m², con cambios
+    estructurales (recargo 50.00), margen 10.00:
+        importe_min_sin_iva = 100.00 × 6 + 50.00 = 650.00
+        importe_max_sin_iva = 650.00 × (1 + 10.00 / 100) = 715.00
+    (con el 21 % de IVA, al cliente se le mostraría 786.50 - 865.15)
     """
     # "Expresión condicional" de Python: VALOR_SI_SÍ if CONDICIÓN else
     # VALOR_SI_NO. Es un if/else en una sola línea que produce un valor.

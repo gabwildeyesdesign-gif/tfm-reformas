@@ -1,0 +1,30 @@
+[
+ {
+  "id": "A1-54s",
+  "mensajes": [
+   "hola",
+   "quiero reformar el baño de mi piso de la calle Inventada 12, 3 m2, acabados básicos, sin tabiques. El baño tiene 30 años",
+   "Pedro Sanz Vidal, TU_EMAIL, 633 445 566",
+   "si"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada"
+    ],
+    "no_contiene": [
+     "Inventada",
+     "calle",
+     "Teléfono: \\+\\d{9}\\n"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   }
+  ]
+ }
+]

@@ -215,9 +215,9 @@ MAX_FOTOS_LEAD = 5
 # (máximo 99.999.999,99 €). El cliente recibía un 500 genérico por un
 # dato que se podría haber rechazado en la puerta.
 #
-# POR QUÉ 500 Y NO OTRO NÚMERO. El desbordamiento real empieza en unos
-# 51.151 m² (con la tarifa más cara, bano/alto a 1.700 €/m²), así que 500
-# deja un margen de cien veces. Y sigue siendo holgado para el negocio:
+# POR QUÉ 500 Y NO OTRO NÚMERO. El desbordamiento real empieza con decenas
+# de miles de m² (con la tarifa más cara, la de bano/alto), así que 500
+# deja un margen enorme. Y sigue siendo holgado para el negocio:
 # el Informe de decisiones trabaja con viviendas de 45 a 150 m².
 #
 # Igual que MAX_FOTOS_LEAD, se define como constante compartida para que

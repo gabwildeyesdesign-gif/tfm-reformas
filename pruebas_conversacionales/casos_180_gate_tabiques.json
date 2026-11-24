@@ -1,0 +1,151 @@
+[
+ {
+  "id": "G180-01",
+  "bloque": "todo en el primer mensaje · integral · «sin tabiques»",
+  "mensajes": [
+   "hola, quiero reformar toda la casa, 90 m2, acabados medios, sin tabiques. Soy Elena Prieto Gómez, TU_EMAIL, 655 123 456",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 1, "contiene": ["Antes de guardar nada"]},
+   {"turno": 2, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-02",
+  "bloque": "un dato por mensaje · integral · «no hay que tirar ni mover»",
+  "mensajes": [
+   "hola",
+   "quiero reformar el piso entero",
+   "unos 85 metros",
+   "medio",
+   "no, no hay que tirar ni mover tabiques",
+   "Jorge Lara Benítez",
+   "TU_EMAIL",
+   "644 987 321",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 8, "contiene": ["Antes de guardar nada"]},
+   {"turno": 9, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-03",
+  "bloque": "contacto primero · cocina grande (Gate por importe) · «no» a secas",
+  "mensajes": [
+   "Hola, soy Lucía Ortega Ramos, mi email es TU_EMAIL y mi móvil el 677 234 568",
+   "quiero reformar la cocina, tiene 20 m2 y la quiero con acabados medios",
+   "no",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada"]},
+   {"turno": 4, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-04",
+  "bloque": "«no» a secas a la pregunta de tabiques · integral alto",
+  "mensajes": [
+   "buenas",
+   "quiero hacer una reforma integral de mi casa de 120 m2 con acabados altos",
+   "no",
+   "Raúl Medina Castro, TU_EMAIL, 699 345 012",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 4, "contiene": ["Antes de guardar nada"]},
+   {"turno": 5, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-05",
+  "bloque": "baño grande (Gate por importe) · «sin tabiques» + estado actual",
+  "mensajes": [
+   "hola",
+   "quiero reformar el baño, 14 m2, acabados medios, sin tabiques. El baño tiene 25 años",
+   "Sonia Vera Molina, TU_EMAIL, 611 456 789",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada"]},
+   {"turno": 4, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-06",
+  "bloque": "D50.13 vía nueva · coloquial «no movemos ninguna pared» · nivel vago",
+  "mensajes": [
+   "hola! queremos reformar el piso completo, son unos 95 metros, acabados normalitos tirando a buenos, y la distribución se queda como está, no movemos ninguna pared",
+   "medio",
+   "Carmen Ibáñez Ruiz, TU_EMAIL, 622 567 890",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada"]},
+   {"turno": 4, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-07",
+  "bloque": "CONTROL · el cliente NO sabe lo de los tabiques (frase permitida, Gate estructural)",
+  "mensajes": [
+   "hola",
+   "quiero reformar toda la vivienda, 75 m2, acabados básicos",
+   "pues no lo sé",
+   "no sé, eso que lo mire el técnico",
+   "Andrés Gil Navarro, TU_EMAIL, 633 678 901",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 5, "contiene": ["Antes de guardar nada"]},
+   {"turno": 6, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-08",
+  "bloque": "CONTROL · SÍ hay que tirar un tabique (Gate estructural)",
+  "mensajes": [
+   "hola, queremos tirar el tabique entre la cocina y el salón y reformar las dos estancias",
+   "30 m2 en total, acabados medios",
+   "Beatriz Soler Díaz, TU_EMAIL, 655 789 012",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada"]},
+   {"turno": 4, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-09",
+  "bloque": "D50.13 vía nueva · corrección tras el resumen (la nota se vuelve a escribir)",
+  "mensajes": [
+   "hola",
+   "reforma integral del piso, 100 m2, acabados medios, sin tocar tabiques",
+   "Pablo Rey Fuentes, TU_EMAIL, 644 890 123",
+   "el nivel es alto, no medio",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada"]},
+   {"turno": 4, "contiene": ["Antes de guardar nada", "Acabados: Alto"]},
+   {"turno": 5, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G180-10",
+  "bloque": "D50.13 vía nueva · «tabiques no, solo eso» + contacto en dos mensajes",
+  "mensajes": [
+   "hola, quiero reformar mi casa entera: suelos, baño y cocina. Son 110 m2",
+   "acabados básicos, y tabiques no, solo eso",
+   "Rosa Campos León, 666 901 234",
+   "TU_EMAIL",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 4, "contiene": ["Antes de guardar nada"]},
+   {"turno": 5, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ }
+]

@@ -61,17 +61,20 @@ NIVELES = ("basico", "medio", "alto")
 CHECKS = {"oportunidades": "chk_oportunidades_tipo_reforma",
           "tarifas_base": "tarifas_base_tipo_reforma_check",
           "umbrales_gate": "chk_umbrales_gate_tipo_reforma"}
-# Los textos de D56 (decisión de Gabi, 23/11), copiados aquí a propósito: si alguien cambia los de la migración, esto lo ve.
+# Los textos de D56 (decisión de Gabi, 24/11), copiados aquí a propósito: si alguien cambia los de la migración, esto lo ve.
 INCLUYE = {
-    # basico.
-    "basico": ("Protección de suelos y muebles. Pintura plástica en paredes y techos de las estancias "
-               "indicadas, en color blanco. No incluye reparar grietas, quitar gotelé ni alisar paredes."),
-    # medio.
-    "medio": ("Protección de suelos y muebles. Pequeñas reparaciones de grietas y desconchones. Pintura "
-              "plástica en paredes y techos, con colores a elegir. No incluye quitar gotelé ni alisar paredes."),
-    # alto.
-    "alto": ("Protección de suelos y muebles. Quitar el gotelé y alisar las paredes, con reparación de "
-             "grietas. Pintura plástica en paredes y techos, con colores a elegir."),
+    # basico: pintura plástica blanca, sin reparaciones (D56, textos de Gabi del 24/11).
+    "basico": ("Protección de suelos y muebles y limpieza al terminar. Pintura plástica blanca en paredes y "
+               "techos de las estancias indicadas. No incluye reparar grietas, quitar gotelé ni alisar paredes, "
+               "ni pintar puertas, ventanas o radiadores."),
+    # medio: además pequeñas reparaciones y colores a elegir.
+    "medio": ("Protección de suelos y muebles y limpieza al terminar. Reparación de pequeñas grietas, agujeros "
+              "y desconchones. Pintura plástica en paredes y techos, con los colores que elijas. No incluye "
+              "quitar gotelé ni alisar paredes, ni pintar puertas, ventanas o radiadores."),
+    # alto: además quitar el gotelé y alisar las paredes.
+    "alto": ("Protección de suelos y muebles y limpieza al terminar. Quitar el gotelé y alisar las paredes, con "
+             "reparación de grietas y desconchones. Pintura plástica en paredes y techos, con los colores que "
+             "elijas. No incluye pintar puertas, ventanas o radiadores."),
 }
 
 # Contadores.

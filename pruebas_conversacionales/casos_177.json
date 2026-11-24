@@ -1,0 +1,172 @@
+[
+ {
+  "id": "A1-54n",
+  "mensajes": [
+   "hola",
+   "quiero reformar el baño de mi piso de la calle Inventada 12, 3 m2, acabados básicos, sin tabiques. El baño tiene 30 años",
+   "Pedro Sanz Vidal, pedro.prueba@example.com, 633 445 566",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada"
+    ],
+    "no_contiene": [
+     "Inventada",
+     "calle",
+     "Teléfono: \\+\\d{9}\\n"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-01n",
+  "mensajes": [
+   "hola",
+   "Quiero reformar mi bano de 3m2, con acabados medios y sin reforma estructural.",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada",
+     "Teléfono: 611223344\\n"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-43",
+  "mensajes": [
+   "hola, quiero reformar el baño, 3 m2, acabados medios, sin tabiques. Soy Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 1,
+    "contiene": [
+     "Antes de guardar nada",
+     "Teléfono: 611223344\\n"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-52n",
+  "mensajes": [
+   "hola",
+   "quiero reformar el baño, 4 m2, acabados medios, sin tabiques. Estoy embarazada y me gustaría tenerlo listo antes de que nazca el bebé",
+   "Elena Navarro Gil, elena.prueba@example.com, 677 889 900",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada",
+     "Teléfono: 677889900\\n"
+    ],
+    "no_contiene": [
+     "embaraz",
+     "beb[eé]"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-17",
+  "mensajes": [
+   "hola",
+   "Quiero reformar mi bano de 3m2, con acabados medios y sin reforma estructural.",
+   "Laura Martín Ruiz, laura.prueba@example.com, 61122",
+   "611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "tel[eé]fono"
+    ],
+    "no_contiene": [
+     "Antes de guardar nada"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "Antes de guardar nada",
+     "Teléfono: 611223344\\n"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-04n",
+  "mensajes": [
+   "hola",
+   "Quiero reformar mi bano de 3m2, con acabados medios y sin reforma estructural.",
+   "Laura Martín Ruiz, laura.prueba@example.com, 666abc444",
+   "611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "tel[eé]fono"
+    ],
+    "no_contiene": [
+     "Antes de guardar nada"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "Antes de guardar nada",
+     "Teléfono: 611223344\\n"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-10c",
+  "mensajes": [
+   "hola",
+   "quiero reformar todo el piso, 90 m2, acabados medios, sin tabiques",
+   "Marta Gil Soto, marta.prueba@example.com, 622 334 455",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada",
+     "Reforma: Reforma integral de vivienda"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "A1-36",
+  "mensajes": [
+   "hola",
+   "quiero reformar el aseo, 2 m2, acabados básicos, sin tabiques",
+   "Marta Gil Soto, marta.prueba@example.com, 622 334 455",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada",
+     "Reforma: Baño"
+    ]
+   }
+  ]
+ }
+]

@@ -96,6 +96,10 @@ def D_IVA(importe_sin_iva):
     return (importe_sin_iva * (1 + IVA / D("100"))).quantize(D("0.01"))
 
 print("\n  calcular_importes(precio_m2, m2, estructural, recargo 600, margen 15):")
+# LIMITACIÓN CONOCIDA (D40.9, decidida el 24/11): las tarifas por m² de esta
+# prueba son DATOS de entrada y no se quitan. Son valores de referencia de un
+# negocio ficticio y el historial de Git ya los conserva; las tarifas nuevas
+# (pintura, D56) no se escriben nunca en el repositorio.
 casos_importes = [
     ("bano medio, 6 m², sin estructural", D("1150.00"), D("6"), False, D("6900.00"), D("7935.00")),
     ("bano medio, 6 m², con estructural", D("1150.00"), D("6"), True, D("7500.00"), D("8625.00")),

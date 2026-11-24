@@ -230,6 +230,10 @@ try:
     print("\n" + "=" * 78)
     print("H6b - Umbral por categoría (D9): cocina típica de 10 m², sin Gate")
     print("=" * 78)
+    # LIMITACIÓN CONOCIDA (D40.9, decidida el 24/11): las tarifas por m² de esta
+    # prueba son DATOS de entrada y no se quitan. Son valores de referencia de un
+    # negocio ficticio y el historial de Git ya los conserva; las tarifas nuevas
+    # (pintura, D56) no se escriben nunca en el repositorio.
     # Es el caso que motivó D9, comprobado aquí de extremo a extremo por
     # HTTP: 1.000 €/m² × 10 m² × 1,15 = 11.500 €. Con el umbral global
     # antiguo (10.000 €) esta petición habría devuelto

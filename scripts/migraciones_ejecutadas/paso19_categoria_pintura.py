@@ -96,17 +96,20 @@ TIPOS_ANTES = ("bano", "cocina", "integral_vivienda", "parcial_acabados")
 TIPOS_DESPUES = TIPOS_ANTES + (TIPO,)
 # Los tres niveles de acabados (los del CHECK de tarifas_base.nivel_acabados).
 NIVELES = ("basico", "medio", "alto")
-# Los textos de incluye_tipico de D56 (decisión de Gabi, 23/11): una línea, sin cifras.
+# Los textos de incluye_tipico de D56 (decisión de Gabi, 24/11): una línea, sin cifras.
 INCLUYE = {
-    # basico: pintura plástica en blanco, sin reparaciones.
-    "basico": ("Protección de suelos y muebles. Pintura plástica en paredes y techos de las estancias "
-               "indicadas, en color blanco. No incluye reparar grietas, quitar gotelé ni alisar paredes."),
-    # medio: además colores y pequeñas reparaciones.
-    "medio": ("Protección de suelos y muebles. Pequeñas reparaciones de grietas y desconchones. Pintura "
-              "plástica en paredes y techos, con colores a elegir. No incluye quitar gotelé ni alisar paredes."),
-    # alto: además quitar el gotelé y alisar.
-    "alto": ("Protección de suelos y muebles. Quitar el gotelé y alisar las paredes, con reparación de "
-             "grietas. Pintura plástica en paredes y techos, con colores a elegir."),
+    # basico: pintura plástica blanca, sin reparaciones (D56, textos de Gabi del 24/11).
+    "basico": ("Protección de suelos y muebles y limpieza al terminar. Pintura plástica blanca en paredes y "
+               "techos de las estancias indicadas. No incluye reparar grietas, quitar gotelé ni alisar paredes, "
+               "ni pintar puertas, ventanas o radiadores."),
+    # medio: además pequeñas reparaciones y colores a elegir.
+    "medio": ("Protección de suelos y muebles y limpieza al terminar. Reparación de pequeñas grietas, agujeros "
+              "y desconchones. Pintura plástica en paredes y techos, con los colores que elijas. No incluye "
+              "quitar gotelé ni alisar paredes, ni pintar puertas, ventanas o radiadores."),
+    # alto: además quitar el gotelé y alisar las paredes.
+    "alto": ("Protección de suelos y muebles y limpieza al terminar. Quitar el gotelé y alisar las paredes, con "
+             "reparación de grietas y desconchones. Pintura plástica en paredes y techos, con los colores que "
+             "elijas. No incluye pintar puertas, ventanas o radiadores."),
 }
 # Descripción de la fila de umbrales_gate (sin la cifra).
 DESCRIPCION_UMBRAL = "D56: umbral del Gate de pintura; la cifra sale del archivo local de paso19, no del repositorio."
