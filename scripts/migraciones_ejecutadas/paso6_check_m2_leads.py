@@ -17,9 +17,9 @@ aceptaba (201) y el fallo llegaba DESPUÉS, al calcular, porque
 importe_max no cabe en NUMERIC(10,2) (tope 99.999.999,99 €). El cliente
 recibía un 500 genérico por un dato que se podía haber rechazado antes.
 
-POR QUÉ 500. El desbordamiento real empieza hacia los 51.151 m² (tarifa
-más cara: bano/alto, 1.700 €/m²), así que 500 deja un margen de cien
-veces, y sigue siendo holgado para el negocio (el Informe trabaja con
+POR QUÉ 500. El desbordamiento real empieza con decenas de miles de m²
+(con la tarifa más cara, la de bano/alto), así que 500 deja un margen
+enorme, y sigue siendo holgado para el negocio (el Informe trabaja con
 viviendas de 45 a 150 m²).
 
 DEFENSA DOBLE, mismo criterio que D5 con los enums: Pydantic protege la

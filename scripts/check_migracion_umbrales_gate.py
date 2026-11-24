@@ -1,11 +1,12 @@
 """
 Verificación de la migración de D9: la tabla umbrales_gate.
 
-Comprueba que la tabla existe, que contiene los cuatro umbrales con los
-valores decididos, y que SE COMPORTA como debe (no solo que está).
+Comprueba que la tabla existe, que contiene los cuatro umbrales de D9 con los
+valores decididos (más el de pintura de D56, sin su cifra), y que SE COMPORTA como debe (no solo que está).
 
   U1. Existe, con tipo_reforma como clave primaria y RLS activado.
-  U2. Contiene los 4 umbrales con sus valores y su marca 'provisional'.
+  U2. Contiene los 4 umbrales con sus valores y su marca 'provisional', y
+      desde D56 (paso19) la fila de pintura (> 0, no provisional).
   U3. Rechaza una categoría inventada (CHECK), incluido 'baño' con eñe.
   U4. Rechaza una categoría repetida (clave primaria).
   U5. Rechaza un umbral de 0 o negativo (CHECK).
@@ -145,7 +146,7 @@ try:
         comprobar("RLS activado", cur.fetchone()[0] is True)
 
         print("\n" + "=" * 78)
-        print("U2 - Los cuatro umbrales, con los valores de D9")
+        print("U2 - Los cuatro umbrales de D9 y el de pintura (D56)")  # título del bloque
         print("=" * 78)
         cur.execute(
             "SELECT tipo_reforma, umbral, provisional FROM umbrales_gate ORDER BY tipo_reforma;"
@@ -158,7 +159,19 @@ try:
                 real == (umbral_esperado, prov_esperado),
                 f"(real: {real})",
             )
-        comprobar("no sobra ninguna fila", len(reales) == len(ESPERADO), f"({len(reales)})")
+        # D56 (paso19): la fila de pintura. Su umbral NO se escribe aquí (sale
+        # del archivo local de paso19, D40.9): se comprueba que existe, que es
+        # mayor que cero y que no es provisional. La cifra la compara contra
+        # el archivo scripts/check_migracion_pintura.py (P6).
+        real_pintura = reales.get("pintura")
+        # Existe, > 0 y provisional = false; el detalle no enseña la cifra.
+        comprobar(
+            "pintura -> existe, umbral > 0 (provisional=False)",
+            real_pintura is not None and real_pintura[0] > 0 and real_pintura[1] is False,
+            "(falta o no cumple; la cifra no se imprime)",
+        )
+        # Las 4 de D9 más pintura (D56), ni una más ni una menos.
+        comprobar("no sobra ninguna fila", set(reales) == set(ESPERADO) | {"pintura"}, f"({sorted(reales)})")
 
         print("\n" + "=" * 78)
         print("U3 a U5 - La tabla rechaza lo que debe rechazar")

@@ -10,7 +10,8 @@ Uso:  check_datos_d39_9_incluye_tipico.py --esperado anterior|nuevo
           archivo, dan el SHA-256 aprobado (d9d734a0...2d37c2); 12 parejas
           distintas; ningún texto nuevo con dígitos ni con < > & " '.
   CASO 2. Las 12 filas reales: cada una dice ANTERIOR, NUEVO u OTRO, y
-          todas tienen que tener el texto --esperado. Ni una fila de más.
+          todas tienen que tener el texto --esperado. Desde D56, las filas de
+          otras parejas (pintura) salen como [INFO] y no se comprueban.
   CASO 3. precio_m2, fuente y fecha_actualizacion iguales a los del
           volcado docs/datos/D39_9_tarifas_antes.json. Ese volcado lo
           escribe ESTE script la primera vez que se ejecuta con --esperado
@@ -172,6 +173,15 @@ try:
 finally:
     cn.rollback()
     cn.close()
+
+# D56 (paso19): tarifas_base tiene también las 3 filas de pintura, que no son
+# de D39.9. Regla "los scripts solo comprueban SUS datos": desde aquí solo se
+# miran las filas cuyas parejas están en el JSON (las 12 de D39.9); las demás
+# salen como [INFO]. Una pareja del JSON que falte la sigue viendo el CASO 2.
+ajenas = [f for f in filas if (f[1], f[2]) not in set(parejas)]  # filas que no son de D39.9 (p. ej. pintura)
+filas = [f for f in filas if (f[1], f[2]) in set(parejas)]       # solo las 12 de D39.9
+print(f"\n    [INFO]  filas de tarifas_base que no son de D39.9 (no se comprueban): "
+      f"{sorted(f'{t}/{n}' for _, t, n, *_ in ajenas) or 'ninguna'}")  # tipo/nivel, sin cifras
 
 # ------------------------------------------------------------------
 print(f"\nCASO 2 - Las {len(filas)} filas de tarifas_base")

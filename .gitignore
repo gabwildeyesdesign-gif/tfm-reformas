@@ -14,3 +14,8 @@ docs/datos/D39_9_tarifas_antes.json
 # simulado y el bot, con los nombres, emails y teléfonos de prueba de cada
 # caso. El repositorio es público: se generan en local y no se suben.
 pruebas_conversacionales/resultados/
+
+# D56 (paso19): precios por m² y umbral de pintura. La migración los lee de
+# scripts/local/precios_pintura.json, que NUNCA se sube: el repositorio es
+# público y los precios no van en él (D40.9). Se ignora la carpeta entera.
+scripts/local/

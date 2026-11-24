@@ -155,6 +155,28 @@ comprobar("con un IVA del 10 % el resultado cambia",
           aplicar_iva(D("6900.00"), D("10")) == D("7590.00"),
           f"-> {aplicar_iva(D('6900.00'), D('10'))}")
 
+# D56: pintura se calcula con la MISMA fórmula que las demás categorías, sin
+# código especial. Cifras de PRUEBA inventadas aquí (37,77 €/m² y umbral de
+# 7.777 €), nunca las reales: las reales no están en el repositorio (D40.9).
+# Valores esperados calculados aparte con Decimal (ROUND_HALF_UP), no pedidos al código:
+#   60 m²:  37,77 × 60  = 2266,20 ; × 1,15 = 2606,13 ; con IVA 2742,10 / 3153,42 ; 2606,13 <= 7777 -> sin Gate
+#   500 m²: 37,77 × 500 = 18885,00 ; × 1,15 = 21717,75 ; con IVA 22850,85 / 26278,48 ; > 7777 -> Gate por importe
+print("\n  D56 - pintura (cifras de prueba inventadas, no las reales):")
+PRECIO_PINTURA_PRUEBA, UMB_PINTURA_PRUEBA = D("37.77"), D("7777.00")  # inventadas para esta prueba
+for nombre, m2, esp, esp_iva, gate_esperado in [
+    # Un tamaño normal de vivienda: sin Gate, que es lo que D56 espera de pintura.
+    ("pintura 60 m², sin estructural", D("60"), (D("2266.20"), D("2606.13")), (D("2742.10"), D("3153.42")), None),
+    # El tope de superficie (500 m²): con este umbral de prueba, sí salta el Gate por importe.
+    ("pintura 500 m², sin estructural", D("500"), (D("18885.00"), D("21717.75")), (D("22850.85"), D("26278.48")),
+     MotivoGate.IMPORTE_SUPERIOR_UMBRAL),
+]:
+    mn, mx = calcular_importes(PRECIO_PINTURA_PRUEBA, m2, False, REC, MAR)  # la misma función que las demás categorías
+    comprobar(f"{nombre}: importes sin IVA", (mn, mx) == esp, f"-> {mn} / {mx}")  # tarifa × m² y margen
+    con_iva = (aplicar_iva(mn, IVA), aplicar_iva(mx, IVA))  # el IVA, como en calculate_estimate
+    comprobar(f"{nombre}: importes con IVA", con_iva == esp_iva, f"-> {con_iva[0]} / {con_iva[1]}")  # D14
+    obtenido = evaluar_gate(mx, False, UMB_PINTURA_PRUEBA)  # el Gate, contra el importe máximo SIN IVA
+    comprobar(f"{nombre}: Gate", obtenido == gate_esperado, f"-> {obtenido}")  # None = sin Gate
+
 print("\n  ocultar_importes_para_agente:")
 for motivo, debe_ocultar in [
     (MotivoGate.CAMBIOS_ESTRUCTURALES, True),

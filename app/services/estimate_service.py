@@ -79,9 +79,9 @@ CLAVE_IVA = "iva_estandar_pct"
 # OJO: el umbral del Gate YA NO se lee de reglas_negocio.
 #
 # Hasta D9 había una sola clave, 'umbral_aprobacion_manual', con un valor
-# único (10.000 €) para las cuatro categorías. Pero los precios por m² van
-# de 130 € (parcial_acabados/basico) a 1.700 € (bano/alto): más de 13
-# veces de diferencia. Con un solo número, una cocina de tamaño
+# único (10.000 €) para las cuatro categorías. Pero los precios por m² cambian
+# muchísimo de una categoría a otra (la tarifa de bano/alto es más de diez
+# veces la de parcial_acabados/basico). Con un solo número, una cocina de tamaño
 # perfectamente normal (10 m²) activaba el Gate, mientras que subirlo
 # estropeaba el objetivo contrario en baño de gama alta. Un único valor no
 # puede cumplir dos objetivos de negocio distintos a la vez.

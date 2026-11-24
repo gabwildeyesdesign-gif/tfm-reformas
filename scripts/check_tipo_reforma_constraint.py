@@ -74,12 +74,13 @@ print("=" * 80)
 if ya_existia:
     print("  Ya existia: no se ejecuta el ALTER TABLE (script repetible).")
 else:
-    # SQL: añade el CHECK que solo admite los cuatro tipos sin tildes (o NULL).
+    # SQL: añade el CHECK que solo admite los cinco tipos sin tildes (o NULL).
+    # D56: con 'pintura'; si se recreara con cuatro, borraría la categoría nueva.
     cur.execute(
         """
         ALTER TABLE oportunidades
         ADD CONSTRAINT chk_oportunidades_tipo_reforma
-        CHECK (tipo_reforma IN ('bano', 'cocina', 'integral_vivienda', 'parcial_acabados')
+        CHECK (tipo_reforma IN ('bano', 'cocina', 'integral_vivienda', 'parcial_acabados', 'pintura')
                OR tipo_reforma IS NULL);
         """
     )
@@ -145,6 +146,25 @@ cur.execute(
     (lead_id,),
 )
 print(f"     ACEPTADO, id={cur.fetchone()[0]}  <- NULL sigue permitido, como se pedia")
+
+# --- 3e. 'pintura' (D56): debe entrar. Va en un SAVEPOINT: antes de paso19 el
+# CHECK la rechaza, y sin el SAVEPOINT ese error rompería la transacción de 3c y 3d.
+print("\n  --- 3e. tipo_reforma = 'pintura' (D56, paso19) ---")  # título del caso nuevo
+cur.execute("SAVEPOINT pintura;")  # punto al que volver si el INSERT falla
+try:
+    # SQL: una oportunidad con la categoría nueva.
+    cur.execute(
+        "INSERT INTO oportunidades (lead_id, tipo_reforma) VALUES (%s,%s) RETURNING id;",
+        (lead_id, "pintura"),
+    )
+    print(f"     ACEPTADO, id={cur.fetchone()[0]}  <- el CHECK admite la categoria de D56")  # lo esperado
+    resultado_3e = True  # el CHECK la admite
+except psycopg2.errors.CheckViolation:
+    # Antes de paso19 pasa esto: FALLO contado, no un error que pare el script.
+    print("     *** FALLO: el CHECK RECHAZA 'pintura' (¿falta aplicar paso19?) ***")
+    resultado_3e = False  # cuenta como fallo en el resultado
+    cur.execute("ROLLBACK TO SAVEPOINT pintura;")  # deja la transacción usable para 3c
+cur.execute("RELEASE SAVEPOINT pintura;")  # se suelta el punto de vuelta
 
 # --- 3c. valor CON ENIE: debe ser RECHAZADO ---
 print("\n  --- 3c. tipo_reforma = 'ba\u00f1o' (CON ENIE, el caso del bug) ---")
@@ -228,8 +248,8 @@ print(f"  leads descartables restantes       : {c2}")
 print(f"  oportunidades descartables restantes: {c3}")
 
 print("\n" + "=" * 80)
-# Correcto solo si 3c y 3d rechazaron y no quedó ninguna fila de prueba.
-todo_ok = resultado_3c and resultado_3d and c1 == 0 and c2 == 0 and c3 == 0
+# Correcto solo si 3c y 3d rechazaron, 3e aceptó 'pintura' y no quedó ninguna fila de prueba.
+todo_ok = resultado_3c and resultado_3d and resultado_3e and c1 == 0 and c2 == 0 and c3 == 0  # 3e: D56
 print("RESULTADO:", "CORRECTO" if todo_ok else "HAY FALLOS")
 print("=" * 80)
 

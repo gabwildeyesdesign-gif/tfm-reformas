@@ -26,7 +26,8 @@ class TipoReforma(str, Enum):
     los que están almacenados en la columna tarifas_base.tipo_reforma de
     Supabase, verificados con una consulta real (SELECT DISTINCT), no
     copiados de la documentación. La tabla tiene además un CHECK que
-    solo admite estos cuatro.
+    solo admite estas cinco categorías (la quinta, 'pintura', desde D56 y
+    la migración paso19).
 
     Por eso van SIN eñe y SIN tildes: en la base de datos es 'bano', no
     'baño'. Si aquí escribiéramos 'baño', el lead se guardaría sin error
@@ -51,10 +52,15 @@ class TipoReforma(str, Enum):
     # Obras en el baño y en la cocina (enteras o parciales).
     BANO = "bano"
     COCINA = "cocina"
-    # Reforma de toda la vivienda, y trabajos generales que no son de una
-    # sola estancia (pintura, electricidad o fontanería).
+    # Reforma de toda la vivienda (varias estancias a la vez).
     INTEGRAL_VIVIENDA = "integral_vivienda"
+    # Trabajos generales que no son de una sola estancia: electricidad,
+    # fontanería, suelos y puertas (desde D56, la pintura ya no va aquí).
     PARCIAL_ACABADOS = "parcial_acabados"
+    # D56: pintar paredes y techos de la vivienda o de una habitación. Sus m²
+    # son los de SUELO, como en las demás categorías, no los de pared. Se
+    # calcula con la misma fórmula que las demás (tarifa × m², margen, IVA).
+    PINTURA = "pintura"
 
 
 class NivelAcabados(str, Enum):
@@ -63,8 +69,8 @@ class NivelAcabados(str, Enum):
 
     Mismo criterio que TipoReforma: valores verificados contra
     tarifas_base.nivel_acabados en Supabase. Son 'basico' (sin tilde),
-    'medio' y 'alto'. La combinación de estos 3 niveles con los 4 tipos
-    de reforma da las 12 filas de tarifas_base, que tiene además un
+    'medio' y 'alto'. La combinación de estos 3 niveles con los 5 tipos
+    de reforma da las 15 filas de tarifas_base (12 hasta D56), que tiene además un
     UNIQUE (tipo_reforma, nivel_acabados) para que no haya duplicados.
     """
 

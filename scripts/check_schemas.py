@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from decimal import Decimal
 
+from app.schemas.business_rules import IncluyeTipico  # D56: la fila de incluye_tipico de get_business_rules
 from app.schemas.common import MAX_FOTOS_LEAD, MAX_M2_LEAD, NivelAcabados, TipoReforma
 from app.schemas.leads import (
     LeadCreate,
@@ -152,11 +153,32 @@ debe_aceptar(
     lambda o: True if o.m2 == Decimal(MAX_M2_LEAD) else f"m2={o.m2!r}",
 )
 debe_aceptar(
-    "Los 4 tipos y 3 niveles reales de tarifas_base se aceptan",
+    "Los 5 tipos y 3 niveles reales de tarifas_base se aceptan",  # 5 desde D56
     LeadCreate,
     con(tipo_reforma="integral_vivienda", nivel_acabados="alto"),
     lambda o: True if o.nivel_acabados is NivelAcabados.ALTO else "enum mal",
 )
+# --- D56: la categoria nueva 'pintura' ---
+debe_aceptar(  # POST /leads acepta pintura y la guarda como el miembro del Enum
+    "tipo_reforma = 'pintura' (D56) se acepta",
+    LeadCreate,
+    con(tipo_reforma="pintura", nivel_acabados="basico"),
+    lambda o: True if o.tipo_reforma is TipoReforma.PINTURA else f"tipo_reforma={o.tipo_reforma!r}",
+)
+debe_aceptar(  # sin esto, get_business_rules daria un error con las filas de pintura de tarifas_base
+    "IncluyeTipico con tipo_reforma = 'pintura' (D56) se acepta",
+    IncluyeTipico,
+    {"tipo_reforma": "pintura", "nivel_acabados": "medio", "incluye_tipico": "Texto de prueba."},
+    lambda o: True if o.tipo_reforma is TipoReforma.PINTURA else f"tipo_reforma={o.tipo_reforma!r}",
+)
+# Las 5 categorias de D56, escritas aqui (no leidas del codigo): compara el Enum con la decision.
+CATEGORIAS_D56 = {"bano", "cocina", "integral_vivienda", "parcial_acabados", "pintura"}
+if {t.value for t in TipoReforma} == CATEGORIAS_D56:  # ni una mas ni una menos
+    ok += 1  # cuenta como acierto
+    print("  [OK]    TipoReforma tiene exactamente las 5 categorias de D56")
+else:  # falta o sobra alguna
+    fallos.append(f"TipoReforma: {sorted(t.value for t in TipoReforma)} en vez de las 5 de D56")  # se apunta
+    print("  [FALLO] TipoReforma no tiene las 5 categorias de D56")
 # --- Telefono (2026-09-24): normalizacion + formato ^\+?[0-9]{9,15}$ ---
 # Lo que se comprueba en cada caso no es solo "se acepta", sino el valor
 # que queda GUARDADO en el modelo: debe salir ya limpio.
