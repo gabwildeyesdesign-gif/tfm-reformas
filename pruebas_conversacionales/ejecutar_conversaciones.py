@@ -127,7 +127,8 @@ def ejecutar_caso(url: str, caso: dict, espera_max: float, variantes: dict[str, 
     filas, ultima = [], ""                                               # resultados y última respuesta
     for n, mensaje in enumerate(caso["mensajes"], start=1):              # un mensaje por turno, en orden
         mensaje_guardado = quitar_email(mensaje, variantes)              # lo que se guarda: con marcadores, nunca el email
-        if mensaje.strip().lower() in ("no", "si", "sí") and MARCA_RESUMEN not in ultima:  # el guion espera un resumen
+        es_ultimo = n == len(caso["mensajes"])                           # H-180-1: solo el ÚLTIMO mensaje del guion puede ser la respuesta al resumen
+        if es_ultimo and mensaje.strip().lower() in ("no", "si", "sí") and MARCA_RESUMEN not in ultima:  # un "no" en mitad (tabiques) ya no para
             filas.append({"caso": caso["id"], "turno": n, "mensaje": mensaje_guardado, "respuesta": "",
                           "segundos": "", "fallos": "PARADA: no hubo resumen antes de este mensaje"})  # se para y se anota
             break
