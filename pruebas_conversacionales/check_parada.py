@@ -1,8 +1,9 @@
 # =============================================================================
-# check_parada.py — Prueba SIN RED de la regla de parada de ejecutar_caso() (H-180-1).
+# check_parada.py — Prueba SIN RED de la regla de parada de ejecutar_caso() (H-180-1, H-191-2).
 # La regla para la conversación cuando un "no"/"si"/"sí" llega sin resumen antes,
-# pero solo si ese mensaje es el ÚLTIMO del caso. Se cambian post_mensaje y
-# recibir_respuesta por funciones falsas y se comprueban 4 casos.
+# pero solo si ese mensaje es el ÚLTIMO del caso y si todavía NO se ha mostrado
+# la estimación (H-191-2). Se cambian post_mensaje y recibir_respuesta por
+# funciones falsas y se comprueban 6 casos.
 # Uso (Git Bash, en la raíz del proyecto):
 #   PYTHONIOENCODING=utf-8 ./venv/Scripts/python.exe pruebas_conversacionales/check_parada.py
 #   PYTHONIOENCODING=utf-8 ./venv/Scripts/python.exe pruebas_conversacionales/check_parada.py <otra copia del ejecutor>
@@ -94,6 +95,25 @@ filas = lanzar(["quiero pintar el salón", "no"], ["¿Cuántos metros tiene el s
 comprobar("caso 4: \"no\" final sin resumen para con el texto de PARADA",
           filas[-1]["fallos"] == PARADA and enviados == ["quiero pintar el salón"],
           f"última fila={filas[-1]['fallos']!r}, enviados={enviados}")
+
+# CASO 5 (H-191-2): "sí" final al Agente 2, con la estimación ya mostrada y sin resumen justo antes. NO debe parar.
+filas = lanzar(["baño de 6 m2, acabados medios, sin tabiques", "si", "quiero una visita", "sí"],
+               ["Antes de guardar nada, revisa estos datos: ...", "Según los datos que nos has facilitado...",
+                "Tengo estas horas libres: ... ¿Te reservo el lunes a las 09:45?", "Hecho, solicitud registrada."])
+comprobar("caso 5: \"sí\" final con la estimación ya mostrada no para y se envía (H-191-2)",
+          all(f["fallos"] != PARADA for f in filas) and enviados == ["baño de 6 m2, acabados medios, sin tabiques",
+                                                                      "si", "quiero una visita", "sí"],
+          f"fallos={[f['fallos'] for f in filas]}, enviados={enviados}")
+
+# CASO 6 (H-191-2): "no" final con la estimación ya mostrada (no quiere visita). Tampoco debe parar.
+filas = lanzar(["cocina de 10 m2, acabados altos, sin tabiques", "si", "no"],
+               ["Antes de guardar nada, revisa estos datos: ...",
+                "Según los datos que nos has facilitado... ¿Quieres una visita?",
+                "De acuerdo, aquí me tienes si cambias de idea."])
+comprobar("caso 6: \"no\" final con la estimación ya mostrada no para y se envía (H-191-2)",
+          all(f["fallos"] != PARADA for f in filas) and enviados == ["cocina de 10 m2, acabados altos, sin tabiques",
+                                                                      "si", "no"],
+          f"fallos={[f['fallos'] for f in filas]}, enviados={enviados}")
 
 print(f"\nRESULTADO: {ok}/{ok + fallos} correctas")                     # recuento final
 sys.exit(0 if fallos == 0 else 1)                                      # código de salida para quien lo lance

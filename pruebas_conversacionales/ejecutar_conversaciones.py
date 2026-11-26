@@ -35,6 +35,7 @@ LATIDO = "n8n|heartbeat"               # señal de vida que manda n8n (protocolo
 LATIDO_ACK = "n8n|heartbeat-ack"       # respuesta obligatoria al latido
 SIGUE = "n8n|continue"                 # n8n avisa de que la ejecución continúa
 MARCA_RESUMEN = "Antes de guardar nada"   # frase fija con la que empieza el resumen (pintar_resumen)
+MARCA_ESTIMACION = "Según los datos que nos has facilitado"  # frase fija de la estimación (la escribe el código tras el "sí")
 VARIABLE_EMAIL = "TU_EMAIL"            # variable de entorno con el email real de pruebas (nunca va al repositorio)
 MARCADORES = ("TU_EMAIL_CON", "TU_EMAIL_MAYUS", "TU_EMAIL")  # los largos primero: "TU_EMAIL" está dentro de los otros dos
 
@@ -125,10 +126,13 @@ def ejecutar_caso(url: str, caso: dict, espera_max: float, variantes: dict[str, 
     """Ejecuta una conversación completa en una sesión nueva y devuelve una fila por turno."""
     sesion = f"suite-{caso['id']}-{uuid.uuid4().hex[:8]}"                # sesión nueva y reconocible
     filas, ultima = [], ""                                               # resultados y última respuesta
+    hubo_estimacion = False                                              # H-191-2: ¿alguna respuesta anterior ya traía la estimación?
     for n, mensaje in enumerate(caso["mensajes"], start=1):              # un mensaje por turno, en orden
         mensaje_guardado = quitar_email(mensaje, variantes)              # lo que se guarda: con marcadores, nunca el email
         es_ultimo = n == len(caso["mensajes"])                           # H-180-1: solo el ÚLTIMO mensaje del guion puede ser la respuesta al resumen
-        if es_ultimo and mensaje.strip().lower() in ("no", "si", "sí") and MARCA_RESUMEN not in ultima:  # un "no" en mitad (tabiques) ya no para
+        # H-191-2: con la estimación ya mostrada, un "sí"/"no" final contesta al Agente 2 (p. ej. la visita), no al resumen: no para
+        if (es_ultimo and not hubo_estimacion and mensaje.strip().lower() in ("no", "si", "sí")
+                and MARCA_RESUMEN not in ultima):                        # un "no" en mitad (tabiques) ya no para (H-180-1)
             filas.append({"caso": caso["id"], "turno": n, "mensaje": mensaje_guardado, "respuesta": "",
                           "segundos": "", "fallos": "PARADA: no hubo resumen antes de este mensaje"})  # se para y se anota
             break
@@ -142,7 +146,8 @@ def ejecutar_caso(url: str, caso: dict, espera_max: float, variantes: dict[str, 
         respuesta = quitar_email(respuesta, variantes)                   # el email vuelve a ser marcador ANTES de comprobar y guardar
         segundos = round(time.monotonic() - t0, 2)                       # duración del turno vista por el cliente
         es_resumen = MARCA_RESUMEN in respuesta                          # el resumen lo pinta el código, no el modelo
-        es_estimacion = "Según los datos que nos has facilitado" in respuesta  # la cifra la escribe el código tras el "sí"
+        es_estimacion = MARCA_ESTIMACION in respuesta                    # la cifra la escribe el código tras el "sí"
+        hubo_estimacion = hubo_estimacion or es_estimacion               # H-191-2: una vez mostrada, queda mostrada para el resto del caso
         excluir = ("C8_codigo_interno", "C2_cifra_euros") if (es_resumen or es_estimacion) else ()  # textos del código, no del modelo
         reglas = [r for r in GLOBALES if r[0] not in excluir]            # reglas que se aplican a esta respuesta
         fallos = comprobar(respuesta, reglas)                            # reglas globales incumplidas
