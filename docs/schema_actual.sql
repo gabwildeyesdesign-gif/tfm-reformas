@@ -1,7 +1,7 @@
 -- ==========================================================================
 -- ESQUEMA REAL DE LA BASE DE DATOS - ARCHIVO GENERADO AUTOMATICAMENTE
 --
--- Generado por scripts/dump_schema.py el 2026-10-25 19:55:00 UTC
+-- Generado por scripts/dump_schema.py el 2026-11-26 16:28:43 UTC
 -- NO EDITAR A MANO: se sobrescribe al volver a ejecutar el script.
 --
 -- Reconstruido leyendo information_schema (columns,
@@ -14,7 +14,7 @@
 
 
 -- ------------------------------------------------------------------------
--- Tabla: clientes   (31 filas en el momento del volcado)
+-- Tabla: clientes   (44 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE clientes (
     id                       SERIAL NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE clientes (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: leads   (48 filas en el momento del volcado)
+-- Tabla: leads   (270 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE leads (
     id                       SERIAL NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE leads (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: logs   (100 filas en el momento del volcado)
+-- Tabla: logs   (443 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE logs (
     id                       SERIAL NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE logs (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: oportunidades   (48 filas en el momento del volcado)
+-- Tabla: oportunidades   (270 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE oportunidades (
     id                       SERIAL NOT NULL,
@@ -74,13 +74,13 @@ CREATE TABLE oportunidades (
     fecha_ultimo_contacto    TIMESTAMPTZ,
     CONSTRAINT oportunidades_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES leads(id),
     CONSTRAINT oportunidades_pkey PRIMARY KEY (id),
-    CONSTRAINT chk_oportunidades_tipo_reforma CHECK (((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying])::text[])) OR (tipo_reforma IS NULL)),
+    CONSTRAINT chk_oportunidades_tipo_reforma CHECK (((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying, 'pintura'::character varying])::text[])) OR (tipo_reforma IS NULL)),
     CONSTRAINT oportunidades_estado_check CHECK ((estado)::text = ANY ((ARRAY['nueva'::character varying, 'cualificada'::character varying, 'pendiente_aprobacion'::character varying, 'visita_agendada'::character varying, 'presupuesto_enviado'::character varying, 'seguimiento_pendiente'::character varying, 'ganada'::character varying, 'perdida'::character varying])::text[])),
     CONSTRAINT oportunidades_prioridad_check CHECK ((prioridad)::text = ANY ((ARRAY['baja'::character varying, 'media'::character varying, 'alta'::character varying])::text[]))
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: direcciones_obra   (5 filas en el momento del volcado)
+-- Tabla: direcciones_obra   (7 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE direcciones_obra (
     id                       SERIAL NOT NULL,
@@ -99,7 +99,7 @@ CREATE TABLE direcciones_obra (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: presupuestos   (40 filas en el momento del volcado)
+-- Tabla: presupuestos   (256 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE presupuestos (
     id                       SERIAL NOT NULL,
@@ -133,7 +133,7 @@ CREATE TABLE reglas_negocio (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: tarifas_base   (12 filas en el momento del volcado)
+-- Tabla: tarifas_base   (15 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE tarifas_base (
     id                       SERIAL NOT NULL,
@@ -146,11 +146,11 @@ CREATE TABLE tarifas_base (
     CONSTRAINT tarifas_base_pkey PRIMARY KEY (id),
     CONSTRAINT tarifas_base_tipo_reforma_nivel_acabados_key UNIQUE (tipo_reforma, nivel_acabados),
     CONSTRAINT tarifas_base_nivel_acabados_check CHECK ((nivel_acabados)::text = ANY ((ARRAY['basico'::character varying, 'medio'::character varying, 'alto'::character varying])::text[])),
-    CONSTRAINT tarifas_base_tipo_reforma_check CHECK ((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying])::text[]))
+    CONSTRAINT tarifas_base_tipo_reforma_check CHECK ((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying, 'pintura'::character varying])::text[]))
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: umbrales_gate   (4 filas en el momento del volcado)
+-- Tabla: umbrales_gate   (5 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE umbrales_gate (
     tipo_reforma             VARCHAR(30) NOT NULL,
@@ -159,12 +159,12 @@ CREATE TABLE umbrales_gate (
     descripcion              TEXT,
     fecha_actualizacion      DATE NOT NULL DEFAULT CURRENT_DATE,
     CONSTRAINT umbrales_gate_pkey PRIMARY KEY (tipo_reforma),
-    CONSTRAINT chk_umbrales_gate_tipo_reforma CHECK ((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying])::text[])),
+    CONSTRAINT chk_umbrales_gate_tipo_reforma CHECK ((tipo_reforma)::text = ANY ((ARRAY['bano'::character varying, 'cocina'::character varying, 'integral_vivienda'::character varying, 'parcial_acabados'::character varying, 'pintura'::character varying])::text[])),
     CONSTRAINT chk_umbrales_gate_umbral_positivo CHECK (umbral > (0)::numeric)
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: visitas   (22 filas en el momento del volcado)
+-- Tabla: visitas   (34 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE visitas (
     id                       SERIAL NOT NULL,
@@ -182,7 +182,7 @@ CREATE TABLE visitas (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: cambios_visita   (0 filas en el momento del volcado)
+-- Tabla: cambios_visita   (2 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE cambios_visita (
     id                       SERIAL NOT NULL,
@@ -206,7 +206,7 @@ CREATE TABLE cambios_visita (
 );
 
 -- ------------------------------------------------------------------------
--- Tabla: decisiones_gate   (25 filas en el momento del volcado)
+-- Tabla: decisiones_gate   (50 filas en el momento del volcado)
 -- ------------------------------------------------------------------------
 CREATE TABLE decisiones_gate (
     id                       SERIAL NOT NULL,
