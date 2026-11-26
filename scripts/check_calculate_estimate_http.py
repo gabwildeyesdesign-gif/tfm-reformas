@@ -260,6 +260,72 @@ try:
               and j["motivo_gate"] is None,
               f"(con IVA {j['importe_max_con_iva']}, sin IVA 11500.00)")
 
+    # Separador del caso nuevo.
+    print("\n" + "=" * 78)
+    # Título: D56, pintura sin Gate, solo la forma de la respuesta.
+    print("H6c - D56: pintura de 10 m², básico, sin cambios estructurales (forma, sin cifras)")
+    # Separador.
+    print("=" * 78)
+    # Sin ninguna tarifa ni umbral en el repositorio (D40.9): el caso solo
+    # comprueba la FORMA. Supone que 10 m² de pintura básica quedan muy por
+    # debajo del umbral real de pintura; si un día no fuera así, este caso
+    # daría FALLO por el Gate y habría que mirar los datos, no el código.
+    op_pintura = lead_http("pintura-sin", "pintura", "basico", 10, False)
+    # La petición real por HTTP.
+    r, _ = calcular({"oportunidad_id": op_pintura})
+    # El JSON de la respuesta (sus importes NO se imprimen).
+    j = r.json()
+    # Se enseña el código y los campos sin cifras.
+    print(f"    {r.status_code} status={j.get('status')} requiere_aprobacion={j.get('requiere_aprobacion')} "
+          f"motivo_gate={j.get('motivo_gate')}")
+    # 200.
+    comprobar("H6c pintura: 200", r.status_code == 200, f"({r.status_code})")
+    # status presupuesto_enviado (calculado y sin Gate).
+    comprobar("H6c pintura: status presupuesto_enviado", j.get("status") == "presupuesto_enviado",
+              f"({j.get('status')})")
+    # Sin aprobación humana y sin motivo.
+    comprobar("H6c pintura: requiere_aprobacion false y motivo_gate null",
+              j.get("requiere_aprobacion") is False and j.get("motivo_gate") is None,
+              f"({j.get('requiere_aprobacion')}, {j.get('motivo_gate')})")
+    # Los dos importes llegan (como texto exacto, D4).
+    comprobar("H6c pintura: importes no null",
+              j.get("importe_min_con_iva") is not None and j.get("importe_max_con_iva") is not None)
+    # El mínimo no supera al máximo (se comparan como Decimal; no se imprimen).
+    comprobar("H6c pintura: importe mínimo <= importe máximo",
+              j.get("importe_min_con_iva") is not None and j.get("importe_max_con_iva") is not None
+              and Decimal(j["importe_min_con_iva"]) <= Decimal(j["importe_max_con_iva"]))
+
+    # Separador del caso nuevo.
+    print("\n" + "=" * 78)
+    # Título: D56, pintura con Gate por cambios estructurales (no por importe).
+    print("H6d - D56: pintura de 10 m², básico, CON cambios estructurales (Gate, forma, sin cifras)")
+    # Separador.
+    print("=" * 78)
+    # El Gate lo provoca incluye_cambios_estructurales = true, no el importe
+    # (evaluar_gate no mira la categoría). Como en el H6, la puerta REST SÍ
+    # enseña los importes: solo los oculta la tool MCP
+    # (check_mcp_calculate_estimate, caso de pintura).
+    op_pintura_estr = lead_http("pintura-estr", "pintura", "basico", 10, True)
+    # La petición real por HTTP.
+    r, _ = calcular({"oportunidad_id": op_pintura_estr})
+    # El JSON de la respuesta (sus importes NO se imprimen).
+    j = r.json()
+    # Se enseña el código y los campos sin cifras.
+    print(f"    {r.status_code} status={j.get('status')} requiere_aprobacion={j.get('requiere_aprobacion')} "
+          f"motivo_gate={j.get('motivo_gate')}")
+    # 200.
+    comprobar("H6d pintura estructural: 200", r.status_code == 200, f"({r.status_code})")
+    # El motivo es cambios_estructurales (no importe_superior_umbral ni ambos).
+    comprobar("H6d pintura estructural: motivo_gate cambios_estructurales",
+              j.get("motivo_gate") == "cambios_estructurales", f"({j.get('motivo_gate')})")
+    # Necesita aprobación humana y queda pendiente.
+    comprobar("H6d pintura estructural: requiere_aprobacion true y status pendiente_aprobacion",
+              j.get("requiere_aprobacion") is True and j.get("status") == "pendiente_aprobacion",
+              f"({j.get('requiere_aprobacion')}, {j.get('status')})")
+    # Por REST los importes SÍ llegan (como en el H6).
+    comprobar("H6d pintura estructural: la puerta REST enseña los importes (no null)",
+              j.get("importe_min_con_iva") is not None and j.get("importe_max_con_iva") is not None)
+
     print("\n" + "=" * 78)
     print("H7 - Oportunidad 'perdida' sin presupuesto -> 409")
     print("=" * 78)

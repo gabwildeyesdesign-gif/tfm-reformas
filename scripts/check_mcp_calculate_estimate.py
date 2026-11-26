@@ -154,6 +154,24 @@ async def pruebas_con_cliente(ops):
                       and sc["motivo_gate"] == motivo and sc["presupuesto_id"] is not None
                       and sc["creado"] is True)
 
+        # D56: pintura con cambios estructurales por la puerta MCP. Solo la
+        # forma: ninguna tarifa ni umbral real en el repositorio (D40.9).
+        print("\n  call_tool: D56, pintura con cambios estructurales -> Gate e importes NULL")
+        # La llamada real a la tool.
+        sc = await llamar(ops["pintura_estr"])
+        # Se enseñan los campos sin cifras (los importes deben ser null).
+        print(f"    motivo_gate={sc.get('motivo_gate')} requiere_aprobacion={sc.get('requiere_aprobacion')} "
+              f"importes=({sc.get('importe_min_con_iva')}, {sc.get('importe_max_con_iva')})")
+        # El motivo es cambios_estructurales.
+        comprobar("pintura estructural: motivo_gate cambios_estructurales",
+                  sc.get("motivo_gate") == "cambios_estructurales", f"({sc.get('motivo_gate')})")
+        # Necesita aprobación humana.
+        comprobar("pintura estructural: requiere_aprobacion true", sc.get("requiere_aprobacion") is True,
+                  f"({sc.get('requiere_aprobacion')})")
+        # El agente no recibe importes.
+        comprobar("pintura estructural: importes NULL para el agente",
+                  (sc.get("importe_min_con_iva"), sc.get("importe_max_con_iva")) == (None, None))
+
         # Los importes se ocultan AL AGENTE, pero existen y están guardados.
         cur.execute(
             "SELECT importe_min_con_iva, importe_max_con_iva FROM presupuestos WHERE oportunidad_id = %s;",
@@ -239,6 +257,10 @@ try:
         "umbral": lead_http("umbral", "integral_vivienda", "medio", 80, False),
         "estr": lead_http("estr", "bano", "medio", 6, True),
         "ambos": lead_http("ambos", "integral_vivienda", "medio", 80, True),
+        # D56: pintura de 10 m², básico, CON cambios estructurales (Gate por
+        # estructura, no por importe). Sufijo propio: su lead_token no lo
+        # comparte ningún otro script.
+        "pintura_estr": lead_http("mcp-pintura-estr", "pintura", "basico", 10, True),
     }
     asyncio.run(pruebas_con_cliente(ops))
 
