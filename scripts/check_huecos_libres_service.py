@@ -437,6 +437,7 @@ print("\nS7. D62: consultar_dias con desde (solo lectura)")
 conn_s7 = psycopg2.connect(DATABASE_URL, connection_factory=ConexionSinCommit)
 
 
+# El sustituto de get_db_connection para la S7 (@contextmanager: se usa con "with").
 @contextmanager
 def conexion_s7():
     """Sustituye a get_db_connection en la S7: entrega conn_s7 y, al salir,
@@ -451,6 +452,7 @@ def conexion_s7():
         conn_s7.rollback()
 
 
+# Los días de una respuesta, comparables entre llamadas.
 def solo_dias(respuesta):
     """Los días de una respuesta del modo días, en JSON (sin generado_en)."""
     # model_dump(mode="json"): fechas como texto, comparables.

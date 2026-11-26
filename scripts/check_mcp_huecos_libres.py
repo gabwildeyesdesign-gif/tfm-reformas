@@ -207,6 +207,7 @@ def sin(objeto, *claves):
     return {k: v for k, v in objeto.items() if k not in claves}
 
 
+# D62: ¿trae alternativas laborables, en orden y desde ese día?
 def alternativas_desde(respuesta, primero):
     """D62: True si la respuesta trae alternativas, todas laborables, en orden
     y desde ese día (incluido) o después."""
@@ -216,6 +217,7 @@ def alternativas_desde(respuesta, primero):
     return bool(fechas) and fechas[0] >= primero and all(f.weekday() < 5 for f in fechas) and fechas == sorted(fechas)
 
 
+# D62: ¿el esquema JSON declara esa propiedad en algún nivel?
 def tiene_propiedad(esquema, nombre):
     """D62: True si algún nivel del esquema JSON declara esa propiedad."""
     # Un diccionario: sus properties o cualquiera de sus valores.
@@ -362,6 +364,7 @@ async def pruebas_mcp():
         # La función real.
         real_dias = svc.consultar_dias
 
+        # El sustituto que cuenta las llamadas.
         def contar_dias(*args, **kwargs):
             """Apunta la llamada y llama a la función real."""
             # Se apuntan sus argumentos.

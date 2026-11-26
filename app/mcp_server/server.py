@@ -362,7 +362,7 @@ def consultar_huecos_libres(
       "horas" con todas juntas. Si ese día no tiene ninguna,
       sin_horas_motivo dice por qué (fecha_pasada, antelacion_insuficiente,
       fin_de_semana o dia_completo) y "alternativas" trae los próximos días
-      con horas libres: ofrece solo esas.
+      con horas libres desde esa fecha: ofrece solo esas.
 
     Las visitas empiezan a horas fijas; nunca propongas una hora que no
     esté en la respuesta. No contiene datos de otros clientes.

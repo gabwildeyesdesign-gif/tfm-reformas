@@ -137,6 +137,7 @@ class HuecosDiaResponse(BaseModel):
     sin_horas_motivo: MotivoSinHoras | None
 
 
+# D62: el modo un día de la TOOL (con alternativas); hereda todo de HuecosDiaResponse.
 class HuecosDiaAgente(HuecosDiaResponse):
     """
     Modo un día de la tool consultar_huecos_libres (D62, 2026-11-26, plan
