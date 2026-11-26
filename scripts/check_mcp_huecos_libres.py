@@ -33,6 +33,18 @@ antelacion_insuficiente o fecha_pasada según quede alguna hora (precisión
 2). Para el oráculo lee, en una sesión de SOLO LECTURA, el now() de
 Postgres y las dos reglas: sigue sin escribir ninguna fila.)
 
+(Nota 2026-11-26, D62, plan docs/Plan_Alternativas_Huecos_D62.txt: el modo
+un día de la tool lleva "alternativas"; REST no. El CASO 4 compara tool y
+REST SIN esa clave y comprueba aparte que REST no la trae. CASO 2b: el
+esquema de salida publicado la incluye. CASO 3: el modo días no la lleva.
+CASO 4c: los días sin horas (antelación y hoy) traen alternativas desde el
+primer día del chat. CASO 8 nuevo: (a) el sábado del bloque: alternativas =
+consultar_dias(CANAL_CHAT, desde=ese sábado) sin etiqueta, desde el lunes
+siguiente; (b) un laborable con horas: alternativas [] y consultar_dias NO
+se llama (se cuenta EN MEMORIA, como el CASO 6: el servidor corre en este
+proceso). CASO 7: la tool pasa desde= a consultar_dias. Sigue sin escribir
+ninguna fila.)
+
 Sale con código 1 si algo falla.
 """
 
@@ -46,8 +58,8 @@ import sys
 import threading
 # time: esperar a que arranque.
 import time
-# Fechas.
-from datetime import datetime, timedelta
+# Fechas (date: D62, las fechas de las alternativas).
+from datetime import date, datetime, timedelta
 # Path: rutas.
 from pathlib import Path
 # La zona de Madrid.
@@ -79,6 +91,9 @@ from app.config import DATABASE_URL, GATE_SECRET, MCP_SECRET
 from app.mcp_server.server import MENSAJE_FECHA_NO_VALIDA, MENSAJE_REGLAS_NO_DISPONIBLES
 # Las reglas de visita (CASO 6: la clave falsa en memoria).
 import app.services.reglas_visita as rv
+# D62: el servicio, para la referencia de las alternativas y para contar EN
+# MEMORIA las llamadas a consultar_dias (CASO 8).
+import app.services.huecos_libres_service as svc
 
 # Las fechas propias (un laborable lejano del bloque de check_huecos_libres_http,
 # solo para leer: este script no escribe nada).
@@ -192,6 +207,33 @@ def sin(objeto, *claves):
     return {k: v for k, v in objeto.items() if k not in claves}
 
 
+def alternativas_desde(respuesta, primero):
+    """D62: True si la respuesta trae alternativas, todas laborables, en orden
+    y desde ese día (incluido) o después."""
+    # Las fechas de las alternativas, como date.
+    fechas = [date.fromisoformat(d.get("fecha", "2000-01-01")) for d in respuesta.get("alternativas") or []]
+    # No vacía, ninguna antes de primero, ninguna en fin de semana y en orden.
+    return bool(fechas) and fechas[0] >= primero and all(f.weekday() < 5 for f in fechas) and fechas == sorted(fechas)
+
+
+def tiene_propiedad(esquema, nombre):
+    """D62: True si algún nivel del esquema JSON declara esa propiedad."""
+    # Un diccionario: sus properties o cualquiera de sus valores.
+    if isinstance(esquema, dict):
+        # En las properties de este nivel.
+        if nombre in (esquema.get("properties") or {}):
+            # Encontrada.
+            return True
+        # En los niveles de dentro.
+        return any(tiene_propiedad(v, nombre) for v in esquema.values())
+    # Una lista: en cualquiera de sus elementos.
+    if isinstance(esquema, list):
+        # En alguno.
+        return any(tiene_propiedad(v, nombre) for v in esquema)
+    # Un texto o un número: no.
+    return False
+
+
 async def pruebas_mcp():
     """Los CASOS 2 a 6, con el cliente MCP."""
     # El transporte con el token Bearer correcto.
@@ -212,6 +254,13 @@ async def pruebas_mcp():
         # Solo "fecha", y no obligatoria.
         comprobar("un solo parámetro, 'fecha', opcional",
                   list(entrada.get("properties", {})) == ["fecha"] and not entrada.get("required"), f"({entrada})")
+        # D62 (e): el esquema de salida publicado (el que lee n8n).
+        salida = (tools[TOOL].output_schema if TOOL in tools else None) or {}
+        # Se busca la clave "alternativas" en las propiedades de cualquier
+        # nivel del esquema (fastmcp lo envuelve en "result" y pone los dos
+        # modelos en $defs).
+        comprobar("CASO 2b - D62: el esquema de salida publicado incluye 'alternativas'",
+                  tiene_propiedad(salida, "alternativas"), f"({sorted(salida.get('$defs', {}))})")
 
         # ------------------------------------------------------------
         print("\nCASO 3 - Modo días: igual que GET /huecos-libres, sin etiqueta")
@@ -225,6 +274,9 @@ async def pruebas_mcp():
         print(f"      tool: {(sc.get('dias') or [None])[0]}")
         # Y la de REST.
         print(f"      REST: {(ref.get('dias') or [None])[0]}")
+        # D62 (d): el modo días no cambia: sin la clave alternativas.
+        comprobar("D62: el modo días de la tool no lleva 'alternativas' (regresión)",
+                  bool(sc) and "alternativas" not in sc, f"({sorted(sc)})")
         # Claves de cada día sin etiqueta.
         comprobar("cada día de la tool tiene las claves exactas (sin etiqueta)",
                   bool(sc.get("dias")) and all(set(d) == CLAVES_DIA_AGENTE for d in sc["dias"]), f"({sc.get('dias', [])[:1]})")
@@ -252,9 +304,15 @@ async def pruebas_mcp():
             sc = (r.structured_content or {}).get("result", {})
             # La referencia REST.
             ref = rest({"fecha": dia.isoformat()})
-            # Iguales salvo generado_en.
-            comprobar(f"{dia} ({ref.get('dia_semana')}): la misma respuesta que REST (salvo generado_en)",
-                      sc.get("modo") == "dia" and sin(sc, "generado_en") == sin(ref, "generado_en"), f"({sc})")
+            # D62: iguales salvo generado_en y alternativas (solo de la tool).
+            comprobar(f"{dia} ({ref.get('dia_semana')}): la misma respuesta que REST (salvo generado_en y alternativas)",
+                      sc.get("modo") == "dia" and sin(sc, "generado_en", "alternativas") == sin(ref, "generado_en"),
+                      f"({sc})")
+            # D62: la tool trae la clave.
+            comprobar(f"{dia}: D62, la tool trae la clave 'alternativas'", "alternativas" in sc, f"({sorted(sc)})")
+            # D62 (punto 5): GET /huecos-libres sigue sin ella (HuecosDiaResponse no cambia).
+            comprobar(f"{dia}: D62, GET /huecos-libres NO trae 'alternativas'",
+                      bool(ref) and "alternativas" not in ref, f"({sorted(ref)})")
 
         # ------------------------------------------------------------
         print(f"\nCASO 4c - D45: antelación del chat (hoy {HOY_PG}; administración {PRIMER_ADMIN}; chat {PRIMER_CHAT})")
@@ -265,6 +323,10 @@ async def pruebas_mcp():
         # Sin horas y antelacion_insuficiente.
         comprobar(f"tool, {PRIMER_ADMIN}: horas [] y antelacion_insuficiente (V10)",
                   sc.get("horas") == [] and sc.get("sin_horas_motivo") == "antelacion_insuficiente", f"({sc})")
+        # D62 (c): con antelación insuficiente, alternativas desde el primer
+        # día del chat (max(primer día, fecha pedida) = el primer día).
+        comprobar(f"tool, {PRIMER_ADMIN}: D62, alternativas no vacía y desde el primer día del chat ({PRIMER_CHAT})",
+                  alternativas_desde(sc, PRIMER_CHAT), f"({[d.get('fecha') for d in sc.get('alternativas') or []][:3]})")
         # El mismo día por REST (administración): nunca antelación.
         ref = rest({"fecha": PRIMER_ADMIN.isoformat()})
         # Con horas o completo.
@@ -286,6 +348,81 @@ async def pruebas_mcp():
         # Sin horas y con ese motivo.
         comprobar(f"tool, hoy: horas [] y {esperado}", sc.get("horas") == [] and sc.get("sin_horas_motivo") == esperado,
                   f"({sc})")
+        # D62: hoy (pasado o sin antelación), alternativas desde el primer día del chat.
+        comprobar(f"tool, hoy: D62, alternativas no vacía y desde el primer día del chat ({PRIMER_CHAT})",
+                  alternativas_desde(sc, PRIMER_CHAT), f"({[d.get('fecha') for d in sc.get('alternativas') or []][:3]})")
+
+        # ------------------------------------------------------------
+        print("\nCASO 8 - D62: alternativas cuando el día pedido no tiene horas")
+        # (a) El sábado del bloque y el lunes siguiente.
+        sabado, lunes_sig = LUNES + timedelta(days=5), LUNES + timedelta(days=7)
+        # Se cuentan EN MEMORIA las llamadas a consultar_dias (el servidor
+        # corre en este proceso y server.py la busca en el módulo al llamar).
+        llamadas_dias = []
+        # La función real.
+        real_dias = svc.consultar_dias
+
+        def contar_dias(*args, **kwargs):
+            """Apunta la llamada y llama a la función real."""
+            # Se apuntan sus argumentos.
+            llamadas_dias.append((args, kwargs))
+            # La real, con los mismos.
+            return real_dias(*args, **kwargs)
+
+        # try/finally: la real vuelve siempre.
+        try:
+            # La sustitución.
+            svc.consultar_dias = contar_dias
+            # La tool con el sábado.
+            r = await client.call_tool(TOOL, {"fecha": sabado.isoformat()})
+            # La salida estructurada.
+            sc = (r.structured_content or {}).get("result", {})
+            # Se enseña lo principal.
+            print(f"      tool, {sabado}: motivo {sc.get('sin_horas_motivo')}, "
+                  f"alternativas {[d.get('fecha') for d in sc.get('alternativas') or []][:3]} ...")
+            # modo dia, horas [] y fin_de_semana.
+            comprobar(f"(a) {sabado} (sábado): modo dia, horas [] y fin_de_semana",
+                      sc.get("modo") == "dia" and sc.get("horas") == [] and sc.get("sin_horas_motivo") == "fin_de_semana",
+                      f"({sin(sc, 'alternativas')})")
+            # Desde el lunes siguiente (max(primer día del chat, sábado) = el sábado).
+            comprobar(f"(a) {sabado}: alternativas no vacía y desde el lunes siguiente ({lunes_sig}) o después",
+                      alternativas_desde(sc, lunes_sig),
+                      f"({[d.get('fecha') for d in sc.get('alternativas') or []][:3]})")
+            # Cada alternativa con las claves exactas (sin etiqueta).
+            comprobar("(a) cada alternativa tiene las claves exactas del modo días de la tool (sin etiqueta)",
+                      bool(sc.get("alternativas")) and all(set(d) == CLAVES_DIA_AGENTE for d in sc["alternativas"]),
+                      f"({(sc.get('alternativas') or [None])[:1]})")
+            # La tool llamó una vez a consultar_dias con el canal del chat y desde = el sábado.
+            comprobar("(a) la tool llamó una vez a consultar_dias(CANAL_CHAT, desde=<el sábado>)",
+                      llamadas_dias == [((rv.CANAL_CHAT,), {"desde": sabado})], f"({llamadas_dias})")
+            # La referencia: la función real del servicio, justo después, sin
+            # la etiqueta y en JSON (como la tool). Si entre las dos lecturas
+            # alguien reserva una hora del bloque, difieren (improbable: el
+            # bloque es de semanas lejanas).
+            ref = [sin(d, "etiqueta") for d in real_dias(rv.CANAL_CHAT, desde=sabado).model_dump(mode="json")["dias"]]
+            # Iguales.
+            comprobar("(a) alternativas = consultar_dias(CANAL_CHAT, desde=<el sábado>) sin etiqueta",
+                      bool(ref) and sc.get("alternativas") == ref, f"({len(sc.get('alternativas') or [])} / {len(ref)})")
+
+            # (b) Un laborable del bloque con horas (el jueves, el del CASO 4).
+            jueves = LUNES + timedelta(days=3)
+            # Se vacía la cuenta.
+            llamadas_dias.clear()
+            # La tool con el jueves.
+            r = await client.call_tool(TOOL, {"fecha": jueves.isoformat()})
+            # La salida estructurada.
+            sc = (r.structured_content or {}).get("result", {})
+            # Requisito de la prueba: el jueves del bloque tiene horas.
+            comprobar(f"(b) {jueves} (jueves del bloque): tiene horas (requisito de la prueba)",
+                      bool(sc.get("horas")) and sc.get("sin_horas_motivo") is None, f"({sc.get('sin_horas_motivo')})")
+            # alternativas == [].
+            comprobar(f"(b) {jueves}: alternativas == []", sc.get("alternativas") == [], f"({sc.get('alternativas')})")
+            # consultar_dias NO se llama.
+            comprobar(f"(b) {jueves}: consultar_dias NO se llama", llamadas_dias == [], f"({llamadas_dias})")
+        # Siempre: la real.
+        finally:
+            # Restaurada.
+            svc.consultar_dias = real_dias
 
         # ------------------------------------------------------------
         print("\nCASO 5 - Fechas mal escritas por el LLM (N13)")
@@ -394,6 +531,11 @@ try:
     # Llama a las dos funciones del servicio.
     comprobar("la tool llama a huecos_libres_service.consultar_dias y consultar_dia",
               {"huecos_libres_service.consultar_dias", "huecos_libres_service.consultar_dia"} <= atributos, f"({sorted(atributos)})")
+    # D62: alguna llamada a consultar_dias pasa desde= (las alternativas).
+    comprobar("D62: la tool llama a consultar_dias con desde= (alternativas)",
+              any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "consultar_dias"
+                  and any(k.arg == "desde" for k in n.keywords)
+                  for n in ast.walk(funcion or ast.Module(body=[], type_ignores=[]))))
     # Sin bucles ni range: no calcula horas.
     comprobar("la tool no tiene while ni range (no calcula horas)",
               funcion is not None and not any(isinstance(n, ast.While) or (isinstance(n, ast.Call)

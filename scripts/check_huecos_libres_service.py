@@ -23,6 +23,15 @@ app/services/huecos_libres_service.py y app/schemas/huecos_libres.py.
       con UNA consulta, su tiempo y el EXPLAIN ANALYZE de esa consulta
       ([INFO]: se enseñan, no se exigen).
 
+  S7  D62 (2026-11-26, plan docs/Plan_Alternativas_Huecos_D62.txt): el
+      parámetro opcional desde de consultar_dias. desde=None, igual que sin
+      él (lo que usan GET /huecos-libres y el formulario); un desde anterior
+      al primer día permitido, igual que None; desde = el sábado del bloque
+      propio: el primer día devuelto es el lunes siguiente o posterior. Con
+      una conexión de prueba (ConexionSinCommit) en lugar del pool; solo lee.
+      La S3 comprueba además que HuecosDiaAgente rechaza un campo de más y
+      que sus alternativas valen [] por defecto.
+
 Las 4 preguntas: (1) escribe en tablas reales SOLO en la S6, dentro de una
 transacción que se deshace siempre; (2) pasa su conexión al código (S4) y su
 cursor (S6), por eso ConexionSinCommit; (3) si se corta, Postgres deshace
@@ -64,8 +73,8 @@ from app.services import huecos_libres_service as servicio
 # Las reglas de visita (disponibilidad, para la S6).
 import app.services.reglas_visita as rv
 # Los esquemas.
-from app.schemas.huecos_libres import (ConsultaHuecos, DiaConHuecos, DiaConHuecosFormulario, HuecosDiaResponse,
-                                       HuecosDiasResponse)
+from app.schemas.huecos_libres import (ConsultaHuecos, DiaConHuecos, DiaConHuecosFormulario, HuecosDiaAgente,
+                                       HuecosDiaResponse, HuecosDiasResponse)
 # La cadena de conexión del .env (nunca se imprime).
 from app.config import DATABASE_URL
 
@@ -213,6 +222,17 @@ comprobar("HuecosDiasResponse con ocupadas de más: rechazado",
 comprobar("HuecosDiaResponse con cliente de más: rechazado",
           malas(HuecosDiaResponse, modo="dia", generado_en=datetime.now(rv.ZONA_MADRID), fecha=date(2026, 10, 15),
                 dia_semana="jueves", manana=[], tarde=[], horas=[], sin_horas_motivo="dia_completo", cliente="x"))
+# D62: los campos de un día sin horas, para el modelo de la tool.
+DIA_SIN_HORAS = dict(modo="dia", generado_en=datetime.now(rv.ZONA_MADRID), fecha=date(2026, 10, 17),
+                     dia_semana="sábado", manana=[], tarde=[], horas=[], sin_horas_motivo="fin_de_semana")
+# D62: el modo un día de la tool, con una clave de más (extra="forbid" heredado).
+comprobar("D62: HuecosDiaAgente con cliente de más: rechazado", malas(HuecosDiaAgente, **DIA_SIN_HORAS, cliente="x"))
+# D62: sin alternativas, vale [] por defecto.
+comprobar("D62: HuecosDiaAgente sin alternativas: alternativas == []",
+          HuecosDiaAgente(**DIA_SIN_HORAS).alternativas == [])
+# D62: el modelo de REST sigue sin la clave alternativas.
+comprobar("D62: HuecosDiaResponse NO tiene el campo alternativas (REST no cambia)",
+          "alternativas" not in HuecosDiaResponse.model_fields, f"({sorted(HuecosDiaResponse.model_fields)})")
 
 # ======================================================================
 print("\nS4. Las órdenes de cada modo (UNA consulta de visitas, ningún commit)")
@@ -409,6 +429,80 @@ comprobar("no queda ningún dato de prueba (ROLLBACK)", cur.fetchone()[0] == 0)
 cn.rollback()
 # Y la conexión.
 cn.close()
+
+# ======================================================================
+print("\nS7. D62: consultar_dias con desde (solo lectura)")
+# ======================================================================
+# Una conexión de prueba propia (commit prohibido), en lugar del pool.
+conn_s7 = psycopg2.connect(DATABASE_URL, connection_factory=ConexionSinCommit)
+
+
+@contextmanager
+def conexion_s7():
+    """Sustituye a get_db_connection en la S7: entrega conn_s7 y, al salir,
+    la deshace (como la real), sin cerrarla."""
+    # El código bajo prueba la usa dentro de su "with".
+    try:
+        # Se entrega.
+        yield conn_s7
+    # Al salir, pase lo que pase, se deshace.
+    finally:
+        # Nunca se confirma.
+        conn_s7.rollback()
+
+
+def solo_dias(respuesta):
+    """Los días de una respuesta del modo días, en JSON (sin generado_en)."""
+    # model_dump(mode="json"): fechas como texto, comparables.
+    return respuesta.model_dump(mode="json")["dias"]
+
+
+# El sábado del bloque propio y el lunes siguiente.
+SABADO, LUNES_SIG = LUNES + timedelta(days=5), LUNES + timedelta(days=7)
+# Se guarda la real y se pone la de prueba EN EL MÓDULO del servicio.
+original = servicio.get_db_connection
+# La sustitución.
+servicio.get_db_connection = conexion_s7
+# try/finally: la real vuelve siempre.
+try:
+    # try: un commit() se cuenta como FALLO.
+    try:
+        # Sin desde (como hoy GET /huecos-libres y el modo días de la tool).
+        base = solo_dias(servicio.consultar_dias(rv.CANAL_CHAT))
+        # Con desde=None explícito.
+        con_none = solo_dias(servicio.consultar_dias(rv.CANAL_CHAT, desde=None))
+        # Con un desde anterior al primer día permitido (hace 10 días).
+        pasado = solo_dias(servicio.consultar_dias(rv.CANAL_CHAT, desde=HOY - timedelta(days=10)))
+        # Con desde = el sábado del bloque.
+        desde_sabado = solo_dias(servicio.consultar_dias(rv.CANAL_CHAT, desde=SABADO))
+    # Un commit() dentro.
+    except CommitProhibido:
+        # FALLO contado y listas vacías.
+        comprobar("S7: sin commit()", False, "(CommitProhibido)")
+        # Sin respuesta.
+        base, con_none, pasado, desde_sabado = [], [], [], []
+    # Lo principal, para el informe.
+    print(f"    sin desde: {[d['fecha'] for d in base][:3]} ... ; desde {SABADO}: "
+          f"{[d['fecha'] for d in desde_sabado][:3]} ...")
+    # Requisito: sin desde hay días (si no, las comparaciones no dicen nada).
+    comprobar("S7: sin desde, hay días con horas (requisito de la prueba)", bool(base), f"({len(base)})")
+    # desde=None: lo mismo que sin el parámetro.
+    comprobar("S7: desde=None da los mismos días que sin desde", con_none == base, f"({len(con_none)} / {len(base)})")
+    # desde anterior al primer día permitido: lo mismo que None.
+    comprobar("S7: desde anterior al primer día permitido da los mismos días que None", pasado == base,
+              f"({len(pasado)} / {len(base)})")
+    # Las fechas del sábado, como date.
+    fechas = [date.fromisoformat(d["fecha"]) for d in desde_sabado]
+    # desde = un sábado: el primero es el lunes siguiente o posterior, todos laborables y en orden.
+    comprobar(f"S7: desde={SABADO} (sábado): el primer día es {LUNES_SIG} (lunes siguiente) o posterior",
+              bool(fechas) and fechas[0] >= LUNES_SIG and all(f.weekday() < 5 for f in fechas) and fechas == sorted(fechas),
+              f"({[str(f) for f in fechas[:3]]})")
+# Siempre: la real vuelve y la de prueba se cierra.
+finally:
+    # Se restaura.
+    servicio.get_db_connection = original
+    # Se cierra.
+    conn_s7.close()
 
 # Resumen y código de salida (1 si hubo fallos).
 total = ok + len(fallos)

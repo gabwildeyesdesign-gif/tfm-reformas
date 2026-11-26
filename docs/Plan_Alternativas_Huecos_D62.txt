@@ -1,0 +1,125 @@
+PLAN D62 — ALTERNATIVAS EN consultar_huecos_libres (fase 1: SIN ejecutar)
+=========================================================================
+
+Fecha: 2026-11-26. Base: main = 08e3556. Rama: feat/n0-d62-huecos-alternativas.
+Fase 1 (Docker/n8n abiertos): solo código, scripts y documentación; ningún
+uvicorn, ninguna prueba y ninguna lectura de la base de datos. Las
+comprobaciones de esta fase son solo ast.parse de los archivos tocados.
+
+-------------------------------------------------------------------------
+1. HALLAZGO Y DECISIÓN
+-------------------------------------------------------------------------
+Hallazgo: ejecución 5027 de n8n. El cliente nombra una fecha sin horas (el
+sábado 2026-12-05); la tool responde en modo un día con horas [] y
+sin_horas_motivo "fin_de_semana", y el Agente 2, en vez de volver a llamar
+sin fecha, INVENTA horas. El docstring de la tool decía "propón otro día",
+que le empujaba a proponer uno sin consultarlo.
+
+Regla de Tres (en el Proyecto de claude.ai, decisión del tutor y de Gabi):
+  A. Otra regla en el prompt del Agente 2 ("si no hay horas, vuelve a
+     llamar sin fecha"). Descartada: depende de que el modelo la cumpla, y
+     es justo lo que no hizo.
+  B. Solo cambiar el docstring. Descartada por lo mismo: sigue sin haber
+     horas reales en la respuesta.
+  C. (ELEGIDA) La propia respuesta trae horas reales: si el día pedido no
+     tiene ninguna, "alternativas" lleva los próximos días con horas. El
+     modelo ya no tiene nada que inventar.
+
+Revisión del 2026-11-26, 16:40 (Gabi): las alternativas empiezan en
+max(primer día permitido del canal, fecha pedida), no en el primer día
+permitido. Un cliente que pide el sábado 5/12 recibe desde el lunes 7/12,
+no desde el 30/11; con una fecha pasada o sin antelación, desde el primer
+día permitido.
+
+-------------------------------------------------------------------------
+2. DISEÑO
+-------------------------------------------------------------------------
+- app/schemas/huecos_libres.py: modelo NUEVO HuecosDiaAgente(HuecosDiaResponse)
+  con alternativas: list[DiaConHuecos] = [] (extra="forbid" heredado).
+  HuecosDiaResponse NO cambia: lo usan GET /huecos-libres y el formulario.
+- app/services/huecos_libres_service.py: consultar_dias(canal, desde=None).
+  La búsqueda empieza en primero si desde es None, y en max(primero, desde)
+  si no. La antelación la sigue aplicando disponibilidad() con
+  primer_dia=primero. Con None, el código hace exactamente lo de antes (la
+  única línea nueva elige "primero").
+- app/mcp_server/server.py, tool consultar_huecos_libres:
+  - retorno HuecosDiasAgente | HuecosDiaAgente;
+  - sin fecha: igual que antes (modo días, sin etiqueta);
+  - con fecha: consultar_dia(fecha, CANAL_CHAT); con horas,
+    HuecosDiaAgente con alternativas=[] y SIN segunda lectura; sin horas
+    (cualquier motivo), además consultar_dias(CANAL_CHAT, desde=fecha) y
+    alternativas = esos días sin etiqueta;
+  - la conversión "sin etiqueta" va en una función privada,
+    _dias_sin_etiqueta, que usan los dos modos;
+  - ConfiguracionIncompleta sigue en el mismo except (cubre las dos lecturas);
+  - docstring: el punto "Con fecha" dice que "alternativas" trae los
+    próximos días con horas libres y que ofrezca solo esas; se quita
+    "propón otro día". Se mantiene "nunca propongas una hora que no esté en
+    la respuesta".
+- GET /huecos-libres (app/api/huecos_libres.py): sin cambios.
+
+-------------------------------------------------------------------------
+3. CASOS (scripts/, estilo comprobar / rama else con FALLO; sin pytest)
+-------------------------------------------------------------------------
+check_mcp_huecos_libres.py (servidor real en el 8033, solo lectura):
+  CASO 2b  (e) el esquema de salida publicado incluye "alternativas".
+  CASO 3   (d) sin fecha: igual que antes y SIN la clave alternativas.
+  CASO 4   tool = REST salvo generado_en y alternativas; la tool trae la
+           clave; GET /huecos-libres NO la trae (punto 5).
+  CASO 4c  (c) antelacion_insuficiente (primer día de administración) y hoy:
+           alternativas no vacía, laborables, en orden y desde el primer
+           día del chat.
+  CASO 8   (a) el sábado del bloque propio: modo dia, horas [],
+           fin_de_semana; alternativas desde el lunes siguiente, con las
+           claves exactas, iguales a consultar_dias(CANAL_CHAT,
+           desde=sábado) sin etiqueta; la tool llamó UNA vez a consultar_dias
+           con (CANAL_CHAT, desde=sábado).
+           (b) el jueves del bloque (requisito: tiene horas): alternativas
+           == [] y consultar_dias NO se llama (contada EN MEMORIA: el
+           servidor corre en el mismo proceso, como el CASO 6).
+  CASO 7   (ast) la tool pasa desde= a consultar_dias.
+check_huecos_libres_service.py:
+  S3  HuecosDiaAgente rechaza un campo de más; alternativas [] por defecto;
+      HuecosDiaResponse no tiene el campo.
+  S7  desde=None = sin desde; desde anterior al primer día permitido = None;
+      desde = el sábado del bloque propio -> el primer día es el lunes
+      siguiente o posterior. Conexión de prueba ConexionSinCommit.
+Ajustes obligados en dos scripts que el cambio rompería:
+  - check_disponibilidad_service.py: exigía exactamente DOS llamadas a
+    consultar_dias/consultar_dia en server.py; ahora son tres (todas con
+    CANAL_CHAT). Se exige 2 en app/api/huecos_libres.py y 3 en server.py.
+  - check_direccion_obra_service.py: HuecosDiaAgente entra en PROHIBIDAS
+    (ninguna tool puede llevar la dirección de la obra, D42.5).
+
+Pruebas en negativo previstas para la fase 2 (sobre copias, de una en una):
+  M1  alternativas siempre [] -> fallan CASO 4c y CASO 8 (a).
+  M2  desde ignorado (alternativas desde el primer día del chat) -> falla
+      CASO 8 (a) "desde el lunes siguiente" y S7 del sábado.
+  M3  consultar_dias llamado también con horas -> falla CASO 8 (b).
+  M4  alternativas añadida a HuecosDiaResponse (REST) -> fallan CASO 4
+      "REST NO la trae" y S3.
+  M5  desde aplicado como min(primero, desde). Predicción: probablemente
+      EQUIVALENTE con una fecha pasada, porque disponibilidad() deja sin
+      horas los días anteriores a primer_dia y no salen; solo cambiaría el
+      tope de búsqueda (MAX_DIAS_BUSQUEDA laborables desde antes). Se
+      ejecuta para saberlo y se anota el resultado real.
+
+-------------------------------------------------------------------------
+4. RIESGOS Y LIMITACIONES
+-------------------------------------------------------------------------
+R1. Dos lecturas: las alternativas salen de una segunda transacción, con
+    un reloj unos milisegundos posterior a generado_en (que no se devuelve
+    para ellas). Aceptado (Gabi, 2026-11-26).
+R2. Entre la consulta y POST /visits otro puede coger la hora: sigue siendo
+    el 409 hueco_ocupado la red de seguridad (como 5.11 e, R1).
+R3. El mensaje del 409 hueco_ocupado (reglas_visita.py, "ese día no queda
+    ninguna hora libre: propón otro día.") sigue diciendo "propón otro día".
+    No se toca en D62 (no es esta tool); anotado.
+R4. prompts/agente2_asesor.md:39 sigue diciendo "If a day has none, propose
+    another". No se toca (decisión de Gabi): tiene que coincidir con el
+    nodo de n8n de producción y se sustituye entero por el prompt v4.
+R5. Las comparaciones de S7 (sin desde frente a desde=None) son dos
+    lecturas: si alguien reserva una hora entre ellas, difieren (improbable).
+R6. Fase 2 corta: además de los tres scripts de huecos, conviene ejecutar
+    check_disponibilidad_service y check_direccion_obra_service, que se han
+    tocado.

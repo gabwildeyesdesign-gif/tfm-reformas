@@ -91,7 +91,8 @@ from app.schemas.estimates import EstimateResponse
 # La ficha: la ÚNICA que puede llevarla (control positivo).
 from app.schemas.ficha_oportunidad import FichaOportunidadResponse
 from app.schemas.followup_tasks import FollowupTaskResponse
-from app.schemas.huecos_libres import HuecosDiaResponse, HuecosDiasAgente, HuecosDiasResponse
+# D62 (2026-11-26): HuecosDiaAgente, el modo un día de la tool, con alternativas.
+from app.schemas.huecos_libres import HuecosDiaAgente, HuecosDiaResponse, HuecosDiasAgente, HuecosDiasResponse
 # Alta y sesión (LeadCreate lo usa también S4).
 from app.schemas.leads import LeadCreate, LeadCreateResponse, LeadSessionResponse
 from app.schemas.listado_llamadas import ListadoLlamadasResponse
@@ -324,7 +325,9 @@ PROHIBIDAS = (AvisoGateResponse, BusinessRulesResponse, EstimateResponse, Follow
               HuecosDiasAgente, HuecosDiasResponse, LeadCreateResponse, LeadSessionResponse, ListadoLlamadasResponse,
               ResultadoLlamadaResponse, VisitaResponse,
               # D46 (2026-10-25): la respuesta de POST /cambios-visita.
-              CambioVisitaResponse)
+              CambioVisitaResponse,
+              # D62 (2026-11-26): el modo un día de la tool consultar_huecos_libres.
+              HuecosDiaAgente)
 for modelo in PROHIBIDAS:
     # La intersección con las cuatro claves tiene que estar vacía.
     cruce = campos_recursivos(modelo) & CLAVES_DIRECCION

@@ -9,6 +9,8 @@ docs/Plan_Horario_Visitas_D32.txt, secciones 3 y 11): GET /huecos-libres
     HOY, P4), que tengan al menos una hora libre, cada uno con sus horas
     por franja. Si hay días completos, se busca más allá, hasta
     MAX_DIAS_BUSQUEDA (60) laborables (P6 = A). Los días completos no salen.
+    D62: con desde (opcional), la búsqueda empieza en max(primer día
+    permitido, desde); lo usa la tool para las alternativas.
   - consultar_dia(fecha, canal): las horas libres de esa fecha, por franja,
     con el motivo si no tiene ninguna (P7: fecha_pasada, fin_de_semana o
     dia_completo; D45: antelacion_insuficiente; siempre 200).
@@ -112,12 +114,18 @@ def etiqueta_dia(dia: date, por_franja: dict[str, list[str]]) -> str:
     return texto
 
 
-def consultar_dias(canal: str) -> HuecosDiasResponse:
+def consultar_dias(canal: str, desde: date | None = None) -> HuecosDiasResponse:
     """
     Modo días: los próximos dias_oferta_visita días laborables, desde el
     primer día permitido del canal (D45), con al menos una hora libre. UNA
     consulta de visitas para toda la ventana de búsqueda (la hace
     disponibilidad()).
+
+    D62 (2026-11-26): desde, opcional, retrasa el comienzo de la búsqueda a
+    max(primer día permitido, desde): las alternativas de la tool empiezan
+    en el día que pidió el cliente, nunca antes del primero permitido. Con
+    None (GET /huecos-libres y el modo días de la tool) se comporta
+    EXACTAMENTE igual que antes.
     """
     # Conexión de solo lectura: al salir del "with" hace rollback y vuelve al pool.
     with get_db_connection() as conn:
@@ -128,10 +136,15 @@ def consultar_dias(canal: str) -> HuecosDiasResponse:
             # D45: el primer día permitido del canal (hoy, en Madrid, más
             # los laborables de su regla).
             primero = primer_dia_del_canal(ahora, reglas, canal)
+            # D62: dónde empieza la búsqueda. Sin desde, o con un desde
+            # anterior al primer día permitido, en el primero (como antes);
+            # con uno posterior, en él. La antelación la sigue mirando
+            # disponibilidad() con primer_dia=primero.
+            inicio = primero if desde is None else max(primero, desde)
             # Los candidatos: los MAX_DIAS_BUSQUEDA primeros laborables desde
             # ese día (incluido; antes de D45, desde hoy). Como mucho 7/5 de
             # días naturales por laborable.
-            laborables = [d for d in (primero + timedelta(days=i) for i in range(MAX_DIAS_BUSQUEDA * 7 // 5 + 7))
+            laborables = [d for d in (inicio + timedelta(days=i) for i in range(MAX_DIAS_BUSQUEDA * 7 // 5 + 7))
                           if d.weekday() < 5][:MAX_DIAS_BUSQUEDA]
             # Las horas libres de todos, con la función ÚNICA (una consulta);
             # con el primer día también ahí, por si la regla es 0 (hoy).

@@ -56,8 +56,10 @@ from app.config import MCP_SECRET
 # El esquema de la respuesta de get_business_rules (esquema de salida).
 from app.schemas.business_rules import BusinessRulesResponse
 # D32: la query de GET /huecos-libres (para validar la fecha igual) y los
-# modelos de las dos respuestas de consultar_huecos_libres.
-from app.schemas.huecos_libres import ConsultaHuecos, DiaConHuecos, HuecosDiaResponse, HuecosDiasAgente
+# modelos de las dos respuestas de consultar_huecos_libres. D62: el modo un
+# día de la tool es HuecosDiaAgente (con alternativas), y HuecosDiasResponse
+# solo se nombra en la función que quita la etiqueta.
+from app.schemas.huecos_libres import ConsultaHuecos, DiaConHuecos, HuecosDiaAgente, HuecosDiasAgente, HuecosDiasResponse
 
 # El esquema de la respuesta del cálculo: fastmcp lo usa como esquema de
 # salida de la tool.
@@ -326,18 +328,29 @@ MENSAJE_FECHA_NO_VALIDA = (
 )
 
 
+# D62: los días del modo días SIN la etiqueta del desplegable de n8n (P9 de
+# D32). La usan el modo días de la tool y las alternativas del modo un día,
+# para no escribir la misma conversión dos veces.
+def _dias_sin_etiqueta(respuesta: HuecosDiasResponse) -> list[DiaConHuecos]:
+    """Los días de una respuesta del modo días, sin la clave etiqueta."""
+    # Cada día, copiado campo a campo salvo la etiqueta.
+    return [DiaConHuecos(**d.model_dump(exclude={"etiqueta"})) for d in respuesta.dias]
+
+
 # D32 (plan docs/Plan_Horario_Visitas_D32.txt, 3.5): la misma consulta que
 # GET /huecos-libres, con las mismas funciones del servicio. La fecha la
 # escribe el LLM: es un DATO, no un identificador (Adenda 1.1a), y se valida
 # con el mismo modelo que la query REST (formato exacto y día real). Sin
 # etiqueta en el modo días (es texto para el desplegable de n8n, P9). Dos
-# modelos posibles: fastmcp envuelve la salida en {"result": ...}.
+# modelos posibles: fastmcp envuelve la salida en {"result": ...}. D62
+# (2026-11-26, plan docs/Plan_Alternativas_Huecos_D62.txt): el modo un día
+# lleva además "alternativas" cuando el día pedido no tiene horas.
 @mcp.tool
 def consultar_huecos_libres(
     # None: modo días; una fecha: modo un día.
     fecha: Annotated[str | None, Field(
         description="Opcional. Un día concreto, AAAA-MM-DD. Sin ella, los próximos días con huecos.")] = None,
-) -> HuecosDiasAgente | HuecosDiaResponse:
+) -> HuecosDiasAgente | HuecosDiaAgente:
     """
     Dice qué horas de visita técnica están LIBRES. Úsala SIEMPRE antes de
     ofrecer horas al cliente: ofrece solo las que devuelve, tal cual.
@@ -346,9 +359,10 @@ def consultar_huecos_libres(
       posible) con al menos una hora libre, cada uno con sus horas de
       mañana y de tarde.
     - Con fecha (AAAA-MM-DD): las horas libres de ese día, por franja, y
-      "horas" con todas juntas. Si no queda ninguna, sin_horas_motivo dice
-      por qué (fecha_pasada, antelacion_insuficiente, fin_de_semana o
-      dia_completo): propón otro día.
+      "horas" con todas juntas. Si ese día no tiene ninguna,
+      sin_horas_motivo dice por qué (fecha_pasada, antelacion_insuficiente,
+      fin_de_semana o dia_completo) y "alternativas" trae los próximos días
+      con horas libres: ofrece solo esas.
 
     Las visitas empiezan a horas fijas; nunca propongas una hora que no
     esté en la respuesta. No contiene datos de otros clientes.
@@ -368,11 +382,21 @@ def consultar_huecos_libres(
             # La respuesta del servicio (con etiqueta).
             dias = huecos_libres_service.consultar_dias(CANAL_CHAT)
             # La misma, sin la etiqueta en cada día.
-            return HuecosDiasAgente(modo=dias.modo, generado_en=dias.generado_en,
-                                    dias=[DiaConHuecos(**d.model_dump(exclude={"etiqueta"})) for d in dias.dias])
-        # Con fecha: modo un día, tal cual.
-        return huecos_libres_service.consultar_dia(consulta.fecha, CANAL_CHAT)
-    # Falta o no es válida una regla: [AVISO] en stderr y error genérico.
+            return HuecosDiasAgente(modo=dias.modo, generado_en=dias.generado_en, dias=_dias_sin_etiqueta(dias))
+        # Con fecha: el modo un día del servicio (el mismo que REST).
+        dia = huecos_libres_service.consultar_dia(consulta.fecha, CANAL_CHAT)
+        # D62: con horas, no hacen falta alternativas (ni se consultan).
+        if dia.horas:
+            # El mismo día, con la lista de alternativas vacía.
+            return HuecosDiaAgente(**dia.model_dump(), alternativas=[])
+        # Sin horas (cualquier motivo): los próximos días con horas desde
+        # max(primer día del chat, fecha pedida). Segunda lectura: su reloj
+        # puede ser unos milisegundos posterior al de "dia" (aceptado, plan).
+        siguientes = huecos_libres_service.consultar_dias(CANAL_CHAT, desde=consulta.fecha)
+        # El día pedido y sus alternativas, sin la etiqueta.
+        return HuecosDiaAgente(**dia.model_dump(), alternativas=_dias_sin_etiqueta(siguientes))
+    # Falta o no es válida una regla (en cualquiera de las dos lecturas):
+    # [AVISO] en stderr y error genérico.
     except ConfiguracionIncompleta as error:
         # Nombra las claves, nunca un secreto.
         print(f"[AVISO] tool consultar_huecos_libres: configuración incompleta: {error.faltan}",

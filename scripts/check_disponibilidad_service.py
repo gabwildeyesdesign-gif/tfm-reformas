@@ -884,14 +884,16 @@ def canales_de(archivo):
     return llamadas
 
 
-# Cada adaptador, con SU canal en las dos llamadas (N1, N4).
-for archivo, suyo, ajeno in (("app/api/huecos_libres.py", "CANAL_ADMINISTRACION", "CANAL_CHAT"),
-                             ("app/mcp_server/server.py", "CANAL_CHAT", "CANAL_ADMINISTRACION")):
+# Cada adaptador, con SU canal en todas sus llamadas (N1, N4). D62
+# (2026-11-26): la tool tiene una tercera, consultar_dias(CANAL_CHAT,
+# desde=...) para las alternativas; GET /huecos-libres sigue con dos.
+for archivo, suyo, ajeno, cuantas in (("app/api/huecos_libres.py", "CANAL_ADMINISTRACION", "CANAL_CHAT", 2),
+                                      ("app/mcp_server/server.py", "CANAL_CHAT", "CANAL_ADMINISTRACION", 3)):
     # Las llamadas.
     llamadas = canales_de(archivo)
-    # Dos, cada una con su canal y sin el otro.
-    comprobar(f"{archivo}: las dos llamadas pasan {suyo}",
-              len(llamadas) == 2 and all(suyo in c and ajeno not in c for c in llamadas), f"({llamadas})")
+    # Las que tocan, cada una con su canal y sin el otro.
+    comprobar(f"{archivo}: las {cuantas} llamadas pasan {suyo}",
+              len(llamadas) == cuantas and all(suyo in c and ajeno not in c for c in llamadas), f"({llamadas})")
 
 # /visits (P4, N14): la antelación, DESPUÉS de la repetición y ANTES del hueco.
 arbol_v = ast.parse((RAIZ_REPO / "app/services/visits_service.py").read_text(encoding="utf-8"))

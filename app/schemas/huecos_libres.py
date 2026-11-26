@@ -135,3 +135,19 @@ class HuecosDiaResponse(BaseModel):
     horas: list[str]
     # None si hay horas; si no, por qué (P7).
     sin_horas_motivo: MotivoSinHoras | None
+
+
+class HuecosDiaAgente(HuecosDiaResponse):
+    """
+    Modo un día de la tool consultar_huecos_libres (D62, 2026-11-26, plan
+    docs/Plan_Alternativas_Huecos_D62.txt): el de GET /huecos-libres más los
+    días alternativos. Solo lo usa la tool: HuecosDiaResponse (REST y el
+    formulario de administración) no cambia.
+    """
+
+    # extra="forbid" se hereda de HuecosDiaResponse: no hace falta repetirlo.
+    # Si el día pedido no tiene horas, los próximos días con horas libres
+    # desde ese día (sin etiqueta, como el modo días de la tool); si las
+    # tiene, lista vacía. Así el agente siempre tiene horas reales que
+    # ofrecer y no se las inventa (ejecución 5027 de n8n).
+    alternativas: list[DiaConHuecos] = []
