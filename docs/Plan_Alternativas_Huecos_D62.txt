@@ -123,3 +123,60 @@ R5. Las comparaciones de S7 (sin desde frente a desde=None) son dos
 R6. Fase 2 corta: además de los tres scripts de huecos, conviene ejecutar
     check_disponibilidad_service y check_direccion_obra_service, que se han
     tocado.
+
+-------------------------------------------------------------------------
+5. FASE 2 (2026-11-27, punta f5e9666; integrada en main por fast-forward)
+-------------------------------------------------------------------------
+Condiciones: portátil enchufado y tapa abierta (confirmado por Gabi);
+Docker/n8n, Chrome y VS Code cerrados; Edge abierto por EXCEPCIÓN de Gabi
+(una pestaña de Gmail). Memoria libre medida: 2,21 GB al empezar, 1,92 GB
+al lanzar la suite y 2,08 GB antes de la última repetición (tras cerrar
+Docker y Chrome, que se habían vuelto a abrir, y wsl --shutdown).
+
+Suite: 65 scripts check_*.py (no 64: D56 añadió check_migracion_pintura).
+UNA pasada válida de 18:51:10 a 19:13:36, sin Kernel-Power 41, 506 ni
+507: 62/65 con código 0. check_graceful_shutdown y check_mcp_connection
+desde copias en el 8030 y el 8031; uvicorn del 8031 detenido por su PID
+13440 (log = netstat). Los cinco de P4 revisados a mano: sin fallos
+(check_foreign_keys 23; check_rls_estado 12 tablas con RLS, 0 políticas).
+Las 3 que no dieron 0, resueltas, repitiendo SOLO cada script:
+  - check_resumen_solicitud_http 53/62: fallo del SCRIPT, no del backend.
+    MARCA (10 hexadecimales, una por ejecución) sacó 9 o más cifras
+    seguidas y el filtro de teléfonos descartó los 9 resúmenes que la
+    llevaban (~2 % de las ejecuciones). Arreglo f5e9666: solo letras
+    (0-9 -> g-p; 100.000 marcas, 0 con cifras). Después 62/62 dos veces.
+  - check_visits_http: ReadTimeout (20 s) en el CASO 19 (concurrencia),
+    tras limpiar sus datos y sin tocar nada ajeno. Repetido una vez:
+    103/103. Se declara intermitente de la infraestructura (red).
+  - check_resultados_llamada_http: BLOQUEADO POR DATOS (el lunes
+    2026-11-30 tenía sus 6 horas con visitas 'solicitada' ajenas). Tras
+    liberarlo Gabi desde la pantalla: 215/215 (19:54:57-19:57:08), sin
+    Kernel-Power en el intervalo.
+
+Seguridad:
+  - SEG-01 (scripts/seg01_seg04_fase2.sh, uvicorn propio en el 8037, PID
+    28092 = netstat, detenido después): 401 x5 (/leads y /mcp/ sin
+    credencial y con una credencial inventada, y la ficha con un
+    X-Gate-Secret falso).
+  - SEG-04 (solo lectura, pg_tables): 12/12 tablas de public con RLS.
+  - SEG-03 (revisión estática con ast de las 78 llamadas a execute de
+    app/): todas parametrizadas; las 8 que se montan por partes solo pegan
+    textos fijos del programa (COLUMNAS_CASO, CRITERIOS_SEGUIMIENTO,
+    WHERE_*), y los datos van siempre como %s / %(nombre)s.
+
+Pruebas en negativo (sección 3), sobre una copia de trabajo (git worktree)
+de f5e9666, de una en una, con el servidor del script en el 8033; verde
+en la copia 39/39 (servicio) y 38/38 (MCP). Las cinco en ROJO:
+  M1  alternativas siempre []           servicio 39/39 | MCP 33/38 (4c y 8 a)
+  M2  desde ignorado (inicio = primero) servicio 38/39 (S7) | MCP 37/38 (8 a)
+  M3  consultar_dias también con horas  servicio 39/39 | MCP 36/38 (8 b)
+  M4  alternativas en HuecosDiaResponse servicio 38/39 (S3) | MCP: la tool
+      revienta en el CASO 4 con TypeError ("multiple values for keyword
+      argument 'alternativas'"), sin línea de RESULTADO.
+  M5  min(primero, desde)               servicio 38/39 (S7) | MCP 37/38 (8 a)
+Corrección a la predicción de M5: NO es equivalente. El plan solo pensó en
+una fecha pasada; con una fecha FUTURA (el sábado del bloque), min devuelve
+el primer día permitido y se comporta como M2.
+Deuda menor: M4 se detecta en el script MCP por una excepción, no por un
+FALLO contado; el CASO 4 podría comprobar la clave antes de construir la
+respuesta.

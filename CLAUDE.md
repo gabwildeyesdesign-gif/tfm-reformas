@@ -891,6 +891,18 @@ SOLO REST.
 > (despublicado, no borrado). docs/Contrato_Formulario_Llamadas.md, 4c: con el
 > 200 (repetición) WF7 NO manda email (O-D46-1). Misma regla de siempre: no
 > hacer merge sin la confirmación explícita de Gabi, y siempre con `--ff-only`.
+>
+> **(Nota 2026-11-27.)** D56 (categoría pintura) y **D62** (la tool
+> consultar_huecos_libres devuelve "alternativas" cuando el día pedido no tiene
+> horas) están en `main` (f5e9666, fast-forward desde 08e3556; ramas
+> feat/n0-d56-cierre-checks, feat/n0-d56-n8n-y-docs y
+> feat/n0-d62-huecos-alternativas). Fase 2 de D62 HECHA, con resultados en la
+> sección 5 de docs/Plan_Alternativas_Huecos_D62.txt: suite de 65, M1-M5 en
+> rojo (M5 NO equivalente), SEG-01 401 x5, SEG-04 12/12 con RLS y SEG-03 por
+> revisión estática. app/ es idéntico al de fa061f3 (la punta de D62 antes del
+> rebase), así que el uvicorn del 8000 no necesita reinicio por D62. Deuda
+> menor: en check_mcp_huecos_libres, M4 se detecta por un TypeError, no por un
+> FALLO contado.
 
 Hecho y verificado con ejecución real: scaffolding, servidor MCP
 montado, pool de Postgres, /health y /health/db, apagado ordenado,
@@ -1342,6 +1354,20 @@ enchufado y sin procesos ajenos; uvicorn del 8031 detenido por su PID 3348
 23). Datos reales de las 11 tablas anteriores iguales antes y después;
 cambios_visita, 0 filas. El 2026-10-26, check_resultados_llamada_http
 215/215 (P-D45-1 cerrado). Detalle: sección 11.6 del plan D46.)
+(Nota 2026-11-27, fase 2 de D62: la suite tiene 65 scripts, no 64, porque D56
+añadió check_migracion_pintura. UNA pasada válida de 18:51:10 a 19:13:36, sin
+Kernel-Power 41, 506 ni 507, con Edge abierto por EXCEPCIÓN de Gabi (una
+pestaña de Gmail; lo demás cerrado): 62/65 con código 0. Las 3 restantes,
+resueltas repitiendo SOLO cada script: check_resumen_solicitud_http era un
+fallo del script (su MARCA hexadecimal sacó 9 cifras seguidas y el filtro de
+teléfonos la tomó por un teléfono, ~2 % de las pasadas; arreglado en f5e9666,
+solo letras; después 62/62 dos veces); check_visits_http, ReadTimeout en la
+concurrencia, intermitente de la red (103/103 al repetirlo); y
+check_resultados_llamada_http, bloqueado por datos (el lunes 30/11 estaba
+lleno; 215/215 cuando Gabi lo liberó). Los cinco de P4 revisados a mano: sin
+fallos. Lección: Docker y Chrome se volvieron a abrir durante la sesión, y
+vmmemWSL sigue viva tras salir de Docker Desktop (hace falta wsl --shutdown):
+medir justo antes de cada ejecución, no solo al empezar.)
 
 POST /create-followup-task (rama feat/n0-create-followup-task, 2026-10-07 a
 2026-10-08, pendiente de merge; plan 9853491 y e975a24, B1 0354a01, B2
