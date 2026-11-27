@@ -5,7 +5,10 @@ Copia de los flujos **publicados** en la instalación local de n8n 2.16.1 (Docke
 Agente 2, WF6, WF5 y formulario de llamadas actualizados el 2026-10-19; chat, WF2 y ficha actualizados el
 2026-10-20 con el resumen de la solicitud, D28.1; chat, formulario de llamadas y WF3 actualizados y WF7 nuevo el
 2026-10-22 con los emails al cliente del bloque 4, D39.4, D40.1-D40.4 y D41.1; pantalla de llamadas nueva y
-WF3, WF2, WF5, ficha y chat actualizados el 2026-10-27 con D43-D46, y formulario de llamadas retirado). El repositorio
+WF3, WF2, WF5, ficha y chat actualizados el 2026-10-27 con D43-D46, y formulario de llamadas retirado). Actualización
+del **27/11/2026**: los 11 flujos publicados se exportaron con la CLI (`n8n export:workflow` dentro del contenedor) a
+`entrega_28-11/flujos/` (en `.gitignore`, nunca se sube) y se sanearon con `scripts/sanear_flujos.py`, que aplica la
+tabla de abajo y para sin escribir nada si queda algún dato sensible; WF8 es nuevo. El repositorio
 es **público**, así que cada archivo pasa por un saneado antes de subirse (decisión D27.5, Regla de Tres en
 `claude/Decisiones_D27_WF4_Avisos_Tecnicos_y_Pagina_Ficha.md` del Proyecto).
 
@@ -19,12 +22,14 @@ es **público**, así que cada archivo pasa por un saneado antes de subirse (dec
 | Email de administración y técnico (también dentro del código de los nodos Code, p. ej. la constante `EMAIL_EMPRESA` de WF7) | `admin@example.com` | Dato personal |
 | ID del calendario de Google (WF5) | `PEGA_AQUI_ID_DEL_CALENDARIO` | Identifica el calendario interno de visitas (D33). Si no se sustituye, WF5 para con el error "Falta el ID del calendario" sin tocar Google |
 | `webhookId` de cada nodo | (se borra la clave) | n8n crea otro al importar |
+| `id` de cada credencial (`"credentials"`) | (se borra; quedan el tipo y el `name`) | Anexo C de la memoria: "sin ids de credenciales". Identifica la credencial en la instalación; al importar se elige otra vez. Desde el 27/11/2026, también en `historico/` |
+| `dataTableId` de las Data Tables (chat y WF8) | `ELIGE_LA_DATA_TABLE`, y se borra su `cachedResultUrl`; queda el nombre de la tabla (`cachedResultName`, p. ej. `pendientes_por_confirmar`) | El id de la tabla y la URL, que lleva el id del proyecto (`/projects/…`), identifican la instalación; al importar se elige la tabla otra vez |
 | `meta.instanceId`, `versionId` | (se borran) | Identifican la instalación |
 | `active` | `false` | Se importa desactivado |
 | `pinData` (datos fijados 📌) | `{}` | Solo servían para probar en el editor |
 
-Las **credenciales no van en el JSON** (n8n solo guarda su nombre e id interno): al importar hay que
-asignarlas otra vez. Ningún secreto (`X-Gate-Secret`, token del bot, contraseña del formulario, OAuth de
+Las **credenciales no van en el JSON**: n8n solo guarda su tipo, su nombre y un id interno, y el id se borra al
+sanear. Al importar hay que asignarlas otra vez. Ningún secreto (`X-Gate-Secret`, token del bot, contraseña del formulario, OAuth de
 Gmail o de Google Calendar) está en estos archivos.
 
 ## Flujos
@@ -43,6 +48,7 @@ Flujos retirados; se conservan como histórico del diseño: `WF_formulario_gate.
 | `WF2_aviso_gate.json` | Aviso del Gate a administración (email + Telegram) con enlace a la pantalla de llamadas (desde el 23/10, D43; antes, al formulario); fallos de envío a WF4. Sin la marca `ultima`: un Gate recién aparecido nunca es una última llamada (D44). Desde el 20/10, sección "Resumen del asistente" en el EMAIL, nunca en Telegram (D37.10: minimización), etiquetada "según el asistente; confírmalo en la llamada" | Publicado (exportado el 27/10) |
 | `WF4_aviso_tecnico.json` | Subflujo único de avisos técnicos (Telegram + email, sin datos del cliente) | Publicado |
 | `WF4_errores_no_atrapados.json` | *Error Trigger* → WF4_aviso_tecnico | Flujo de errores (no necesita publicarse) |
+| `WF8_limpieza_pendientes_por_confirmar.json` | Cada hora borra de la Data Table `pendientes_por_confirmar` las filas caducadas (resúmenes que el cliente no llegó a confirmar). 2 nodos: disparador horario y borrado | Publicado (exportado el 27/11) |
 | `WF_ficha_oportunidad.json` | Página HTML de la ficha completa (`GET /webhook/ficha?oportunidad_id=`). Desde el 20/10, sección "Resumen del asistente" después de "Solicitud" ("Sin resumen del asistente." si es null: lead antiguo o resumen descartado por el filtro); prueba 114. Desde el 23/10, sección "Dirección de la obra" (D42; la ficha es el único sitio donde se ve). Desde el 26/10 (D46), sección "Cambios de la visita" (`cambios_visita`), botón "Cambiar o cancelar esta visita" a la pantalla de llamadas (solo si `visita_modificable` no es null) y los textos de los resultados y eventos que faltaban (`visita_confirmada_cancelada`, `llamada_registrada`...). La dirección pública sale de las cabeceras de la petición, como en la pantalla (D44.9): ya no hay dominio escrito en su código | Publicado (exportado el 27/10) |
 | `WF_formulario_gate.json` | Formulario antiguo del Gate (Fase 1), sustituido por `WF_formulario_llamadas` | **Retirado** el 15/10 (despublicado, no borrado). Se conserva como registro histórico. Es el ÚNICO flujo de esta carpeta que llama a una ruta que ya no existe: `POST /gate-decisions` (Cambio 2026-10-22: alias POST /gate-decisions quitado (bloque 5); versión anterior en aba39c4. Responde 404) |
 
@@ -75,8 +81,10 @@ apuntan al flujo correcto de la instalación nueva). Los formularios retirados (
   chat (`lanzar_email_presupuesto`), la pantalla (`lanzar_email_visita` y `lanzar_email_cambio`) y WF3 (`lanzar_recordatorios`), elegir WF7.
 - **Chat:** credenciales de OpenAI (los dos modelos), "Bearer Auth" del servidor MCP (`MCP Client` y `reglas_y_huecos`) y
   `X-Webhook-Secret` (`guardar_datos_reforma`, `Consultar_estado_sesion`); en la tool `solicitar_visita`, elegir WF6.
-  El system message del nodo `AI Agent` es `prompts/agente1_captura.md` (idéntico, más el salto de línea final), y el de
-  `Agente2_asesor`, `prompts/agente2_asesor.md` (más el `=` inicial y sin el salto final); si se cambia en un sitio, se cambia en el otro.
+  El system message del nodo `AI Agent` es `prompts/agente1_captura.md`, y el de `Agente2_asesor`,
+  `prompts/agente2_asesor.md`. El prompt del Agente 2 usa expresiones de n8n (fecha y sesión), por eso lleva «=» en el
+  nodo; el del Agente 1 también lleva «=», sin expresiones. En prompts/ se guardan sin él. Si se cambia en un sitio, se
+  cambia en el otro.
 - **Ficha:** "Header Auth" (`X-Gate-Secret`) en su nodo HTTP; no hay dominio que sustituir (sale de las cabeceras).
 - En `WF2_aviso_gate`, `WF_ficha_oportunidad`, `WF_pantalla_llamadas`, `WF3`, `WF5`, `WF6`, `WF7` y `chat_tipo_reforma`, elegir `WF4_errores_no_atrapados` en
   Settings → Error workflow → Save → Publish.

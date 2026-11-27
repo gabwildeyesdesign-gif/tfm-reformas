@@ -30,7 +30,7 @@
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1.1,
       "position": [
-        -896,
+        -1056,
         112
       ],
       "id": "a404fc4a-c2a9-4bce-ab4f-c48d07661456",
@@ -64,7 +64,6 @@
       "name": "pedir_visita",
       "credentials": {
         "httpHeaderAuth": {
-          "id": "gTDaybyghgymxX1C",
           "name": "X-Webhook-Secret"
         }
       },
@@ -386,6 +385,19 @@
       ],
       "id": "fb10afc1-99b4-4021-b75c-d748e3b9d882",
       "name": "devolver"
+    },
+    {
+      "parameters": {
+        "jsCode": "// WF6 · filtrar_texto_cliente (27/11, revisión externa H4). El texto de la visita acaba en la base de datos,\n// en el email de la lista diaria y en la ficha. Se le aplica el MISMO filtro de privacidad que a la nota del\n// Agente 1: se borra entera cada frase con email, teléfono, dirección, salud o familia.\n// Copia LITERAL del bloque D57 de leer_confirmacion (chat_tipo_reforma): si se cambia allí, cambiarlo aquí.\n// Mode: Run Once for All Items.\nfunction tieneTelefono(f) {                                    // 9 o más cifras seguidas o con separadores\n  return (f.match(/\\+?\\d[\\d\\s.\\-()]{7,}\\d/g) || [])\n    .some(m => m.replace(/\\D/g, '').length >= 9);\n}\nconst DATO_PERSONAL = [\n  /[^\\s@]+@[^\\s@]+\\.[^\\s@]+/,                                  // email\n  /(^|[\\s,(])c\\/\\s*\\S/i,                                       // \"c/ Mayor\"\n  /\\b(calle|avenida|avda|plaza|pza|paseo|camino|carretera|ronda|traves[ií]a|urbanizaci[oó]n|portal|escalera|c[oó]digo postal)\\b/i,  // dirección\n  /\\bn(º|°|o\\.|úm\\.?|úmero)\\s*\\d/i,                            // \"nº 12\", \"número 12\"\n  /\\b(salud|enferm\\w*|discapacidad|silla de ruedas|movilidad|dependencia|embaraz\\w*|beb[eé]s?|padre|madre|hij[oa]s?|abuel[oa]s?|marido|esposa|esposo|pareja|suegr[oa]s?|m[eé]dic[oa]s?|operaci[oó]n)\\b/i,  // salud y familia\n];\nfunction limpiarNota(v) {\n  const frases = String(v ?? '').replace(/\\s+/g, ' ').trim()   // una sola línea\n    .split(/(?<=[.!?])\\s+/);                                   // frase a frase\n  return frases\n    .filter(f => f !== '' && !tieneTelefono(f) && !DATO_PERSONAL.some(p => p.test(f)))\n    .join(' ').trim();                                         // lo que queda, o ''\n}\n\nconst e = $input.first().json;                       // lo que manda el Agente 2 (lead_token, fecha, hora, texto_cliente...)\nconst texto = limpiarNota(e.texto_cliente);           // frases sin datos personales, o ''\nreturn [{ json: { ...e, texto_cliente: texto || 'Quiere que el técnico revise la obra en persona.' } }];"
+      },
+      "id": "3dd410df-1cba-41fa-ab8a-950029657555",
+      "name": "filtrar_texto_cliente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -848,
+        112
+      ]
     }
   ],
   "pinData": {},
@@ -394,7 +406,7 @@
       "main": [
         [
           {
-            "node": "pedir_visita",
+            "node": "filtrar_texto_cliente",
             "type": "main",
             "index": 0
           }
@@ -504,6 +516,17 @@
         [
           {
             "node": "devolver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "filtrar_texto_cliente": {
+      "main": [
+        [
+          {
+            "node": "pedir_visita",
             "type": "main",
             "index": 0
           }

@@ -1,0 +1,83 @@
+{
+  "name": "WF8_limpieza_pendientes_por_confirmar",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "triggerAtMinute": 7
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "69c3be63-20eb-4f78-8486-bb55d3439f2a",
+      "name": "cada_hora"
+    },
+    {
+      "parameters": {
+        "operation": "deleteRows",
+        "dataTableId": {
+          "__rl": true,
+          "value": "ELIGE_LA_DATA_TABLE",
+          "mode": "list",
+          "cachedResultName": "pendientes_por_confirmar"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "updatedAt",
+              "condition": "lt",
+              "keyValue": "={{ $now.minus({ hours: 24 }).toISO() }}"
+            }
+          ]
+        },
+        "options": {
+          "dryRun": false
+        }
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        256,
+        144
+      ],
+      "id": "8244958a-a288-4e99-b197-4ea536b249a3",
+      "name": "borrar_pendientes_caducados"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "cada_hora": {
+      "main": [
+        [
+          {
+            "node": "borrar_pendientes_caducados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "XyWcmtuXIy3yT4eY",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "saveDataSuccessExecution": "none"
+  },
+  "id": "0zFyX7dkfhDumNGh",
+  "tags": []
+}

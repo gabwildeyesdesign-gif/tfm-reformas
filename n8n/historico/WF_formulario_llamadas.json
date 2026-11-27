@@ -31,7 +31,6 @@
       "name": "On form submission",
       "credentials": {
         "httpBasicAuth": {
-          "id": "Fa1bxlK0a6JT0rdh",
           "name": "Formulario Gate (administracion)"
         }
       }
@@ -486,7 +485,6 @@
       "name": "leer_ficha",
       "credentials": {
         "httpHeaderAuth": {
-          "id": "ayhUqTymBB7Iswmz",
           "name": "X-Gate-Secret"
         }
       },
@@ -520,7 +518,6 @@
       "name": "registrar_resultado",
       "credentials": {
         "httpHeaderAuth": {
-          "id": "ayhUqTymBB7Iswmz",
           "name": "X-Gate-Secret"
         }
       },
@@ -946,7 +943,6 @@
       "name": "leer_dias",
       "credentials": {
         "httpHeaderAuth": {
-          "id": "ayhUqTymBB7Iswmz",
           "name": "X-Gate-Secret"
         }
       },
@@ -1174,7 +1170,6 @@
       "name": "leer_horas",
       "credentials": {
         "httpHeaderAuth": {
-          "id": "ayhUqTymBB7Iswmz",
           "name": "X-Gate-Secret"
         }
       },
