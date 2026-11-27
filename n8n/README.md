@@ -29,6 +29,8 @@ Gmail o de Google Calendar) está en estos archivos.
 
 ## Flujos
 
+Flujos retirados; se conservan como histórico del diseño: `WF_formulario_gate.json` y `WF_formulario_llamadas.json` están en `n8n/historico/` desde el 27/11/2026.
+
 | Archivo | Para qué | Estado a 2026-10-27 |
 |---|---|---|
 | `WF_pantalla_llamadas.json` | Pantalla NUEVA de administración (D43/D44, 40 nodos) que sustituye al formulario de llamadas. Dos webhooks con autenticación básica: `llamada` (GET, abre la pantalla: lee la ficha y, para elegir día y hora, `GET /huecos-libres`) y `llamada-registrar` (POST, recibe lo enviado). La página HTML se ve dentro del marco aislado (iframe) de n8n y sus formularios se envían por POST con `target="_top"`; la dirección pública sale de las cabeceras de la petición (`x-forwarded-host`, D44.9), sin dominio escrito en el código. La marca `ultima=1` / `ultima=0` del enlace de WF3 (D44) decide el aviso de última llamada; la pantalla no la calcula. Registra el resultado de la llamada en `POST /resultados-llamada` (con `direccion_obra`, D42, y `mensaje_cliente`); D45: días y horas desde el 1.er laborable y el 422 `antelacion_insuficiente`. D46: modo visita para cambiar o cancelar una visita YA confirmada (`visita_modificable`) con `POST /cambios-visita`. Copia cada visita al calendario con WF5 (también tras una repetición, 200) y pide a WF7 el email de visita al cliente SOLO con el 201 (`email_visita`, y `email_cambio` solo al cambiar, nunca al cancelar), para no mandar dos si se recarga la página (O-D46-1). Los fallos técnicos van a WF4; los errores del operador (409 y 422 de negocio), no | Publicado (exportado el 27/10) |
