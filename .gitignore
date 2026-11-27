@@ -19,3 +19,8 @@ pruebas_conversacionales/resultados/
 # scripts/local/precios_pintura.json, que NUNCA se sube: el repositorio es
 # público y los precios no van en él (D40.9). Se ignora la carpeta entera.
 scripts/local/
+
+# Entrega del 28/11: los flujos de n8n exportados SIN sanear (llevan chatId,
+# emails, dominio de ngrok y webhookId reales). NUNCA se suben: el repositorio
+# es público. La copia saneada va a n8n/.
+entrega_28-11/
