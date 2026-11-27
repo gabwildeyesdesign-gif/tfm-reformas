@@ -11,6 +11,8 @@
 #   - webhookId de cada nodo  -> se borra la clave
 #   - "id" de cada credencial -> se borra (quedan el tipo y el "name"; anexo C
 #     de la memoria: "sin ids de credenciales")
+#   - dataTableId (Data Tables) -> ELIGE_LA_DATA_TABLE, sin cachedResultUrl
+#     (lleva el id del proyecto de la instalación); queda cachedResultName
 #   - meta, versionId, shared y demás claves de la CLI -> fuera (solo quedan
 #     las 8 claves del formato de "Download")
 #   - active -> false; pinData -> {}
@@ -45,6 +47,7 @@ EMAIL_FALSO = "admin@example.com"
 CALENDARIO_FALSO = "PEGA_AQUI_ID_DEL_CALENDARIO"
 CHAT_TECNICO = "CHAT_ID_TECNICO"
 CHAT_ADMIN = "CHAT_ID_ADMINISTRACION"
+DATA_TABLE_FALSA = "ELIGE_LA_DATA_TABLE"
 
 # Patrones de búsqueda.
 # Un dominio de ngrok (cualquier subdominio).
@@ -94,6 +97,42 @@ def quitar_ids_credenciales(nodos) -> list:
     return limpios
 
 
+def sanear_data_tables(valor):
+    """Copia de valor con cada dataTableId cambiado por el marcador y sin su cachedResultUrl."""
+    if isinstance(valor, dict):
+        limpio = {}
+        for clave, dato in valor.items():
+            if clave == "dataTableId" and isinstance(dato, dict):
+                # El selector de n8n ({"__rl", "mode", "value", ...}): el id fuera,
+                # la URL fuera (lleva /projects/<id>/) y el nombre se queda.
+                dato = {k: v for k, v in dato.items() if k != "cachedResultUrl"}
+                dato["value"] = DATA_TABLE_FALSA
+                limpio[clave] = dato
+            elif clave == "dataTableId" and isinstance(dato, str):
+                # Por si n8n lo guarda como texto suelto.
+                limpio[clave] = DATA_TABLE_FALSA
+            else:
+                limpio[clave] = sanear_data_tables(dato)
+        return limpio
+    if isinstance(valor, list):
+        return [sanear_data_tables(v) for v in valor]
+    return valor
+
+
+def data_tables_reales(valor) -> int:
+    """Cuántos dataTableId conservan un id real (tiene que ser 0)."""
+    if isinstance(valor, dict):
+        propios = 0
+        tabla = valor.get("dataTableId")
+        if tabla is not None:
+            real = tabla.get("value") if isinstance(tabla, dict) else tabla
+            propios = int(real != DATA_TABLE_FALSA)
+        return propios + sum(data_tables_reales(v) for v in valor.values())
+    if isinstance(valor, list):
+        return sum(data_tables_reales(v) for v in valor)
+    return 0
+
+
 def ids_de_credenciales(flujo: dict) -> int:
     """Cuántas credenciales conservan todavía un "id" (tiene que ser 0)."""
     return sum(
@@ -137,6 +176,8 @@ def sanear(flujo: dict) -> tuple[dict, set[str]]:
     # Los nodos sin la clave webhookId (n8n crea otro al importar) y sin los
     # ids de sus credenciales.
     nodos = quitar_ids_credenciales([{k: v for k, v in nodo.items() if k != "webhookId"} for nodo in flujo["nodes"]])
+    # Las Data Tables sin su id ni la URL con el id del proyecto.
+    nodos = sanear_data_tables(nodos)
     # Un chatId numérico (no texto) no lo ve limpiar: se cambia aquí, en los parámetros.
     for nodo in nodos:
         parametros = nodo.get("parameters", {})
@@ -182,6 +223,11 @@ def problemas(texto: str, reales: set[str]) -> list[str]:
     flujo = datos[0] if isinstance(datos, list) else datos
     if ids_de_credenciales(flujo):
         lista.append(f"{ids_de_credenciales(flujo)} id(s) de credenciales")
+    # Ninguna Data Table con su id real ni ninguna URL con el id del proyecto.
+    if data_tables_reales(flujo):
+        lista.append(f"{data_tables_reales(flujo)} dataTableId real(es)")
+    if "/projects/" in texto:
+        lista.append("id del proyecto (/projects/)")
     return lista
 
 
