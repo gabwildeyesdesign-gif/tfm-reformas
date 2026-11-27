@@ -96,7 +96,12 @@ AUTH_GATE = {"X-Gate-Secret": GATE_SECRET}
 # Patrón SQL (LIKE) de los clientes de ESTE script.
 PATRON_EMAIL = "http-resumen-%@example.com"
 # Un texto aleatorio de esta ejecución, dentro de cada resumen propio.
-MARCA = f"marca{uuid.uuid4().hex[:10]}"
+# Solo LETRAS (cambio 2026-11-27): translate cambia las cifras 0-9 del
+# hexadecimal por las letras g-p. Con cifras, unas 2 de cada 100 ejecuciones
+# sacaban 9 o más seguidas, el filtro de teléfonos descartaba el resumen y
+# fallaban 9 comprobaciones sin que el backend estuviera roto (suite del
+# 2026-11-27, 53/62).
+MARCA = "marca" + uuid.uuid4().hex[:10].translate(str.maketrans("0123456789", "ghijklmnop"))
 # Otra, distinta, para el NOMBRE del cliente: la lista diaria enseña el
 # nombre, y con la misma marca el CASO 14 la encontraría sin que el resumen
 # hubiera salido.
