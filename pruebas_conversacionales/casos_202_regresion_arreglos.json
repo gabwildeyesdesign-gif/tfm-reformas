@@ -1,0 +1,218 @@
+[
+ {
+  "id": "G-R6a",
+  "bloque": "202 · corrección del resumen y «si» (D-201-1)",
+  "mensajes": [
+   "hola, quiero reformar la cocina, 8 m2, acabados medios, sin tabiques",
+   "Elena Fuentes Mora, TU_EMAIL, 677 801 101",
+   "no, son 9 m2",
+   "si",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 2,
+    "contiene": [
+     "Antes de guardar nada",
+     "8 m²"
+    ]
+   },
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada",
+     "9 m²"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "G-R6b",
+  "bloque": "202 · corrección del resumen y «si» (D-201-1)",
+  "mensajes": [
+   "hola, quiero reformar la cocina, 5 m2, acabados medios, sin tabiques",
+   "Elena Fuentes Mora, TU_EMAIL, 677 801 102",
+   "no, son 6 m2",
+   "si",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 2,
+    "contiene": [
+     "Antes de guardar nada",
+     "5 m²"
+    ]
+   },
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada",
+     "6 m²"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "G-R6c",
+  "bloque": "202 · corrección del resumen y «si» (D-201-1)",
+  "mensajes": [
+   "hola, quiero reformar la cocina, 12 m2, acabados medios, sin tabiques",
+   "Elena Fuentes Mora, TU_EMAIL, 677 801 103",
+   "no, son 10 m2",
+   "si",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 2,
+    "contiene": [
+     "Antes de guardar nada",
+     "12 m²"
+    ]
+   },
+   {
+    "turno": 3,
+    "contiene": [
+     "Antes de guardar nada",
+     "10 m²"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "G-AMB",
+  "bloque": "202 · respuesta ambigua y después «vale, sí» (prueba 190)",
+  "mensajes": [
+   "hola, quiero reformar la cocina, 8 m2, acabados básicos, no hay que tirar tabiques",
+   "Iván Robles Sanz, TU_EMAIL, 677 801 104",
+   "creo que sí, pero déjame pensarlo",
+   "vale, sí",
+   "si",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "no_contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   },
+   {
+    "turno": 5,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "G-NEG",
+  "bloque": "202 · negativa a guardar (no debe pasar por el agente)",
+  "mensajes": [
+   "hola, quiero reformar el baño, 4 m2, acabados básicos, sin tabiques",
+   "Laura Pino Gil, TU_EMAIL, 677 801 105",
+   "no quiero que guardéis mis datos",
+   "vale"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "no_contiene": [
+     "Según los datos que nos has facilitado",
+     "Antes de guardar nada"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "G-SI",
+  "bloque": "202 · control: «si» directo",
+  "mensajes": [
+   "hola, quiero pintar el piso, 40 m2, acabados medios, sin tabiques",
+   "Marcos León Vidal, TU_EMAIL, 677 801 106",
+   "si",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "G-V1",
+  "bloque": "202 · visita, primer día (D-201-2)",
+  "mensajes": [
+   "hola, quiero reformar el baño, 3 m2, acabados básicos, sin tabiques",
+   "Lucía Molina Paz, TU_EMAIL, 677 801 107",
+   "si",
+   "Quiero pedir la visita, ¿qué días hay?",
+   "el primer día a primera hora",
+   "sí",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 5,
+    "contiene": [
+     "¿Te solicito"
+    ]
+   },
+   {
+    "turno": 6,
+    "contiene": [
+     "solicitud|solicitada|registrad"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "G-V2",
+  "bloque": "202 · visita por la tarde (D-201-2)",
+  "mensajes": [
+   "hola, quiero pintar el piso, 30 m2, acabados medios, sin tabiques",
+   "Bruno Lago Ríos, TU_EMAIL, 677 801 108",
+   "si",
+   "Quiero la visita por la tarde",
+   "la primera de la tarde",
+   "sí, vale",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 5,
+    "contiene": [
+     "¿Te solicito"
+    ]
+   },
+   {
+    "turno": 6,
+    "contiene": [
+     "solicitud|solicitada|registrad"
+    ]
+   }
+  ]
+ }
+]

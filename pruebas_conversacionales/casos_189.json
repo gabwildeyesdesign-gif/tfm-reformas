@@ -1,0 +1,42 @@
+[
+ {
+  "id": "G189-01",
+  "bloque": "189a · el primer mensaje del A1 NO se vuelve a presentar tras el mensaje inicial nuevo (D52.7)",
+  "mensajes": [
+   "hola",
+   "quiero reformar el baño, 4 m2, acabados medios, sin tabiques"
+  ],
+  "esperado": [
+   {"turno": 1, "no_contiene": ["asistente virtual", "inteligencia artificial", "Protección de datos"]},
+   {"turno": 2, "no_contiene": ["asistente virtual", "inteligencia artificial", "Protección de datos"]}
+  ]
+ },
+ {
+  "id": "G189-02",
+  "bloque": "189b · Gate por importe (cocina grande): el Telegram no debe llevar nombre ni teléfono (D52.2)",
+  "mensajes": [
+   "Hola, soy Marina Quintana Vega, mi email es TU_EMAIL y mi móvil el 688 123 457",
+   "quiero reformar la cocina, tiene 22 m2 y la quiero con acabados medios",
+   "no",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada"]},
+   {"turno": 4, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "G189-03",
+  "bloque": "189b · Gate de PINTURA alto (≈ 380-500 m², umbral por importe): WF2, Telegram sin datos y etiqueta Pintura (D56 + D52.2)",
+  "mensajes": [
+   "hola, quiero pintar una casa grande entera, son 450 m2 de suelo en total, con acabados altos: quitar el gotelé y alisar las paredes",
+   "no, no hay que tirar ni mover tabiques",
+   "Julián Barroso Pons, TU_EMAIL, 677 345 681",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "Pintura"]},
+   {"turno": 4, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ }
+]

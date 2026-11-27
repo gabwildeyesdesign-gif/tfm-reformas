@@ -1,0 +1,32 @@
+[
+ {
+  "id": "R190-01",
+  "bloque": "190 · tabla pendientes_por_confirmar: corrección tras el resumen (upsert ×2, leer, borrar al confirmar)",
+  "mensajes": [
+   "hola, quiero reformar el baño, 4 m2, acabados medios, sin tabiques",
+   "Nerea Galán Prieto, TU_EMAIL, 611 987 654",
+   "no, son 5 m2",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 2, "contiene": ["Antes de guardar nada", "4 m²"]},
+   {"turno": 3, "contiene": ["Antes de guardar nada", "5 m²"]},
+   {"turno": 4, "contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "R190-02",
+  "bloque": "190 · tabla pendientes_por_confirmar: respuesta ambigua (no guarda) y después «vale, sí»",
+  "mensajes": [
+   "hola, quiero reformar la cocina, 8 m2, acabados básicos, no hay que tirar tabiques",
+   "Iván Robles Sanz, TU_EMAIL, 622 876 543",
+   "creo que sí, pero déjame pensarlo",
+   "vale, sí"
+  ],
+  "esperado": [
+   {"turno": 2, "contiene": ["Antes de guardar nada"]},
+   {"turno": 3, "no_contiene": ["Según los datos que nos has facilitado"]},
+   {"turno": 4, "contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ }
+]

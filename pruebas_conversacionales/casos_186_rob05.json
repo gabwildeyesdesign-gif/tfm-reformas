@@ -1,0 +1,32 @@
+[
+ {
+  "id": "R186-05",
+  "bloque": "robustez ROB-05 · el mismo «sí» dos veces (no debe salir un segundo email)",
+  "mensajes": [
+   "hola, quiero pintar el salón, 20 m2, acabados básicos, sin tabiques. Soy Laura Martín Ruiz, TU_EMAIL, 611 223 344",
+   "si",
+   "sí."
+  ],
+  "esperado": [
+   {
+    "turno": 1,
+    "contiene": [
+     "Antes de guardar nada"
+    ]
+   },
+   {
+    "turno": 2,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   },
+   {
+    "turno": 3,
+    "no_contiene": [
+     "Según los datos que nos has facilitado",
+     "Antes de guardar nada"
+    ]
+   }
+  ]
+ }
+]

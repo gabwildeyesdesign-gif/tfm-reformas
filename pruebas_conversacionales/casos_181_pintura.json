@@ -1,0 +1,167 @@
+[
+ {
+  "id": "P181-01",
+  "bloque": "funcional ✚ · pintura toda la casa (antes A1-10a, parcial_acabados)",
+  "mensajes": [
+   "hola",
+   "quiero pintar toda la casa, 80 m2, acabados medios, sin tabiques",
+   "Marta Gil Soto, TU_EMAIL, 622 334 455",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "Reforma: Pintura", "Superficie: 80 m²"]},
+   {"turno": 4, "contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "P181-02",
+  "bloque": "funcional · pintar una sola habitación (antes E-A1-38)",
+  "mensajes": [
+   "hola",
+   "quiero pintar solo el salón, 20 m2, acabados básicos, sin tabiques",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "Reforma: Pintura"]}
+  ]
+ },
+ {
+  "id": "P181-03",
+  "bloque": "funcional ✚ · quitar gotelé, nivel sin decir",
+  "mensajes": [
+   "hola",
+   "quiero quitar el gotelé y pintar el piso, son 70 m2, sin tocar tabiques",
+   "alto",
+   "Pedro Sanz Vidal, TU_EMAIL, 633 445 566",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 2, "contiene": ["básico|medio|alto"], "no_contiene": ["Antes de guardar nada"]},
+   {"turno": 4, "contiene": ["Antes de guardar nada", "Reforma: Pintura", "Acabados: Alto"]},
+   {"turno": 5, "contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "P181-04",
+  "bloque": "D50.13 vía nueva · coloquial, dos habitaciones sumadas",
+  "mensajes": [
+   "hola, kiero pintar las abitaciones de los niños, son dos de 10 metros cada una, sin obra",
+   "medio",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "Reforma: Pintura", "Superficie: 20 m²"]}
+  ]
+ },
+ {
+  "id": "P181-05",
+  "bloque": "control · NO es pintura: electricidad de toda la casa",
+  "mensajes": [
+   "hola",
+   "quiero renovar la electricidad de toda la casa, 90 m2, acabados básicos, sin tabiques",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "Reforma: Reforma parcial de acabados"]}
+  ]
+ },
+ {
+  "id": "P181-06",
+  "bloque": "control · NO es pintura: suelo de todo el piso",
+  "mensajes": [
+   "hola",
+   "quiero cambiar el suelo de todo el piso, 70 m2, acabados medios, sin tabiques",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "Reforma: Reforma parcial de acabados"]}
+  ]
+ },
+ {
+  "id": "P181-07",
+  "bloque": "exploratorio · pintar y tirar un tabique (categoría dudosa; el Gate salta igual)",
+  "mensajes": [
+   "hola",
+   "quiero pintar el piso y tirar el tabique entre el salón y un dormitorio, 60 m2, acabados medios",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "\\(tirar o mover tabiques\\): Sí"]}
+  ]
+ },
+ {
+  "id": "P181-08",
+  "bloque": "límite · pintar solo la cocina (pintura, NO cocina)",
+  "mensajes": [
+   "hola",
+   "solo quiero pintar la cocina, 10 m2, acabados básicos, sin tabiques",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "Reforma: Pintura"], "no_contiene": ["Reforma: Cocina"]}
+  ]
+ },
+ {
+  "id": "P181-09",
+  "bloque": "repetición G180-03 · contacto primero, «no» a secas (Gate por importe)",
+  "mensajes": [
+   "Hola, soy Lucía Ortega Ramos, mi email es TU_EMAIL y mi móvil el 677 234 568",
+   "quiero reformar la cocina, tiene 20 m2 y la quiero con acabados medios",
+   "no",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "\\(tirar o mover tabiques\\): No"]},
+   {"turno": 4, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "P181-10",
+  "bloque": "repetición G180-04 · «no» a secas, integral alto (Gate por importe)",
+  "mensajes": [
+   "buenas",
+   "quiero hacer una reforma integral de mi casa de 120 m2 con acabados altos",
+   "no",
+   "Raúl Medina Castro, TU_EMAIL, 699 345 012",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 4, "contiene": ["Antes de guardar nada", "\\(tirar o mover tabiques\\): No"]},
+   {"turno": 5, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "P181-11",
+  "bloque": "repetición G180-08 · cocina + salón = reforma integral (Q-180-3)",
+  "mensajes": [
+   "hola, queremos tirar el tabique entre la cocina y el salón y reformar las dos estancias",
+   "30 m2 en total, acabados medios",
+   "Beatriz Soler Díaz, TU_EMAIL, 655 789 012",
+   "si"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "Reforma: Reforma integral de vivienda", "\\(tirar o mover tabiques\\): Sí"]},
+   {"turno": 4, "contiene": ["técnico"], "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "P181-12",
+  "bloque": "D50.13 vía nueva · una habitación a ojo (largo por ancho)",
+  "mensajes": [
+   "hola",
+   "quiero pintar mi dormitorio, mide a ojo 4 por 3, con colores y arreglando algún desconchón, sin tabiques",
+   "medio",
+   "Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no"
+  ],
+  "esperado": [
+   {"turno": 4, "contiene": ["Antes de guardar nada", "Reforma: Pintura", "Superficie: 12 m²"]}
+  ]
+ }
+]

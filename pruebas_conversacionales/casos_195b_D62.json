@@ -1,0 +1,110 @@
+[
+ {
+  "id": "C5-195b-c",
+  "bloque": "D62 · repetición del fallo: sábado 5 de diciembre",
+  "mensajes": [
+   "hola, quiero pintar el salón, 20 m2, acabados medios, sin tabiques",
+   "Raúl Mena Paz, TU_EMAIL, 655 700 710",
+   "si",
+   "¿podría ser el sábado 5 de diciembre?"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "(08:30|09:45|11:00|12:15|17:00|18:15)"
+    ],
+    "no_contiene": [
+     "\\b(09:00|10:00|11:30|12:00|10:30|13:00)\\b"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "C5-195b-d",
+  "bloque": "D62 · fecha concreta: domingo 6 de diciembre",
+  "mensajes": [
+   "hola, quiero reformar el baño, 5 m2, acabados medios, sin tabiques",
+   "Raúl Mena Paz, TU_EMAIL, 655 700 711",
+   "si",
+   "¿Y el domingo 6 de diciembre por la tarde?"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "(08:30|09:45|11:00|12:15|17:00|18:15)"
+    ],
+    "no_contiene": [
+     "\\b(09:00|10:00|11:30|12:00|10:30|13:00)\\b"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "C5-195b-e",
+  "bloque": "D62 · antelación insuficiente: mañana",
+  "mensajes": [
+   "hola, quiero reformar la cocina, 8 m2, acabados básicos, sin tabiques",
+   "Raúl Mena Paz, TU_EMAIL, 655 700 712",
+   "si",
+   "¿Puede venir alguien mañana viernes?"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "(08:30|09:45|11:00|12:15|17:00|18:15)"
+    ],
+    "no_contiene": [
+     "\\b(09:00|10:00|11:30|12:00|10:30|13:00)\\b"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "C5-195b-b",
+  "bloque": "D62 · regresión: este sábado sin fecha",
+  "mensajes": [
+   "hola, quiero reformar el baño, 4 m2, acabados básicos, sin tabiques",
+   "Raúl Mena Paz, TU_EMAIL, 655 700 713",
+   "si",
+   "¿Puede venir el técnico este sábado?"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "Según los datos que nos has facilitado"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "(08:30|09:45|11:00|12:15|17:00|18:15)"
+    ],
+    "no_contiene": [
+     "\\b(09:00|10:00|11:30|12:00|10:30|13:00)\\b"
+    ]
+   }
+  ]
+ }
+]

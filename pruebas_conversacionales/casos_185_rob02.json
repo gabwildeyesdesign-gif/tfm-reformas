@@ -1,0 +1,29 @@
+[
+ {
+  "id": "R185-01",
+  "bloque": "robustez ROB-02 · el cálculo falla tras el «sí» (endpoint del MCP roto a propósito)",
+  "mensajes": [
+   "hola, quiero pintar el salón, 20 m2, acabados básicos, sin tabiques. Soy Laura Martín Ruiz, TU_EMAIL, 611 223 344",
+   "si"
+  ],
+  "esperado": [
+   {
+    "turno": 1,
+    "contiene": [
+     "Antes de guardar nada",
+     "Reforma: Pintura"
+    ]
+   },
+   {
+    "turno": 2,
+    "contiene": [
+     "Hemos recibido tus datos correctamente"
+    ],
+    "no_contiene": [
+     "Según los datos",
+     "problema técnico"
+    ]
+   }
+  ]
+ }
+]

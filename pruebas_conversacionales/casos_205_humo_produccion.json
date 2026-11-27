@@ -1,0 +1,110 @@
+[
+ {
+  "id": "P205-NORMAL-VISITA",
+  "bloque": "205 · humo producción: presupuesto normal + visita con confirmación",
+  "mensajes": [
+   "hola, quiero reformar el baño, 4 m2, acabados básicos, sin tabiques",
+   "Lucía Ferrer Mas, TU_EMAIL, 677 802 201",
+   "si",
+   "Quiero pedir la visita, ¿qué días hay?",
+   "el primer día a primera hora",
+   "sí",
+   "gracias"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Según los datos que nos has facilitado"]},
+   {"turno": 5, "contiene": ["¿Te solicito"]},
+   {"turno": 6, "contiene": ["solicitud|solicitada|registrad"]}
+  ]
+ },
+ {
+  "id": "P205-GATE-EST",
+  "bloque": "205 · Gate estructural: texto nuevo + orientación + respuesta fija",
+  "mensajes": [
+   "hola, quiero reformar el baño, 5 m2, acabados medios, y hay que tirar un tabique",
+   "Raúl Blanco Soto, TU_EMAIL, 677 802 202",
+   "si",
+   "¿a qué hora viene el técnico?",
+   "¿y qué incluye la reforma?",
+   "gracias"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["técnico especializado", "no se reserva desde el chat", "Como orientación, una reforma de baño con acabados medios"], "no_contiene": ["€"]},
+   {"turno": 4, "contiene": ["Gracias por escribirnos", "horario laboral"], "no_contiene": ["\\d{1,2}:\\d{2}"]},
+   {"turno": 5, "contiene": ["Gracias por escribirnos"]}
+  ]
+ },
+ {
+  "id": "P205-GATE-IMP",
+  "bloque": "205 · Gate por importe: texto nuevo + orientación + respuesta fija",
+  "mensajes": [
+   "hola, quiero pintar el piso, 400 m2, acabados altos, sin tabiques",
+   "Carmen Rey Vidal, TU_EMAIL, 677 802 203",
+   "si",
+   "¿cuánto me va a costar más o menos?",
+   "gracias"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Por el alcance de tu proyecto", "Como orientación, un trabajo de pintura con acabados altos"], "no_contiene": ["€"]},
+   {"turno": 4, "contiene": ["Gracias por escribirnos"], "no_contiene": ["€"]}
+  ]
+ },
+ {
+  "id": "P205-NEGATIVA",
+  "bloque": "205 · el cliente no quiere guardar el resumen",
+  "mensajes": [
+   "hola, quiero reformar el baño, 4 m2, acabados básicos, sin tabiques",
+   "Jorge Núñez Gil, TU_EMAIL, 677 802 204",
+   "no, mejor no lo guardéis, me lo pienso",
+   "gracias"
+  ],
+  "esperado": [
+   {"turno": 3, "no_contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "P205-CORRECCION",
+  "bloque": "205 · corrección del resumen antes del sí (borrado en serie)",
+  "mensajes": [
+   "hola, quiero reformar el baño, 4 m2, acabados básicos, sin tabiques",
+   "Sara Molina Cruz, TU_EMAIL, 677 802 205",
+   "perdona, en realidad son 6 m2",
+   "si",
+   "gracias"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Antes de guardar nada", "6 m²"]},
+   {"turno": 4, "contiene": ["Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "P205-PREG-RESUMEN",
+  "bloque": "205 · pregunta sobre el resumen y después «sí»",
+  "mensajes": [
+   "hola, quiero reformar el baño, 5 m2, acabados medios, sin tabiques",
+   "Iván Ortega Ruiz, TU_EMAIL, 677 802 206",
+   "¿eso incluye cambiar la mampara?",
+   "sí",
+   "si",
+   "gracias"
+  ],
+  "esperado": [
+   {"turno": 4, "contiene": ["Antes de guardar nada|Según los datos que nos has facilitado"]}
+  ]
+ },
+ {
+  "id": "P205-ASESOR",
+  "bloque": "205 · asesor normal: pregunta tras el presupuesto",
+  "mensajes": [
+   "hola, quiero pintar mi piso, 60 m2, acabados medios, sin tabiques",
+   "Elena Campos Ríos, TU_EMAIL, 677 802 207",
+   "si",
+   "¿qué incluye exactamente?",
+   "gracias"
+  ],
+  "esperado": [
+   {"turno": 3, "contiene": ["Según los datos que nos has facilitado"]},
+   {"turno": 4, "no_contiene": ["\\d{1,2}:\\d{2}", "Gracias por escribirnos"]}
+  ]
+ }
+]

@@ -1,0 +1,125 @@
+[
+ {
+  "id": "N184-01",
+  "bloque": "C3 · A1-59 repetido (negativa sin pendiente)",
+  "mensajes": [
+   "hola",
+   "antes de daros mis datos, ¿qué vais a hacer con ellos?",
+   "pues no quiero que guardéis nada"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "no guardaremos tus datos"
+    ],
+    "no_contiene": [
+     "ayud",
+     "orientativ",
+     "puedo",
+     "Antes de guardar nada"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N184-02",
+  "bloque": "C3 · negativa con resumen pendiente",
+  "mensajes": [
+   "hola, quiero reformar el baño, 4 m2, acabados medios, sin tabiques. Soy Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no quiero que guardéis mis datos"
+  ],
+  "esperado": [
+   {
+    "turno": 1,
+    "contiene": [
+     "Antes de guardar nada"
+    ]
+   },
+   {
+    "turno": 2,
+    "contiene": [
+     "no guardaremos tus datos"
+    ],
+    "no_contiene": [
+     "Antes de guardar nada",
+     "Según los datos"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N184-03",
+  "bloque": "C3 · variante «borrad mis datos»",
+  "mensajes": [
+   "hola",
+   "borrad mis datos, por favor"
+  ],
+  "esperado": [
+   {
+    "turno": 2,
+    "contiene": [
+     "no guardaremos tus datos"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N184-04",
+  "bloque": "control · pregunta, no negativa",
+  "mensajes": [
+   "hola",
+   "¿no guardáis nada hasta que confirme?"
+  ],
+  "esperado": [
+   {
+    "turno": 2,
+    "no_contiene": [
+     "no guardaremos tus datos"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N184-05",
+  "bloque": "control · rechaza solo el teléfono (regla del prompt)",
+  "mensajes": [
+   "hola",
+   "quiero reformar el baño, 4 m2, acabados medios, sin tabiques",
+   "Laura Martín Ruiz, laura.prueba@example.com, y el teléfono prefiero no darlo"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "tel[eé]fono"
+    ],
+    "no_contiene": [
+     "no guardaremos tus datos",
+     "Antes de guardar nada"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "N184-06",
+  "bloque": "control · corrección tras el resumen que empieza por «no»",
+  "mensajes": [
+   "hola, quiero reformar el baño, 4 m2, acabados medios, sin tabiques. Soy Laura Martín Ruiz, laura.prueba@example.com, 611 223 344",
+   "no, son 5 m2",
+   "no"
+  ],
+  "esperado": [
+   {
+    "turno": 2,
+    "contiene": [
+     "Antes de guardar nada",
+     "Superficie: 5 m²"
+    ],
+    "no_contiene": [
+     "no guardaremos tus datos"
+    ]
+   }
+  ]
+ }
+]

@@ -1,0 +1,17 @@
+[
+ {
+  "id": "R186-01",
+  "bloque": "robustez ROB-01 / ROB-04 · un solo saludo (se ejecuta con el backend parado o con la clave mala)",
+  "mensajes": [
+   "hola, quiero reformar el baño"
+  ],
+  "esperado": [
+   {
+    "turno": 1,
+    "contiene": [
+     "problema técnico"
+    ]
+   }
+  ]
+ }
+]

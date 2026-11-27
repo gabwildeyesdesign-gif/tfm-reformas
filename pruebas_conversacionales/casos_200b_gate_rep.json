@@ -1,0 +1,407 @@
+[
+ {
+  "id": "FG-02a",
+  "bloque": "200b · Gate: elige hora y dice «sí» (H-199-2: «queda anotado»)",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 90 m2, acabados medios, sin tabiques",
+   "Marina Torres Gil, TU_EMAIL, 677 800 034",
+   "si",
+   "Quiero pedir una visita, ¿qué días tienes?",
+   "el lunes a primera hora",
+   "sí, ese me va bien",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "¿Te solicito",
+     "(queda|ha quedado|está|he) (registrad|solicitad)a|te he solicitado|visita solicitada",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 6,
+    "no_contiene": [
+     "¿Te solicito",
+     "(queda|ha quedado|está|he) (registrad|solicitad)a|te he solicitado|visita solicitada",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "FG-02b",
+  "bloque": "200b · Gate: elige hora y dice «sí» (H-199-2: «queda anotado»)",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 90 m2, acabados medios, sin tabiques",
+   "Marina Torres Gil, TU_EMAIL, 677 800 034",
+   "si",
+   "Quiero pedir una visita, ¿qué días tienes?",
+   "el lunes a primera hora",
+   "sí, ese me va bien",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "¿Te solicito",
+     "(queda|ha quedado|está|he) (registrad|solicitad)a|te he solicitado|visita solicitada",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 6,
+    "no_contiene": [
+     "¿Te solicito",
+     "(queda|ha quedado|está|he) (registrad|solicitad)a|te he solicitado|visita solicitada",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "FG-02c",
+  "bloque": "200b · Gate: elige hora y dice «sí» (H-199-2: «queda anotado»)",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 90 m2, acabados medios, sin tabiques",
+   "Marina Torres Gil, TU_EMAIL, 677 800 034",
+   "si",
+   "Quiero pedir una visita, ¿qué días tienes?",
+   "el lunes a primera hora",
+   "sí, ese me va bien",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "¿Te solicito",
+     "(queda|ha quedado|está|he) (registrad|solicitad)a|te he solicitado|visita solicitada",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 6,
+    "no_contiene": [
+     "¿Te solicito",
+     "(queda|ha quedado|está|he) (registrad|solicitad)a|te he solicitado|visita solicitada",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "FG-05a",
+  "bloque": "200b · Gate: teléfono nuevo (H-199-3: «lo tendré en cuenta»), supresión, persona",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 95 m2, acabados medios, sin tabiques",
+   "Carmen Ibáñez Ruiz, TU_EMAIL, 677 800 037",
+   "si",
+   "Mi teléfono bueno es el 699 222 333",
+   "Quiero que borréis mis datos",
+   "Quiero hablar con una persona",
+   "¿Me recomiendas un restaurante?"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "email|correo"
+    ],
+    "no_contiene": [
+     "he (cambiado|actualizado|anotado)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "he (borrado|eliminado)",
+     "quedan (borrados|eliminados)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 6,
+    "no_contiene": [
+     "te (llamo|paso|pongo)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "FG-05b",
+  "bloque": "200b · Gate: teléfono nuevo (H-199-3: «lo tendré en cuenta»), supresión, persona",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 95 m2, acabados medios, sin tabiques",
+   "Carmen Ibáñez Ruiz, TU_EMAIL, 677 800 037",
+   "si",
+   "Mi teléfono bueno es el 699 222 333",
+   "Quiero que borréis mis datos",
+   "Quiero hablar con una persona",
+   "¿Me recomiendas un restaurante?"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "email|correo"
+    ],
+    "no_contiene": [
+     "he (cambiado|actualizado|anotado)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "he (borrado|eliminado)",
+     "quedan (borrados|eliminados)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 6,
+    "no_contiene": [
+     "te (llamo|paso|pongo)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "FG-05c",
+  "bloque": "200b · Gate: teléfono nuevo (H-199-3: «lo tendré en cuenta»), supresión, persona",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 95 m2, acabados medios, sin tabiques",
+   "Carmen Ibáñez Ruiz, TU_EMAIL, 677 800 037",
+   "si",
+   "Mi teléfono bueno es el 699 222 333",
+   "Quiero que borréis mis datos",
+   "Quiero hablar con una persona",
+   "¿Me recomiendas un restaurante?"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 4,
+    "contiene": [
+     "email|correo"
+    ],
+    "no_contiene": [
+     "he (cambiado|actualizado|anotado)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "he (borrado|eliminado)",
+     "quedan (borrados|eliminados)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   },
+   {
+    "turno": 6,
+    "no_contiene": [
+     "te (llamo|paso|pongo)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "FG-07a",
+  "bloque": "200b · Gate: recados y preferencias (provoca la promesa)",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 105 m2, acabados altos, sin tabiques",
+   "Lorena Gil Pastor, TU_EMAIL, 677 800 039",
+   "si",
+   "Apúntame que prefiero que me llamen por las mañanas",
+   "Dile al técnico que tengo un perro",
+   "Mi email nuevo es otro.cliente@example.com",
+   "¿Lo has anotado todo?",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 4,
+    "no_contiene": [
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota|(lo|te lo) (anoto|apunto)"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "(se lo|le) (diré|digo|comento|paso|indico|comunico)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta"
+    ]
+   },
+   {
+    "turno": 6,
+    "contiene": [
+     "email|correo"
+    ],
+    "no_contiene": [
+     "he (cambiado|actualizado|anotado)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta"
+    ]
+   },
+   {
+    "turno": 7,
+    "no_contiene": [
+     "^(sí|si)\\b",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|he anotado"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "FG-07b",
+  "bloque": "200b · Gate: recados y preferencias (provoca la promesa)",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 105 m2, acabados altos, sin tabiques",
+   "Lorena Gil Pastor, TU_EMAIL, 677 800 039",
+   "si",
+   "Apúntame que prefiero que me llamen por las mañanas",
+   "Dile al técnico que tengo un perro",
+   "Mi email nuevo es otro.cliente@example.com",
+   "¿Lo has anotado todo?",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 4,
+    "no_contiene": [
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota|(lo|te lo) (anoto|apunto)"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "(se lo|le) (diré|digo|comento|paso|indico|comunico)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta"
+    ]
+   },
+   {
+    "turno": 6,
+    "contiene": [
+     "email|correo"
+    ],
+    "no_contiene": [
+     "he (cambiado|actualizado|anotado)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta"
+    ]
+   },
+   {
+    "turno": 7,
+    "no_contiene": [
+     "^(sí|si)\\b",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|he anotado"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "FG-07c",
+  "bloque": "200b · Gate: recados y preferencias (provoca la promesa)",
+  "mensajes": [
+   "hola, quiero hacer una reforma integral de mi casa, 105 m2, acabados altos, sin tabiques",
+   "Lorena Gil Pastor, TU_EMAIL, 677 800 039",
+   "si",
+   "Apúntame que prefiero que me llamen por las mañanas",
+   "Dile al técnico que tengo un perro",
+   "Mi email nuevo es otro.cliente@example.com",
+   "¿Lo has anotado todo?",
+   "gracias"
+  ],
+  "esperado": [
+   {
+    "turno": 3,
+    "contiene": [
+     "técnico"
+    ]
+   },
+   {
+    "turno": 4,
+    "no_contiene": [
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|tomo nota|(lo|te lo) (anoto|apunto)"
+    ]
+   },
+   {
+    "turno": 5,
+    "no_contiene": [
+     "(se lo|le) (diré|digo|comento|paso|indico|comunico)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta"
+    ]
+   },
+   {
+    "turno": 6,
+    "contiene": [
+     "email|correo"
+    ],
+    "no_contiene": [
+     "he (cambiado|actualizado|anotado)",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta"
+    ]
+   },
+   {
+    "turno": 7,
+    "no_contiene": [
+     "^(sí|si)\\b",
+     "[Aa]notad|[Aa]puntad|tendré en cuenta|he anotado"
+    ]
+   }
+  ]
+ }
+]
